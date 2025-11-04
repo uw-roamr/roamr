@@ -12,8 +12,15 @@ What if we turned the iPhone into a robot?
 
 Goal:
 
-- make systems integration of software components simple 
+- make systems integration of software components simple
 
-Ideas: 
+Ideas:
 - WASM binaries to decouple autonomy logic
 - Websockets for performant communication
+
+## Setup
+
+```sh
+pip install pre-commit
+pre-commit
+```
