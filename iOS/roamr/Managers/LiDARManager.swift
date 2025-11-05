@@ -14,6 +14,8 @@ import RealityKit
 
 final class LiDARManager: NSObject, ObservableObject, ARSessionDelegate {
 	@Published var isActive = false
+	@Published var showDataSheet = false
+	@Published var pointsLog = [Int]()
 
 	var serverURL: String = "ws://192.168.1.2:8080"
 		
@@ -82,7 +84,10 @@ final class LiDARManager: NSObject, ObservableObject, ARSessionDelegate {
 			let p = points[i]
 			out.append([p.x, p.y, p.z])
 		}
-		
-		print("LiDAR points: \(points.count)")
+
+		pointsLog.append(points.count)
+		if pointsLog.count > 6 {
+			pointsLog.removeFirst()
+		}
 	}
 }

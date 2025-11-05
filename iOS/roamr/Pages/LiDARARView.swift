@@ -30,7 +30,7 @@ struct LiDARView: View {
 	@EnvironmentObject var lidarManager: LiDARManager
 	
 	var iconName: String {
-		lidarManager.isActive ? "stop.fill" : "pause.fill"
+		lidarManager.isActive ? "stop.fill" : "play.fill"
 	}
 	
 	var color: Color {
@@ -41,8 +41,9 @@ struct LiDARView: View {
 		ZStack {
 			UILiDARView()
 			
+			
+			
 			VStack {
-				
 				Button {
 					lidarManager.toggleSession()
 				} label: {
@@ -51,13 +52,15 @@ struct LiDARView: View {
 				.frame(maxWidth: .infinity, alignment: .trailing)
 				
 				Spacer()
-				
 			}
 			.padding(.top, safeAreaInsets.top)
 			.padding(.horizontal, 16)
 		}
 		.onDisappear() {
 			lidarManager.stopSession()
+			withAnimation {
+				lidarManager.showDataSheet = false
+			}
 		}
 	}
 }

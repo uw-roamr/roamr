@@ -14,8 +14,8 @@
             filePath = "roamr/Managers/LiDARManager.swift"
             startingColumnNumber = "9223372036854775807"
             endingColumnNumber = "9223372036854775807"
-            startingLineNumber = "78"
-            endingLineNumber = "78"
+            startingLineNumber = "80"
+            endingLineNumber = "80"
             landmarkName = "handle(points:cameraTransform:)"
             landmarkType = "7">
          </BreakpointContent>

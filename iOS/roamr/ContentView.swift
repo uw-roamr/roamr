@@ -12,14 +12,6 @@ struct ContentView: View {
 	let server = WebSocketServerManager()
 	@State var currentPage: AppPage = .ARView
 
-	struct SettingsPage: View {
-		var body: some View {
-			Color.orange.opacity(0.1)
-				.overlay(Text("⚙️ Settings").font(.largeTitle))
-				.ignoresSafeArea()
-		}
-	}
-
 	var body: some View {
 		VStack {
 			ZStack {
@@ -28,7 +20,7 @@ struct ContentView: View {
 					case .ARView:
 						LiDARView()
 					case .data:
-						DataView()
+						EmptyView()
 					case .settings:
 						SettingsPage()
 					}
@@ -37,7 +29,17 @@ struct ContentView: View {
 				.frame(maxWidth: .infinity, maxHeight: .infinity)
 				.animation(.easeInOut, value: currentPage)
 				
-				FloatingBubbleTabBar(currentPage: $currentPage)
+				VStack {
+					Spacer()
+
+					if lidarManager.showDataSheet {
+						DataView()
+							.transition(.scale.combined(with: .opacity))
+							.animation(.easeInOut(duration: 0.13), value: lidarManager.showDataSheet)
+					}
+
+					FloatingBubbleTabBar(currentPage: $currentPage)
+				}
 			}
 			
 //			LiDARView()
