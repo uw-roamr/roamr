@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>WebSocket Test</title>
+</head>
+<body>
+  <h1>WebSocket Messages</h1>
+  <ul id="messages"></ul>
+
+  <input id="msgInput" placeholder="Type message">
+  <button id="sendBtn">Send</button>
+
+  <script>
+    const messagesList = document.getElementById("messages");
+    const input = document.getElementById("msgInput");
+    const btn = document.getElementById("sendBtn");
+
+    // Connect to the WebSocket server running inside the app
+    const socket = new WebSocket("ws://127.0.0.1:8080/ws");
+
+    socket.onopen = () => console.log("Connected!");
+    socket.onmessage = (event) => {
+      const li = document.createElement("li");
+      li.textContent = event.data;
+      messagesList.appendChild(li);
+	  socket.send("testing");
+    };
+
+    btn.onclick = () => {
+		socket.send("testing");
+    };
+  </script>
+</body>
+</html>
