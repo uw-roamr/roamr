@@ -9,7 +9,6 @@
 import Foundation
 import ARKit
 import Combine
-import RealityFoundation
 import RealityKit
 
 final class LiDARManager: NSObject, ObservableObject, ARSessionDelegate {
