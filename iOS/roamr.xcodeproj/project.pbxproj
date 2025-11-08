@@ -7,6 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		5684525E2EBC4A29007CCA23 /* CWasm3 in Frameworks */ = {isa = PBXBuildFile; productRef = 5684525D2EBC4A29007CCA23 /* CWasm3 */; };
+		568452612EBC4A34007CCA23 /* Synchronized in Frameworks */ = {isa = PBXBuildFile; productRef = 568452602EBC4A34007CCA23 /* Synchronized */; };
+		5684529F2EBC53F1007CCA23 /* WASI in Frameworks */ = {isa = PBXBuildFile; productRef = 5684529E2EBC53F1007CCA23 /* WASI */; };
+		568452A12EBC53F1007CCA23 /* WAT in Frameworks */ = {isa = PBXBuildFile; productRef = 568452A02EBC53F1007CCA23 /* WAT */; };
+		568452A32EBC53F1007CCA23 /* WIT in Frameworks */ = {isa = PBXBuildFile; productRef = 568452A22EBC53F1007CCA23 /* WIT */; };
+		568452A52EBC53F1007CCA23 /* WasmKit in Frameworks */ = {isa = PBXBuildFile; productRef = 568452A42EBC53F1007CCA23 /* WasmKit */; };
+		568452A72EBC53F1007CCA23 /* WasmKitWASI in Frameworks */ = {isa = PBXBuildFile; productRef = 568452A62EBC53F1007CCA23 /* WasmKitWASI */; };
 		56F1FF902EBAB8CD0085DDB1 /* Vapor in Frameworks */ = {isa = PBXBuildFile; productRef = 56F1FF8F2EBAB8CD0085DDB1 /* Vapor */; };
 /* End PBXBuildFile section */
 
@@ -14,9 +21,22 @@
 		56206B172EBAB1C600C8E9E8 /* roamr.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = roamr.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+		568452242EBC2FE0007CCA23 /* Exceptions for "roamr" folder in "Copy Bundle Resources" phase from "roamr" target */ = {
+			isa = PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet;
+			buildPhase = 56206B152EBAB1C600C8E9E8 /* Resources */;
+			membershipExceptions = (
+				WASM/wasm_host.c,
+			);
+		};
+/* End PBXFileSystemSynchronizedGroupBuildPhaseMembershipExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		56206B192EBAB1C600C8E9E8 /* roamr */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				568452242EBC2FE0007CCA23 /* Exceptions for "roamr" folder in "Copy Bundle Resources" phase from "roamr" target */,
+			);
 			path = roamr;
 			sourceTree = "<group>";
 		};
@@ -27,7 +47,14 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5684529F2EBC53F1007CCA23 /* WASI in Frameworks */,
+				568452A52EBC53F1007CCA23 /* WasmKit in Frameworks */,
+				568452612EBC4A34007CCA23 /* Synchronized in Frameworks */,
+				5684525E2EBC4A29007CCA23 /* CWasm3 in Frameworks */,
+				568452A32EBC53F1007CCA23 /* WIT in Frameworks */,
 				56F1FF902EBAB8CD0085DDB1 /* Vapor in Frameworks */,
+				568452A12EBC53F1007CCA23 /* WAT in Frameworks */,
+				568452A72EBC53F1007CCA23 /* WasmKitWASI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -71,6 +98,13 @@
 			name = roamr;
 			packageProductDependencies = (
 				56F1FF8F2EBAB8CD0085DDB1 /* Vapor */,
+				5684525D2EBC4A29007CCA23 /* CWasm3 */,
+				568452602EBC4A34007CCA23 /* Synchronized */,
+				5684529E2EBC53F1007CCA23 /* WASI */,
+				568452A02EBC53F1007CCA23 /* WAT */,
+				568452A22EBC53F1007CCA23 /* WIT */,
+				568452A42EBC53F1007CCA23 /* WasmKit */,
+				568452A62EBC53F1007CCA23 /* WasmKitWASI */,
 			);
 			productName = roamr;
 			productReference = 56206B172EBAB1C600C8E9E8 /* roamr.app */;
@@ -88,6 +122,7 @@
 				TargetAttributes = {
 					56206B162EBAB1C600C8E9E8 = {
 						CreatedOnToolsVersion = 16.0;
+						LastSwiftMigration = 1600;
 					};
 				};
 			};
@@ -102,6 +137,9 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				56F1FF8E2EBAB8CD0085DDB1 /* XCRemoteSwiftPackageReference "vapor" */,
+				5684525C2EBC4A29007CCA23 /* XCRemoteSwiftPackageReference "cwasm3" */,
+				5684525F2EBC4A34007CCA23 /* XCRemoteSwiftPackageReference "synchronized" */,
+				5684529D2EBC53F1007CCA23 /* XCRemoteSwiftPackageReference "WasmKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 56206B182EBAB1C600C8E9E8 /* Products */;
@@ -258,6 +296,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"roamr/Preview Content\"";
@@ -279,6 +318,8 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.ders.roamr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "roamr/WASM/roamr-Bridging-Header.h";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -289,6 +330,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_MODULES = YES;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"roamr/Preview Content\"";
@@ -310,6 +352,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = com.ders.roamr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "roamr/WASM/roamr-Bridging-Header.h";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
@@ -339,6 +382,30 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		5684525C2EBC4A29007CCA23 /* XCRemoteSwiftPackageReference "cwasm3" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/shareup/cwasm3";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.5.3;
+			};
+		};
+		5684525F2EBC4A34007CCA23 /* XCRemoteSwiftPackageReference "synchronized" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/shareup/synchronized.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 4.0.1;
+			};
+		};
+		5684529D2EBC53F1007CCA23 /* XCRemoteSwiftPackageReference "WasmKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/swiftwasm/WasmKit";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.1.6;
+			};
+		};
 		56F1FF8E2EBAB8CD0085DDB1 /* XCRemoteSwiftPackageReference "vapor" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/vapor/vapor.git";
@@ -350,6 +417,41 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		5684525D2EBC4A29007CCA23 /* CWasm3 */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5684525C2EBC4A29007CCA23 /* XCRemoteSwiftPackageReference "cwasm3" */;
+			productName = CWasm3;
+		};
+		568452602EBC4A34007CCA23 /* Synchronized */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5684525F2EBC4A34007CCA23 /* XCRemoteSwiftPackageReference "synchronized" */;
+			productName = Synchronized;
+		};
+		5684529E2EBC53F1007CCA23 /* WASI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5684529D2EBC53F1007CCA23 /* XCRemoteSwiftPackageReference "WasmKit" */;
+			productName = WASI;
+		};
+		568452A02EBC53F1007CCA23 /* WAT */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5684529D2EBC53F1007CCA23 /* XCRemoteSwiftPackageReference "WasmKit" */;
+			productName = WAT;
+		};
+		568452A22EBC53F1007CCA23 /* WIT */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5684529D2EBC53F1007CCA23 /* XCRemoteSwiftPackageReference "WasmKit" */;
+			productName = WIT;
+		};
+		568452A42EBC53F1007CCA23 /* WasmKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5684529D2EBC53F1007CCA23 /* XCRemoteSwiftPackageReference "WasmKit" */;
+			productName = WasmKit;
+		};
+		568452A62EBC53F1007CCA23 /* WasmKitWASI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5684529D2EBC53F1007CCA23 /* XCRemoteSwiftPackageReference "WasmKit" */;
+			productName = WasmKitWASI;
+		};
 		56F1FF8F2EBAB8CD0085DDB1 /* Vapor */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 56F1FF8E2EBAB8CD0085DDB1 /* XCRemoteSwiftPackageReference "vapor" */;

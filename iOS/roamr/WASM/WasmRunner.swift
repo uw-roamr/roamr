@@ -1,143 +1,122 @@
+//
+//  WasmRunner.swift
+//  roamr
+//
+//  Created by Anders Tai on 2025-11-05.
+//
+
 import Foundation
 
 final class WasmRunner {
-    
-    private var env: OpaquePointer!
-    private var runtime: OpaquePointer!
-    private var module: OpaquePointer!
-    
-    // Add these properties to hold onto loaded data and C strings
-    private var wasmFileData: Data?
-    private var cStrings: [UnsafeMutablePointer<CChar>?] = []
+	
+	// --- Use the correct C types ---
+	private var env: IM3Environment?
+	private var runtime: IM3Runtime?
+	private var module: IM3Module?
+	
+	// Keep the file data in memory so the pointer is stable
+	private var wasmFileData: Data?
 
-    init?(wasmPath: String, runtimeStackSize: UInt32 = 64 * 1024) {
-        // Create environment
-        env = m3_NewEnvironment()
-        guard env != nil else { print("Error: m3_NewEnvironment failed"); return nil }
-        
-        // Create runtime
-        runtime = m3_NewRuntime(env, runtimeStackSize, nil)
-        guard runtime != nil else { print("Error: m3_NewRuntime failed"); return nil }
-        
-        // Load WASM file from path
-        guard let data = try? Data(contentsOf: URL(fileURLWithPath: wasmPath)) else {
-            print("Failed to load wasm file from path: \(wasmPath)")
-            return nil
-        }
-        self.wasmFileData = data // Keep data alive
+	init?(wasmPath: String) {
+		
+		// 1. Create Environment
+		self.env = m3_NewEnvironment()
+		guard self.env != nil else {
+			print("Error: m3_NewEnvironment failed")
+			return nil
+		}
+		
+		// 2. Create Runtime
+		let stackSize: UInt32 = 64 * 1024 // 64k
+		self.runtime = m3_NewRuntime(self.env, stackSize, nil)
+		guard self.runtime != nil else {
+			print("Error: m3_NewRuntime failed")
+			m3_FreeEnvironment(self.env) // Clean up
+			return nil
+		}
+		
+		// 3. Load WASM file
+		guard let data = try? Data(contentsOf: URL(fileURLWithPath: wasmPath)), !data.isEmpty else {
+			print("Error: Failed to load wasm file from path: \(wasmPath)")
+			self.cleanup()
+			return nil
+		}
+		self.wasmFileData = data // Keep data alive
+		
+		// 4. Parse Module
+		var modPtr: IM3Module? = nil
+		let parseResult = self.wasmFileData!.withUnsafeBytes { (ptr: UnsafeRawBufferPointer) -> M3Result? in
+			// baseAddress is guaranteed to be non-nil since data is not empty
+			let base = ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)
+			return m3_ParseModule(self.env, &modPtr, base, UInt32(data.count))
+		}
+		
+		if parseResult != nil {
+			print("Error: m3_ParseModule failed: \(String(cString: parseResult!))")
+			self.cleanup()
+			return nil
+		}
+		
+		self.module = modPtr
+		
+		// 5. Load Module into Runtime
+		let loadErr = m3_LoadModule(self.runtime, self.module)
+		if loadErr != nil {
+			print("Error: m3_LoadModule failed: \(String(cString: loadErr!))")
+			self.cleanup()
+			return nil
+		}
+		
+		// NOTE: We do NOT link any host functions or write to memory.
+	}
+	
+	deinit {
+		self.cleanup()
+	}
+	
+	/// Cleans up all Wasm3 resources
+	private func cleanup() {
+		if let r = self.runtime { m3_FreeRuntime(r) }
+		if let e = self.env { m3_FreeEnvironment(e) }
+	}
+	
+	/// Calls a WASM function with NO arguments and returns an Int32
+	func callFunctionWithoutArgs(_ name: String) -> Int32? {
+		
+		// 1. Find the function
+		var fn: IM3Function? = nil
+		let findErr = m3_FindFunction(&fn, self.runtime, name)
+		
+		if findErr != nil || fn == nil {
+			print("Error: m3_FindFunction failed for '\(name)'")
+			return nil
+		}
+		
+		// 2. Call the function with 0 arguments
+		let callErr = m3_Call(fn, 0, nil)
+		
+		if callErr != nil {
+			print("Error: m3_Call failed: \(String(cString: callErr!))")
+			return nil
+		}
+		
+		// 3. Get the Int32 result
+		var resultPtr: UnsafeRawPointer? = nil
+		let getResultErr = m3_GetResults(fn, 0, &resultPtr)
 
-        // Parse module
-        var modPtr: OpaquePointer? = nil
-        let parseResult = wasmFileData!.withUnsafeBytes { (ptr: UnsafeRawBufferPointer) -> M3Result in
-            guard let base = ptr.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return "m3_ParseModule: data pointer was nil" }
-            return m3_ParseModule(env, &modPtr, base, UInt32(data.count))
-        }
-        
-        if parseResult != nil || modPtr == nil {
-            print("Error: m3_ParseModule failed: \(String(cString: parseResult!))")
-            return nil
-        }
-        
-        module = modPtr
-        
-        // Load module into runtime
-        let loadErr = m3_LoadModule(runtime, modPtr)
-        if loadErr != nil {
-            print("Error: m3_LoadModule failed: \(String(cString: loadErr!))")
-            return nil
-        }
-        
-        // Link the host function (WASM -> Swift)
-        self.linkHostPrint()
-    }
-    
-    deinit {
-        // Free C strings
-        for ptr in cStrings {
-            free(ptr)
-        }
-        // Wasm3 free
-        if let r = runtime { m3_FreeRuntime(r) }
-        if let e = env { m3_FreeEnvironment(e) }
-    }
-    
-    /// Call a WASM function with integer arguments
-    func callFunction(_ name: String, args: [Int32] = []) -> Int32? {
-        var fn: OpaquePointer? = nil
-        let findErr = m3_FindFunction(&fn, runtime, name)
-        
-        if findErr != nil || fn == nil {
-            print("Error: m3_FindFunction failed for '\(name)'")
-            return nil
-        }
-
-        // --- Handle integer arguments ---
-        // Wasm3's m3_Call expects 'const char* argv[]'
-        // To pass integers, we must "stack" them as C strings
-        
-        // 1. Convert Int32s to C strings
-        let cArgs = args.map { strdup(String($0)) }
-        cStrings.append(contentsOf: cArgs) // Store to free later
-
-        // 2. Call the function
-        let callErr = m3_Call(fn, UInt32(cArgs.count), cArgs)
-        
-        // --- Note: The original example code had an error ---
-        // The original `let cArgs = args.map { UnsafePointer<Int8>(bitPattern: Int($0)) }`
-        // was incorrect. `m3_Call` does not pass raw integers this way.
-        // It's typically used for WASI (passing strings) or you must use
-        // a more complex stack setup.
-        // For this example, we'll assume the string-based argv.
-        // If your WASM function *truly* needs raw i32 args, the setup is different.
-        // Let's stick to the string `argv` model for simplicity as in the example.
-        
-        if callErr != nil {
-            print("Error: m3_Call failed: \(String(cString: callErr!))")
-            return nil
-        }
-        
-        // Get result
-        var result: Int32 = 0
-        let getResultErr = m3_GetResultsI32(fn, &result)
-        if getResultErr != nil {
-            print("Error: m3_GetResultsI32 failed")
-            return nil
-        }
-        
-        return result
-    }
-    
-    /// Get a pointer to the WASM linear memory
-    func getMemory() -> (pointer: UnsafeMutableRawPointer?, size: UInt32) {
-        var memSize: UInt32 = 0
-        let mem = m3_GetMemory(runtime, &memSize, 0)
-        return (UnsafeMutableRawPointer(mem), memSize)
-    }
-    
-    /// Write Swift `Data` into WASM memory at a specific offset
-    func writeBytesToMemory(_ data: Data, offset: Int) {
-        let memInfo = getMemory()
-        guard let memPtr = memInfo.pointer else {
-            print("Error: No WASM memory available")
-            return
-        }
-        
-        guard memInfo.size > (offset + data.count) else {
-            print("Error: Write is out of bounds of WASM memory")
-            return
-        }
-        
-        data.withUnsafeBytes { (srcPtr: UnsafeRawBufferPointer) in
-            memcpy(memPtr.advanced(by: offset), srcPtr.baseAddress!, data.count)
-        }
-    }
-    
-    /// Link the `host_print` C function to the WASM module
-    private func linkHostPrint(toModule moduleName: String = "env") {
-        // Signature "v(ii)" means: void return, (i32, i32) arguments
-        let linkErr = m3_LinkRawFunction(module, moduleName, "host_print", "v(ii)", swift_host_print)
-        if linkErr != nil {
-            print("Error: m3_LinkRawFunction failed: \(String(cString: linkErr!))")
-        }
-    }
+		if getResultErr != nil {
+			print("Error: m3_GetResults failed: \(String(cString: getResultErr!))")
+			return nil
+		}
+		
+		guard let resultPtr = resultPtr else {
+			print("Error: m3_GetResults returned a nil result pointer.")
+			return nil
+		}
+		
+		// Read the Int32 value from the result pointer
+		let resultValue = resultPtr.assumingMemoryBound(to: Int32.self).pointee
+		
+		return resultValue
+	}
 }

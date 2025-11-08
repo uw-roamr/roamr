@@ -1,5 +1,5 @@
 {
-  "originHash" : "121e654f7a872d1edf5beeff00cb0914f71290020301fec8b6723910e9ce44de",
+  "originHash" : "7750eb489e44d558467b51fc49ecb4e9c087201f54b3a43a034ac9d00c078edc",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -29,6 +29,15 @@
       }
     },
     {
+      "identity" : "cwasm3",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/shareup/cwasm3",
+      "state" : {
+        "revision" : "e0f173f728633bdcac854e12868af8c16f233366",
+        "version" : "0.5.3"
+      }
+    },
+    {
       "identity" : "multipart-kit",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/vapor/multipart-kit.git",
@@ -53,6 +62,15 @@
       "state" : {
         "revision" : "87e50f483c54e6efd60e885f7f5aa946cee68023",
         "version" : "1.2.1"
+      }
+    },
+    {
+      "identity" : "swift-argument-parser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-argument-parser",
+      "state" : {
+        "revision" : "cdd0ef3755280949551dc26dee5de9ddeda89f54",
+        "version" : "1.6.2"
       }
     },
     {
@@ -236,12 +254,30 @@
       }
     },
     {
+      "identity" : "synchronized",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/shareup/synchronized.git",
+      "state" : {
+        "revision" : "85653e23270ec88ae19f8d494157769487e34aed",
+        "version" : "4.0.1"
+      }
+    },
+    {
       "identity" : "vapor",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/vapor/vapor.git",
       "state" : {
         "revision" : "773ea6a63595ae4f6bc46a366d78769d4cb8b08c",
         "version" : "4.117.0"
+      }
+    },
+    {
+      "identity" : "wasmkit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/swiftwasm/WasmKit",
+      "state" : {
+        "revision" : "827056b014e37da50e2645a7634fddb32e441f32",
+        "version" : "0.1.6"
       }
     },
     {
