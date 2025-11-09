@@ -1,1 +1,5 @@
 bazel-*
+.DS_Store
+iOS/.DS_Store
+iOS/roamr.xcodeproj/xcuserdata/
+iOS/roamr.xcodeproj/project.xcworkspace/xcuserdata/
