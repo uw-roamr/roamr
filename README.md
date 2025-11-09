@@ -24,3 +24,20 @@ Ideas:
 pip install pre-commit
 pre-commit
 ```
+
+## Localization Demo
+
+```
+cd WASM
+
+~/wasi-sdk-27.0-arm64-macos/bin/clang --target=wasm32 -O2 -nostdlib \
+  -Wl,--no-entry \
+  -Wl,--export=reset_poses \
+  -Wl,--export=set_pose \
+  -Wl,--export=draw_pose_map \
+  -Wl,--export=get_image_width \
+  -Wl,--export=get_image_height \
+  -Wl,--export=get_image_pixel_u32 \
+  -Wl,--export=log_pose_f32 \
+  -o map.wasm map.cpp
+```
