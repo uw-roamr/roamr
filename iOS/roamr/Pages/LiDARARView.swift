@@ -132,20 +132,20 @@ struct LiDARView: View {
 
 	private func currentPoseXZYaw() -> (Float, Float, Float)? {
 		guard let frame = lidarManager.session.currentFrame else { return nil }
-		let t = frame.camera.transform
-		let x = t.columns.3.x
-		let z = t.columns.3.z
-		let q = simd_quatf(t)
-		let siny_cosp = 2.0 * (q.real * q.imag.y + q.imag.z * q.imag.x)
-		let cosy_cosp = 1.0 - 2.0 * (q.imag.y * q.imag.y + q.imag.z * q.imag.z)
+		let transform = frame.camera.transform
+		let x_pos = transform.columns.3.x
+		let z_pos = transform.columns.3.z
+		let quat = simd_quatf(transform)
+		let siny_cosp = 2.0 * (quat.real * quat.imag.y + quat.imag.z * quat.imag.x)
+		let cosy_cosp = 1.0 - 2.0 * (quat.imag.y * quat.imag.y + quat.imag.z * quat.imag.z)
 		let yaw = atan2f(Float(siny_cosp), Float(cosy_cosp))
-		return (x, z, yaw)
+		return (x_pos, z_pos, yaw)
 	}
 
 	private func saveCurrentPoseAndPoints() {
-		guard let (x, y, yaw) = currentPoseXZYaw() else { return }
+		guard let (x_pos, y_pos, yaw) = currentPoseXZYaw() else { return }
 		// Save pose
-		lidarManager.savedPoses.append((x, y, yaw))
+		lidarManager.savedPoses.append((x_pos, y_pos, yaw))
 		// Capture latest LiDAR points (project to XZ plane)
 		let latest = lidarManager.latestPoints
 		let maxPts = min(latest.count, 5_000)
