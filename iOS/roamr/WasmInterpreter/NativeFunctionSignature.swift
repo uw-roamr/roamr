@@ -301,9 +301,5 @@ func signature(
 }
 
 func signatureIdentifier<T: WasmTypeProtocol>(for _: T.Type) throws -> String {
-    if Int32.self == T.self { return "i" }
-    else if Int64.self == T.self { return "I" }
-    else if Float32.self == T.self { return "f" }
-    else if Float64.self == T.self { return "F" }
-    else { throw WasmInterpreterError.unsupportedWasmType(String(describing: T.self)) }
+    if Int32.self == T.self { return "i" } else if Int64.self == T.self { return "I" } else if Float32.self == T.self { return "f" } else if Float64.self == T.self { return "F" } else { throw WasmInterpreterError.unsupportedWasmType(String(describing: T.self)) }
 }

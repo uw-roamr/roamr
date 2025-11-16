@@ -17,7 +17,6 @@ struct DataView: View {
 		span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
 	)
 
-
 	private let cardSpacing: CGFloat = 12
 
 	var body: some View {
@@ -66,7 +65,6 @@ struct SensorCard<Content: View>: View {
 	}
 }
 
-
 final class MotionManager: ObservableObject {
 	private var motion = CMMotionManager()
 	private var timer: Timer?
@@ -74,7 +72,6 @@ final class MotionManager: ObservableObject {
 	@Published var acceleration: CMAcceleration = .init(x: 0, y: 0, z: 0)
 	@Published var rotation: CMRotationRate = .init(x: 0, y: 0, z: 0)
 	@Published var currentRotation: CMRotationRate = .init(x: 0, y: 0, z: 0)
-
 
 	init() {
 		startMotionUpdates()
@@ -187,9 +184,6 @@ struct AxisGraph: View {
 	}
 }
 
-
-
-
 struct NumberStreamView: View {
 	let numbers: [Int]
 	var body: some View {
@@ -201,7 +195,6 @@ struct NumberStreamView: View {
 		.padding()
 	}
 }
-
 
 struct GyroscopeView: View {
 	let rotation: CMRotationRate
@@ -241,7 +234,7 @@ class LocationManager: NSObject, ObservableObject, CLLocationManagerDelegate {
 		span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
 	)
 
-	@Published var userLocation: UserLocation? = nil
+	@Published var userLocation: UserLocation?
 
 	override init() {
 		super.init()

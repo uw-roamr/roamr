@@ -53,7 +53,7 @@ struct FloatingBubbleTabBar: View {
 struct TabBubble: View {
 	let page: AppPage
 	@Binding var currentPage: AppPage
-	var closure: (() -> Void)? = nil
+	var closure: (() -> Void)?
 
 	var isActive: Bool { currentPage == page }
 
@@ -72,7 +72,6 @@ struct TabBubble: View {
 	var fontSize: CGFloat {
 		isActive ? 20 : 18
 	}
-
 
 	var body: some View {
 		Button {

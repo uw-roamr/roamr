@@ -363,8 +363,7 @@ public extension WasmInterpreter {
         namespace: String,
         block: @escaping (Arg1, Arg2, Arg3) throws -> Ret
     ) throws where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
-        Ret: WasmTypeProtocol
-    {
+        Ret: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, _: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -397,8 +396,7 @@ public extension WasmInterpreter {
         namespace: String,
         block: @escaping (Arg1, Arg2, Arg3, UnsafeMutableRawPointer?) throws -> Ret
     ) throws where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
-        Ret: WasmTypeProtocol
-    {
+        Ret: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, heap: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -432,8 +430,7 @@ public extension WasmInterpreter {
         block: @escaping (Arg1, Arg2, Arg3, Arg4) throws -> Void
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
-        Arg4: WasmTypeProtocol
-    {
+        Arg4: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, _: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -467,8 +464,7 @@ public extension WasmInterpreter {
         block: @escaping (Arg1, Arg2, Arg3, Arg4, UnsafeMutableRawPointer?) throws -> Void
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
-        Arg4: WasmTypeProtocol
-    {
+        Arg4: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, heap: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -502,8 +498,7 @@ public extension WasmInterpreter {
         block: @escaping (Arg1, Arg2, Arg3, Arg4) throws -> Ret
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
-        Arg4: WasmTypeProtocol, Ret: WasmTypeProtocol
-    {
+        Arg4: WasmTypeProtocol, Ret: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, _: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -539,8 +534,7 @@ public extension WasmInterpreter {
         block: @escaping (Arg1, Arg2, Arg3, Arg4, UnsafeMutableRawPointer?) throws -> Ret
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
-        Arg4: WasmTypeProtocol, Ret: WasmTypeProtocol
-    {
+        Arg4: WasmTypeProtocol, Ret: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, heap: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -576,8 +570,7 @@ public extension WasmInterpreter {
         block: @escaping (Arg1, Arg2, Arg3, Arg4, Arg5) throws -> Void
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
-        Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol
-    {
+        Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, _: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -613,8 +606,7 @@ public extension WasmInterpreter {
         block: @escaping (Arg1, Arg2, Arg3, Arg4, Arg5, UnsafeMutableRawPointer?) throws -> Void
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
-        Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol
-    {
+        Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, heap: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -650,8 +642,7 @@ public extension WasmInterpreter {
         block: @escaping (Arg1, Arg2, Arg3, Arg4, Arg5) throws -> Ret
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
-        Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Ret: WasmTypeProtocol
-    {
+        Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Ret: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, _: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -685,8 +676,7 @@ public extension WasmInterpreter {
         block: @escaping (Arg1, Arg2, Arg3, Arg4, Arg5, UnsafeMutableRawPointer?) throws -> Ret
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
-        Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Ret: WasmTypeProtocol
-    {
+        Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Ret: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, heap: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -720,8 +710,7 @@ public extension WasmInterpreter {
         block: @escaping (Arg1, Arg2, Arg3, Arg4, Arg5, Arg6) throws -> Void
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
-        Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Arg6: WasmTypeProtocol
-    {
+        Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Arg6: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, _: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -756,8 +745,7 @@ public extension WasmInterpreter {
             -> Void
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
-        Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Arg6: WasmTypeProtocol
-    {
+        Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Arg6: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, heap: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -792,8 +780,7 @@ public extension WasmInterpreter {
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
         Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Arg6: WasmTypeProtocol,
-        Ret: WasmTypeProtocol
-    {
+        Ret: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, _: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -830,8 +817,7 @@ public extension WasmInterpreter {
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
         Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Arg6: WasmTypeProtocol,
-        Ret: WasmTypeProtocol
-    {
+        Ret: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, heap: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -867,8 +853,7 @@ public extension WasmInterpreter {
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
         Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Arg6: WasmTypeProtocol,
-        Arg7: WasmTypeProtocol
-    {
+        Arg7: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, _: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -913,8 +898,7 @@ public extension WasmInterpreter {
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
         Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Arg6: WasmTypeProtocol,
-        Arg7: WasmTypeProtocol
-    {
+        Arg7: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, heap: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -950,8 +934,7 @@ public extension WasmInterpreter {
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
         Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Arg6: WasmTypeProtocol,
-        Arg7: WasmTypeProtocol, Ret: WasmTypeProtocol
-    {
+        Arg7: WasmTypeProtocol, Ret: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, _: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -997,8 +980,7 @@ public extension WasmInterpreter {
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
         Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Arg6: WasmTypeProtocol,
-        Arg7: WasmTypeProtocol, Ret: WasmTypeProtocol
-    {
+        Arg7: WasmTypeProtocol, Ret: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, heap: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -1035,8 +1017,7 @@ public extension WasmInterpreter {
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
         Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Arg6: WasmTypeProtocol,
-        Arg7: WasmTypeProtocol, Arg8: WasmTypeProtocol
-    {
+        Arg7: WasmTypeProtocol, Arg8: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, _: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -1083,8 +1064,7 @@ public extension WasmInterpreter {
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
         Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Arg6: WasmTypeProtocol,
-        Arg7: WasmTypeProtocol, Arg8: WasmTypeProtocol
-    {
+        Arg7: WasmTypeProtocol, Arg8: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, heap: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -1121,8 +1101,7 @@ public extension WasmInterpreter {
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
         Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Arg6: WasmTypeProtocol,
-        Arg7: WasmTypeProtocol, Arg8: WasmTypeProtocol, Ret: WasmTypeProtocol
-    {
+        Arg7: WasmTypeProtocol, Arg8: WasmTypeProtocol, Ret: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, _: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {
@@ -1170,8 +1149,7 @@ public extension WasmInterpreter {
     ) throws
         where Arg1: WasmTypeProtocol, Arg2: WasmTypeProtocol, Arg3: WasmTypeProtocol,
         Arg4: WasmTypeProtocol, Arg5: WasmTypeProtocol, Arg6: WasmTypeProtocol,
-        Arg7: WasmTypeProtocol, Arg8: WasmTypeProtocol, Ret: WasmTypeProtocol
-    {
+        Arg7: WasmTypeProtocol, Arg8: WasmTypeProtocol, Ret: WasmTypeProtocol {
         let importedFunction: ImportedFunctionSignature =
             { (stack: UnsafeMutablePointer<UInt64>?, heap: UnsafeMutableRawPointer?) -> UnsafeRawPointer? in
                 do {

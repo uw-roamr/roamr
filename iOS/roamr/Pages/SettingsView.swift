@@ -9,7 +9,6 @@ import Foundation
 import SwiftUI
 import WasmKit
 
-
 struct SettingsPage: View {
 	@EnvironmentObject var lidarManager: LiDARManager
 	@State private var wasmRunner: WasmRunner?
@@ -57,11 +56,6 @@ struct SettingsPage: View {
 //			self.loadRunner()
 		}
 	}
-
-
-
-
-
 
 	func test() throws {
 		do {

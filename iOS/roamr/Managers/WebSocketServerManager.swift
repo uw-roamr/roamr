@@ -13,7 +13,7 @@ class WebSocketServerManager {
 		self.app = app
 
 		// Simple WebSocket route
-		app.webSocket("ws") { req, ws in
+		app.webSocket("ws") { _, ws in
 			self.activeSockets.append(ws)
 			print("🔗 Client connected")
 
@@ -32,7 +32,7 @@ class WebSocketServerManager {
 			try? app.run()
 		}
 
-		//print("✅ WebSocket server started at ws://<iPhone-IP>:8080/ws")
+		// print("✅ WebSocket server started at ws://<iPhone-IP>:8080/ws")
 	}
 
 	func stop() {

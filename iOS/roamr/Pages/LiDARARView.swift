@@ -5,7 +5,6 @@
 //  Created by Anders Tai on 2025-09-22.
 //
 
-
 import SwiftUI
 import RealityKit
 import ARKit
@@ -30,7 +29,7 @@ struct UILiDARView: UIViewRepresentable {
 struct LiDARView: View {
 	@Environment(\.safeAreaInsets) private var safeAreaInsets
 	@EnvironmentObject var lidarManager: LiDARManager
-	@State private var mapImage: UIImage? = nil
+	@State private var mapImage: UIImage?
 
 	var iconName: String {
 		lidarManager.isActive ? "stop.fill" : "play.fill"
@@ -43,8 +42,6 @@ struct LiDARView: View {
 	var body: some View {
 		ZStack {
 			UILiDARView()
-
-
 
 			VStack {
 				Button {
@@ -122,7 +119,7 @@ struct LiDARView: View {
 				.transition(.opacity.combined(with: .scale))
 			}
 		}
-		.onDisappear() {
+		.onDisappear {
 			lidarManager.stopSession()
 			withAnimation {
 				lidarManager.showDataSheet = false

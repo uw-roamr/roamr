@@ -44,7 +44,7 @@ final class WasmRunner {
 		self.wasmFileData = data // Keep data alive
 
 		// 4. Parse Module
-		var modPtr: IM3Module? = nil
+		var modPtr: IM3Module?
 		let parseResult = self.wasmFileData!.withUnsafeBytes { (ptr: UnsafeRawBufferPointer) -> M3Result? in
 			// baseAddress is guaranteed to be non-nil since data is not empty
 			let base = ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)
@@ -84,7 +84,7 @@ final class WasmRunner {
 	func callFunctionWithoutArgs(_ name: String) -> Int32? {
 
 		// 1. Find the function
-		var fn: IM3Function? = nil
+		var fn: IM3Function?
 		let findErr = m3_FindFunction(&fn, self.runtime, name)
 
 		if findErr != nil || fn == nil {
@@ -101,7 +101,7 @@ final class WasmRunner {
 		}
 
 		// 3. Get the Int32 result
-		var resultPtr: UnsafeRawPointer? = nil
+		var resultPtr: UnsafeRawPointer?
 		let getResultErr = m3_GetResults(fn, 0, &resultPtr)
 
 		if getResultErr != nil {

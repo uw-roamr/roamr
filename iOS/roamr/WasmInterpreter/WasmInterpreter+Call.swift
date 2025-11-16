@@ -48,7 +48,7 @@ public extension WasmInterpreter {
             args: [
                 try String(wasmType: arg1),
                 try String(wasmType: arg2),
-                try String(wasmType: arg3),
+                try String(wasmType: arg3)
             ]
         )
     }
@@ -57,14 +57,13 @@ public extension WasmInterpreter {
         _ name: String, _ arg1: some WasmTypeProtocol, _ arg2: some WasmTypeProtocol,
         _ arg3: some WasmTypeProtocol
     ) throws -> Ret
-        where Ret: WasmTypeProtocol
-    {
+        where Ret: WasmTypeProtocol {
         try _call(
             try function(named: name),
             args: [
                 try String(wasmType: arg1),
                 try String(wasmType: arg2),
-                try String(wasmType: arg3),
+                try String(wasmType: arg3)
             ]
         )
     }
@@ -79,7 +78,7 @@ public extension WasmInterpreter {
                 try String(wasmType: arg1),
                 try String(wasmType: arg2),
                 try String(wasmType: arg3),
-                try String(wasmType: arg4),
+                try String(wasmType: arg4)
             ]
         )
     }
@@ -88,15 +87,14 @@ public extension WasmInterpreter {
         _ name: String, _ arg1: some WasmTypeProtocol, _ arg2: some WasmTypeProtocol,
         _ arg3: some WasmTypeProtocol, _ arg4: some WasmTypeProtocol
     ) throws -> Ret
-        where Ret: WasmTypeProtocol
-    {
+        where Ret: WasmTypeProtocol {
         try _call(
             try function(named: name),
             args: [
                 try String(wasmType: arg1),
                 try String(wasmType: arg2),
                 try String(wasmType: arg3),
-                try String(wasmType: arg4),
+                try String(wasmType: arg4)
             ]
         )
     }
@@ -113,7 +111,7 @@ public extension WasmInterpreter {
                 try String(wasmType: arg2),
                 try String(wasmType: arg3),
                 try String(wasmType: arg4),
-                try String(wasmType: arg5),
+                try String(wasmType: arg5)
             ]
         )
     }
@@ -123,8 +121,7 @@ public extension WasmInterpreter {
         _ arg3: some WasmTypeProtocol, _ arg4: some WasmTypeProtocol,
         _ arg5: some WasmTypeProtocol
     ) throws -> Ret
-        where Ret: WasmTypeProtocol
-    {
+        where Ret: WasmTypeProtocol {
         try _call(
             try function(named: name),
             args: [
@@ -132,7 +129,7 @@ public extension WasmInterpreter {
                 try String(wasmType: arg2),
                 try String(wasmType: arg3),
                 try String(wasmType: arg4),
-                try String(wasmType: arg5),
+                try String(wasmType: arg5)
             ]
         )
     }
@@ -151,7 +148,7 @@ public extension WasmInterpreter {
                 try String(wasmType: arg3),
                 try String(wasmType: arg4),
                 try String(wasmType: arg5),
-                try String(wasmType: arg6),
+                try String(wasmType: arg6)
             ]
         )
     }
@@ -162,8 +159,7 @@ public extension WasmInterpreter {
         _ arg4: some WasmTypeProtocol, _ arg5: some WasmTypeProtocol,
         _ arg6: some WasmTypeProtocol
     ) throws -> Ret
-        where Ret: WasmTypeProtocol
-    {
+        where Ret: WasmTypeProtocol {
         try _call(
             try function(named: name),
             args: [
@@ -172,7 +168,7 @@ public extension WasmInterpreter {
                 try String(wasmType: arg3),
                 try String(wasmType: arg4),
                 try String(wasmType: arg5),
-                try String(wasmType: arg6),
+                try String(wasmType: arg6)
             ]
         )
     }
@@ -192,7 +188,7 @@ public extension WasmInterpreter {
                 try String(wasmType: arg4),
                 try String(wasmType: arg5),
                 try String(wasmType: arg6),
-                try String(wasmType: arg7),
+                try String(wasmType: arg7)
             ]
         )
     }
@@ -203,8 +199,7 @@ public extension WasmInterpreter {
         _ arg4: some WasmTypeProtocol, _ arg5: some WasmTypeProtocol,
         _ arg6: some WasmTypeProtocol, _ arg7: some WasmTypeProtocol
     ) throws -> Ret
-        where Ret: WasmTypeProtocol
-    {
+        where Ret: WasmTypeProtocol {
         try _call(
             try function(named: name),
             args: [
@@ -214,7 +209,7 @@ public extension WasmInterpreter {
                 try String(wasmType: arg4),
                 try String(wasmType: arg5),
                 try String(wasmType: arg6),
-                try String(wasmType: arg7),
+                try String(wasmType: arg7)
             ]
         )
     }
@@ -236,7 +231,7 @@ public extension WasmInterpreter {
                 try String(wasmType: arg5),
                 try String(wasmType: arg6),
                 try String(wasmType: arg7),
-                try String(wasmType: arg8),
+                try String(wasmType: arg8)
             ]
         )
     }
@@ -248,8 +243,7 @@ public extension WasmInterpreter {
         _ arg6: some WasmTypeProtocol, _ arg7: some WasmTypeProtocol,
         _ arg8: some WasmTypeProtocol
     ) throws -> Ret
-        where Ret: WasmTypeProtocol
-    {
+        where Ret: WasmTypeProtocol {
         try _call(
             try function(named: name),
             args: [
@@ -260,7 +254,7 @@ public extension WasmInterpreter {
                 try String(wasmType: arg5),
                 try String(wasmType: arg6),
                 try String(wasmType: arg7),
-                try String(wasmType: arg8),
+                try String(wasmType: arg8)
             ]
         )
     }
