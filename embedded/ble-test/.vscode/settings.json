@@ -1,0 +1,20 @@
+{
+  "C_Cpp.intelliSenseEngine": "default",
+  "idf.espIdfPath": "/Users/oliviaye/esp/v5.5.1/esp-idf",
+  "idf.toolsPath": "/Users/oliviaye/.espressif",
+  "idf.pythonInstallPath": "/usr/local/bin/python3",
+  "idf.openOcdConfigs": [
+    "board/esp32c6-builtin.cfg"
+  ],
+  "idf.customExtraVars": {
+    "IDF_TARGET": "esp32c6"
+  },
+  "clangd.path": "/Users/oliviaye/.espressif/tools/esp-clang/esp-19.1.2_20250312/esp-clang/bin/clangd",
+  "clangd.arguments": [
+    "--background-index",
+    "--query-driver=/Users/oliviaye/.espressif/tools/riscv32-esp-elf/esp-14.2.0_20241119/riscv32-esp-elf/bin/riscv32-esp-elf-gcc",
+    "--compile-commands-dir=/Users/oliviaye/roamr/embedded/blink/build"
+  ],
+  "idf.port": "/dev/tty.usbmodem14401",
+  "idf.flashType": "UART"
+}

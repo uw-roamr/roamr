@@ -3,3 +3,4 @@ bazel-*
 iOS/.DS_Store
 iOS/roamr.xcodeproj/xcuserdata/
 iOS/roamr.xcodeproj/project.xcworkspace/xcuserdata/
+embedded/ble-test/build/
