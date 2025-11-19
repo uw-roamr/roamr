@@ -12,10 +12,41 @@
 		568452A32EBC53F1007CCA23 /* WIT in Frameworks */ = {isa = PBXBuildFile; productRef = 568452A22EBC53F1007CCA23 /* WIT */; };
 		568452A52EBC53F1007CCA23 /* WasmKit in Frameworks */ = {isa = PBXBuildFile; productRef = 568452A42EBC53F1007CCA23 /* WasmKit */; };
 		568452A72EBC53F1007CCA23 /* WasmKitWASI in Frameworks */ = {isa = PBXBuildFile; productRef = 568452A62EBC53F1007CCA23 /* WasmKitWASI */; };
+		56AAE1782ECD46AF0057E1DF /* libm.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 56AAE1772ECD46AF0057E1DF /* libm.tbd */; };
+		56AAE17A2ECD46B80057E1DF /* libc.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 56AAE1792ECD46B80057E1DF /* libc.tbd */; };
+		56AAE17C2ECD46C20057E1DF /* libdl.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 56AAE17B2ECD46C20057E1DF /* libdl.tbd */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
 		56206B172EBAB1C600C8E9E8 /* roamr.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = roamr.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		56AAE1552ECD467E0057E1DF /* Icon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Icon.swift; sourceTree = "<group>"; };
+		56AAE1562ECD467E0057E1DF /* TabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBar.swift; sourceTree = "<group>"; };
+		56AAE1572ECD467E0057E1DF /* WebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebView.swift; sourceTree = "<group>"; };
+		56AAE1592ECD467E0057E1DF /* Color+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Extensions.swift"; sourceTree = "<group>"; };
+		56AAE15A2ECD467E0057E1DF /* SafeAreaInsets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeAreaInsets.swift; sourceTree = "<group>"; };
+		56AAE15C2ECD467E0057E1DF /* LiDARManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiDARManager.swift; sourceTree = "<group>"; };
+		56AAE15D2ECD467E0057E1DF /* WebSocketServerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketServerManager.swift; sourceTree = "<group>"; };
+		56AAE15F2ECD467E0057E1DF /* DataView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataView.swift; sourceTree = "<group>"; };
+		56AAE1602ECD467E0057E1DF /* LiDARARView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiDARARView.swift; sourceTree = "<group>"; };
+		56AAE1612ECD467E0057E1DF /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		56AAE1632ECD467E0057E1DF /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
+		56AAE1652ECD467E0057E1DF /* aot_comp_option.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = aot_comp_option.h; sourceTree = "<group>"; };
+		56AAE1662ECD467E0057E1DF /* aot_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = aot_export.h; sourceTree = "<group>"; };
+		56AAE1672ECD467E0057E1DF /* gc_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = gc_export.h; sourceTree = "<group>"; };
+		56AAE1682ECD467E0057E1DF /* lib_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = lib_export.h; sourceTree = "<group>"; };
+		56AAE1692ECD467E0057E1DF /* wasm_c_api.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = wasm_c_api.h; sourceTree = "<group>"; };
+		56AAE16A2ECD467E0057E1DF /* wasm_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = wasm_export.h; sourceTree = "<group>"; };
+		56AAE16C2ECD467E0057E1DF /* libiwasm-arm.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = "libiwasm-arm.a"; sourceTree = "<group>"; };
+		56AAE16E2ECD467E0057E1DF /* add.wasm */ = {isa = PBXFileReference; lastKnownFileType = file; path = add.wasm; sourceTree = "<group>"; };
+		56AAE16F2ECD467E0057E1DF /* map.wasm */ = {isa = PBXFileReference; lastKnownFileType = file; path = map.wasm; sourceTree = "<group>"; };
+		56AAE1702ECD467E0057E1DF /* test.wasm */ = {isa = PBXFileReference; lastKnownFileType = file; path = test.wasm; sourceTree = "<group>"; };
+		56AAE1722ECD467E0057E1DF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		56AAE1732ECD467E0057E1DF /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		56AAE1742ECD467E0057E1DF /* index.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = index.html; sourceTree = "<group>"; };
+		56AAE1752ECD467E0057E1DF /* roamr.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = roamr.swift; sourceTree = "<group>"; };
+		56AAE1772ECD46AF0057E1DF /* libm.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libm.tbd; path = usr/lib/libm.tbd; sourceTree = SDKROOT; };
+		56AAE1792ECD46B80057E1DF /* libc.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libc.tbd; path = usr/lib/libc.tbd; sourceTree = SDKROOT; };
+		56AAE17B2ECD46C20057E1DF /* libdl.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libdl.tbd; path = usr/lib/libdl.tbd; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -31,6 +62,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				56AAE17C2ECD46C20057E1DF /* libdl.tbd in Frameworks */,
+				56AAE17A2ECD46B80057E1DF /* libc.tbd in Frameworks */,
+				56AAE1782ECD46AF0057E1DF /* libm.tbd in Frameworks */,
 				5684529F2EBC53F1007CCA23 /* WASI in Frameworks */,
 				568452A52EBC53F1007CCA23 /* WasmKit in Frameworks */,
 				568452A32EBC53F1007CCA23 /* WIT in Frameworks */,
@@ -46,6 +80,7 @@
 			isa = PBXGroup;
 			children = (
 				56206B192EBAB1C600C8E9E8 /* roamr */,
+				56AAE1542ECD467D0057E1DF /* Frameworks */,
 				56206B182EBAB1C600C8E9E8 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -56,6 +91,113 @@
 				56206B172EBAB1C600C8E9E8 /* roamr.app */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		56AAE1542ECD467D0057E1DF /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				56AAE17B2ECD46C20057E1DF /* libdl.tbd */,
+				56AAE1792ECD46B80057E1DF /* libc.tbd */,
+				56AAE1772ECD46AF0057E1DF /* libm.tbd */,
+				56AAE1762ECD467E0057E1DF /* roamr */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		56AAE1582ECD467E0057E1DF /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				56AAE1552ECD467E0057E1DF /* Icon.swift */,
+				56AAE1562ECD467E0057E1DF /* TabBar.swift */,
+				56AAE1572ECD467E0057E1DF /* WebView.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+		56AAE15B2ECD467E0057E1DF /* Extensions */ = {
+			isa = PBXGroup;
+			children = (
+				56AAE1592ECD467E0057E1DF /* Color+Extensions.swift */,
+				56AAE15A2ECD467E0057E1DF /* SafeAreaInsets.swift */,
+			);
+			path = Extensions;
+			sourceTree = "<group>";
+		};
+		56AAE15E2ECD467E0057E1DF /* Managers */ = {
+			isa = PBXGroup;
+			children = (
+				56AAE15C2ECD467E0057E1DF /* LiDARManager.swift */,
+				56AAE15D2ECD467E0057E1DF /* WebSocketServerManager.swift */,
+			);
+			path = Managers;
+			sourceTree = "<group>";
+		};
+		56AAE1622ECD467E0057E1DF /* Pages */ = {
+			isa = PBXGroup;
+			children = (
+				56AAE15F2ECD467E0057E1DF /* DataView.swift */,
+				56AAE1602ECD467E0057E1DF /* LiDARARView.swift */,
+				56AAE1612ECD467E0057E1DF /* SettingsView.swift */,
+			);
+			path = Pages;
+			sourceTree = "<group>";
+		};
+		56AAE1642ECD467E0057E1DF /* Preview Content */ = {
+			isa = PBXGroup;
+			children = (
+				56AAE1632ECD467E0057E1DF /* Preview Assets.xcassets */,
+			);
+			path = "Preview Content";
+			sourceTree = "<group>";
+		};
+		56AAE16B2ECD467E0057E1DF /* include */ = {
+			isa = PBXGroup;
+			children = (
+				56AAE1652ECD467E0057E1DF /* aot_comp_option.h */,
+				56AAE1662ECD467E0057E1DF /* aot_export.h */,
+				56AAE1672ECD467E0057E1DF /* gc_export.h */,
+				56AAE1682ECD467E0057E1DF /* lib_export.h */,
+				56AAE1692ECD467E0057E1DF /* wasm_c_api.h */,
+				56AAE16A2ECD467E0057E1DF /* wasm_export.h */,
+			);
+			path = include;
+			sourceTree = "<group>";
+		};
+		56AAE16D2ECD467E0057E1DF /* WAMR */ = {
+			isa = PBXGroup;
+			children = (
+				56AAE16B2ECD467E0057E1DF /* include */,
+				56AAE16C2ECD467E0057E1DF /* libiwasm-arm.a */,
+			);
+			path = WAMR;
+			sourceTree = "<group>";
+		};
+		56AAE1712ECD467E0057E1DF /* WASM */ = {
+			isa = PBXGroup;
+			children = (
+				56AAE16E2ECD467E0057E1DF /* add.wasm */,
+				56AAE16F2ECD467E0057E1DF /* map.wasm */,
+				56AAE1702ECD467E0057E1DF /* test.wasm */,
+			);
+			path = WASM;
+			sourceTree = "<group>";
+		};
+		56AAE1762ECD467E0057E1DF /* roamr */ = {
+			isa = PBXGroup;
+			children = (
+				56AAE1582ECD467E0057E1DF /* Components */,
+				56AAE15B2ECD467E0057E1DF /* Extensions */,
+				56AAE15E2ECD467E0057E1DF /* Managers */,
+				56AAE1622ECD467E0057E1DF /* Pages */,
+				56AAE1642ECD467E0057E1DF /* Preview Content */,
+				56AAE16D2ECD467E0057E1DF /* WAMR */,
+				56AAE1712ECD467E0057E1DF /* WASM */,
+				56AAE1722ECD467E0057E1DF /* Assets.xcassets */,
+				56AAE1732ECD467E0057E1DF /* ContentView.swift */,
+				56AAE1742ECD467E0057E1DF /* index.html */,
+				56AAE1752ECD467E0057E1DF /* roamr.swift */,
+			);
+			path = roamr;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -199,6 +341,7 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/roamr/WAMR/include";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
@@ -206,6 +349,7 @@
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OBJC_BRIDGING_HEADER = "roamr/roamr-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
 			name = Debug;
@@ -256,12 +400,14 @@
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/roamr/WAMR/include";
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OBJC_BRIDGING_HEADER = "roamr/roamr-Bridging-Header.h";
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
@@ -289,11 +435,19 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/roamr/WAMR",
+				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-ldl",
+					"-lm",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.ders.roamr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "";
+				SWIFT_OBJC_BRIDGING_HEADER = "roamr/roamr-Bridging-Header.h";
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_PRECOMPILE_BRIDGING_HEADER = YES;
 				SWIFT_VERSION = 5.0;
@@ -324,11 +478,19 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/roamr/WAMR",
+				);
 				MARKETING_VERSION = 1.0;
+				OTHER_LDFLAGS = (
+					"-ldl",
+					"-lm",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.ders.roamr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = "";
+				SWIFT_OBJC_BRIDGING_HEADER = "roamr/roamr-Bridging-Header.h";
 				SWIFT_PRECOMPILE_BRIDGING_HEADER = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
