@@ -47,6 +47,32 @@
 		56AAE1772ECD46AF0057E1DF /* libm.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libm.tbd; path = usr/lib/libm.tbd; sourceTree = SDKROOT; };
 		56AAE1792ECD46B80057E1DF /* libc.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libc.tbd; path = usr/lib/libc.tbd; sourceTree = SDKROOT; };
 		56AAE17B2ECD46C20057E1DF /* libdl.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libdl.tbd; path = usr/lib/libdl.tbd; sourceTree = SDKROOT; };
+		56B658722ED12C1400A35411 /* Icon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Icon.swift; sourceTree = "<group>"; };
+		56B658732ED12C1400A35411 /* TabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBar.swift; sourceTree = "<group>"; };
+		56B658742ED12C1400A35411 /* WebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebView.swift; sourceTree = "<group>"; };
+		56B658762ED12C1400A35411 /* Color+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Extensions.swift"; sourceTree = "<group>"; };
+		56B658772ED12C1400A35411 /* SafeAreaInsets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeAreaInsets.swift; sourceTree = "<group>"; };
+		56B658792ED12C1400A35411 /* LiDARManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiDARManager.swift; sourceTree = "<group>"; };
+		56B6587A2ED12C1400A35411 /* WebSocketServerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketServerManager.swift; sourceTree = "<group>"; };
+		56B6587C2ED12C1400A35411 /* DataView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataView.swift; sourceTree = "<group>"; };
+		56B6587D2ED12C1400A35411 /* LiDARARView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiDARARView.swift; sourceTree = "<group>"; };
+		56B6587E2ED12C1400A35411 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		56B658802ED12C1400A35411 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
+		56B658822ED12C1400A35411 /* aot_comp_option.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = aot_comp_option.h; sourceTree = "<group>"; };
+		56B658832ED12C1400A35411 /* aot_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = aot_export.h; sourceTree = "<group>"; };
+		56B658842ED12C1400A35411 /* gc_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = gc_export.h; sourceTree = "<group>"; };
+		56B658852ED12C1400A35411 /* lib_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = lib_export.h; sourceTree = "<group>"; };
+		56B658862ED12C1400A35411 /* wasm_c_api.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = wasm_c_api.h; sourceTree = "<group>"; };
+		56B658872ED12C1400A35411 /* wasm_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = wasm_export.h; sourceTree = "<group>"; };
+		56B658892ED12C1400A35411 /* libiwasm.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libiwasm.a; sourceTree = "<group>"; };
+		56B6588B2ED12C1400A35411 /* main.wasm */ = {isa = PBXFileReference; lastKnownFileType = file; path = main.wasm; sourceTree = "<group>"; };
+		56B6588C2ED12C1400A35411 /* map.wasm */ = {isa = PBXFileReference; lastKnownFileType = file; path = map.wasm; sourceTree = "<group>"; };
+		56B6588D2ED12C1400A35411 /* test.wasm */ = {isa = PBXFileReference; lastKnownFileType = file; path = test.wasm; sourceTree = "<group>"; };
+		56B6588F2ED12C1400A35411 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		56B658902ED12C1400A35411 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		56B658912ED12C1400A35411 /* index.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = index.html; sourceTree = "<group>"; };
+		56B658922ED12C1400A35411 /* roamr.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = roamr.swift; sourceTree = "<group>"; };
+		56B658932ED12C1400A35411 /* roamr-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "roamr-Bridging-Header.h"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -96,6 +122,7 @@
 		56AAE1542ECD467D0057E1DF /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
+				56B658942ED12C1400A35411 /* roamr */,
 				56AAE17B2ECD46C20057E1DF /* libdl.tbd */,
 				56AAE1792ECD46B80057E1DF /* libc.tbd */,
 				56AAE1772ECD46AF0057E1DF /* libm.tbd */,
@@ -196,6 +223,103 @@
 				56AAE1732ECD467E0057E1DF /* ContentView.swift */,
 				56AAE1742ECD467E0057E1DF /* index.html */,
 				56AAE1752ECD467E0057E1DF /* roamr.swift */,
+			);
+			path = roamr;
+			sourceTree = "<group>";
+		};
+		56B658752ED12C1400A35411 /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				56B658722ED12C1400A35411 /* Icon.swift */,
+				56B658732ED12C1400A35411 /* TabBar.swift */,
+				56B658742ED12C1400A35411 /* WebView.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+		56B658782ED12C1400A35411 /* Extensions */ = {
+			isa = PBXGroup;
+			children = (
+				56B658762ED12C1400A35411 /* Color+Extensions.swift */,
+				56B658772ED12C1400A35411 /* SafeAreaInsets.swift */,
+			);
+			path = Extensions;
+			sourceTree = "<group>";
+		};
+		56B6587B2ED12C1400A35411 /* Managers */ = {
+			isa = PBXGroup;
+			children = (
+				56B658792ED12C1400A35411 /* LiDARManager.swift */,
+				56B6587A2ED12C1400A35411 /* WebSocketServerManager.swift */,
+			);
+			path = Managers;
+			sourceTree = "<group>";
+		};
+		56B6587F2ED12C1400A35411 /* Pages */ = {
+			isa = PBXGroup;
+			children = (
+				56B6587C2ED12C1400A35411 /* DataView.swift */,
+				56B6587D2ED12C1400A35411 /* LiDARARView.swift */,
+				56B6587E2ED12C1400A35411 /* SettingsView.swift */,
+			);
+			path = Pages;
+			sourceTree = "<group>";
+		};
+		56B658812ED12C1400A35411 /* Preview Content */ = {
+			isa = PBXGroup;
+			children = (
+				56B658802ED12C1400A35411 /* Preview Assets.xcassets */,
+			);
+			path = "Preview Content";
+			sourceTree = "<group>";
+		};
+		56B658882ED12C1400A35411 /* include */ = {
+			isa = PBXGroup;
+			children = (
+				56B658822ED12C1400A35411 /* aot_comp_option.h */,
+				56B658832ED12C1400A35411 /* aot_export.h */,
+				56B658842ED12C1400A35411 /* gc_export.h */,
+				56B658852ED12C1400A35411 /* lib_export.h */,
+				56B658862ED12C1400A35411 /* wasm_c_api.h */,
+				56B658872ED12C1400A35411 /* wasm_export.h */,
+			);
+			path = include;
+			sourceTree = "<group>";
+		};
+		56B6588A2ED12C1400A35411 /* WAMR */ = {
+			isa = PBXGroup;
+			children = (
+				56B658882ED12C1400A35411 /* include */,
+				56B658892ED12C1400A35411 /* libiwasm.a */,
+			);
+			path = WAMR;
+			sourceTree = "<group>";
+		};
+		56B6588E2ED12C1400A35411 /* WASM */ = {
+			isa = PBXGroup;
+			children = (
+				56B6588B2ED12C1400A35411 /* main.wasm */,
+				56B6588C2ED12C1400A35411 /* map.wasm */,
+				56B6588D2ED12C1400A35411 /* test.wasm */,
+			);
+			path = WASM;
+			sourceTree = "<group>";
+		};
+		56B658942ED12C1400A35411 /* roamr */ = {
+			isa = PBXGroup;
+			children = (
+				56B658752ED12C1400A35411 /* Components */,
+				56B658782ED12C1400A35411 /* Extensions */,
+				56B6587B2ED12C1400A35411 /* Managers */,
+				56B6587F2ED12C1400A35411 /* Pages */,
+				56B658812ED12C1400A35411 /* Preview Content */,
+				56B6588A2ED12C1400A35411 /* WAMR */,
+				56B6588E2ED12C1400A35411 /* WASM */,
+				56B6588F2ED12C1400A35411 /* Assets.xcassets */,
+				56B658902ED12C1400A35411 /* ContentView.swift */,
+				56B658912ED12C1400A35411 /* index.html */,
+				56B658922ED12C1400A35411 /* roamr.swift */,
+				56B658932ED12C1400A35411 /* roamr-Bridging-Header.h */,
 			);
 			path = roamr;
 			sourceTree = "<group>";

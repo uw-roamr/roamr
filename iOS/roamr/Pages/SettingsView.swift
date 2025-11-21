@@ -8,6 +8,8 @@
 import Foundation
 import SwiftUI
 import WasmKit
+import CryptoKit // if available in your target
+
 
 struct SettingsPage: View {
 	@EnvironmentObject var lidarManager: LiDARManager
@@ -59,7 +61,9 @@ struct SettingsPage: View {
 	}
 	
 	// NOTE: Assuming you have defined defaultStackSize and wasmFileName (e.g., "main.wasm") somewhere
-	let defaultStackSize: UInt32 = 65536 // Standard stack size
+	let defaultStackSize: UInt32 = 512 * 1024       // 512 KB
+	let heapSize: UInt32 = 16 * 1024 * 1024         // 16 MB
+
 
 	func runTest(operand1: Int32, operand2: Int32) {
 		var wasmModule: wasm_module_t? = nil
@@ -98,6 +102,19 @@ struct SettingsPage: View {
 			print("Error: main.wasm file not found in bundle.")
 			return
 		}
+		
+		print("WASM file path:", wasmURL.path)
+		do {
+			let data = try Data(contentsOf: wasmURL)
+			print("WASM size (bytes):", data.count)
+
+			// sha256 (quick checksum to ensure file matches the file you inspected)
+			let sha = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+			print("WASM SHA256:", sha)
+		} catch {
+			print("Failed to read wasm for inspection:", error)
+		}
+		
 		do {
 			var wasmFileBuffer = try Data(contentsOf: wasmURL)
 		
@@ -117,16 +134,27 @@ struct SettingsPage: View {
 					return
 				}
 				
-				// 4. Instantiate the module
-				print("Instantiating module...")
-				// Host managed heap size is 0
-				moduleInstance = wasm_runtime_instantiate(module, defaultStackSize, 0, &errorBuffer, UInt32(errorBuffer.count))
+				var instArgs = InstantiationArgs()
+				instArgs.default_stack_size = UInt32(64 * 1024)        // 64 KB stack
+				instArgs.host_managed_heap_size = UInt32(2 * 1024 * 1024) // 2 MB host-managed heap (bytes)
+				instArgs.max_memory_pages = UInt32(256) // 256 pages * 64KiB/page = 16 MB max
 				
-				guard let instance = moduleInstance else {
-					let errorMsg = String(cString: errorBuffer)
-					print("Error: WAMR failed to instantiate module: \(errorMsg)")
+				guard let instance = wasm_runtime_instantiate_ex(module, &instArgs, &errorBuffer, UInt32(errorBuffer.count)) else {
+					let msg = String(cString: errorBuffer)
+					print("Instantiation failed: \(msg)")
 					return
 				}
+
+//				// 4. Instantiate the module
+//				print("Instantiating module...")
+//				// Host managed heap size is 0
+//				moduleInstance = wasm_runtime_instantiate(module, defaultStackSize, heapSize, &errorBuffer, UInt32(errorBuffer.count))
+//				
+//				guard let instance = moduleInstance else {
+//					let errorMsg = String(cString: errorBuffer)
+//					print("Error: WAMR failed to instantiate module: \(errorMsg)")
+//					return
+//				}
 				
 				// 5. Create an execution environment (ExecEnv)
 				execEnv = wasm_runtime_create_exec_env(instance, defaultStackSize)
