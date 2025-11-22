@@ -7,11 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		5684529F2EBC53F1007CCA23 /* WASI in Frameworks */ = {isa = PBXBuildFile; productRef = 5684529E2EBC53F1007CCA23 /* WASI */; };
-		568452A12EBC53F1007CCA23 /* WAT in Frameworks */ = {isa = PBXBuildFile; productRef = 568452A02EBC53F1007CCA23 /* WAT */; };
-		568452A32EBC53F1007CCA23 /* WIT in Frameworks */ = {isa = PBXBuildFile; productRef = 568452A22EBC53F1007CCA23 /* WIT */; };
-		568452A52EBC53F1007CCA23 /* WasmKit in Frameworks */ = {isa = PBXBuildFile; productRef = 568452A42EBC53F1007CCA23 /* WasmKit */; };
-		568452A72EBC53F1007CCA23 /* WasmKitWASI in Frameworks */ = {isa = PBXBuildFile; productRef = 568452A62EBC53F1007CCA23 /* WasmKitWASI */; };
 		56AAE1782ECD46AF0057E1DF /* libm.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 56AAE1772ECD46AF0057E1DF /* libm.tbd */; };
 		56AAE17A2ECD46B80057E1DF /* libc.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 56AAE1792ECD46B80057E1DF /* libc.tbd */; };
 		56AAE17C2ECD46C20057E1DF /* libdl.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 56AAE17B2ECD46C20057E1DF /* libdl.tbd */; };
@@ -20,60 +15,9 @@
 
 /* Begin PBXFileReference section */
 		56206B172EBAB1C600C8E9E8 /* roamr.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = roamr.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		56AAE1552ECD467E0057E1DF /* Icon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Icon.swift; sourceTree = "<group>"; };
-		56AAE1562ECD467E0057E1DF /* TabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBar.swift; sourceTree = "<group>"; };
-		56AAE1572ECD467E0057E1DF /* WebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebView.swift; sourceTree = "<group>"; };
-		56AAE1592ECD467E0057E1DF /* Color+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Extensions.swift"; sourceTree = "<group>"; };
-		56AAE15A2ECD467E0057E1DF /* SafeAreaInsets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeAreaInsets.swift; sourceTree = "<group>"; };
-		56AAE15C2ECD467E0057E1DF /* LiDARManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiDARManager.swift; sourceTree = "<group>"; };
-		56AAE15D2ECD467E0057E1DF /* WebSocketServerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketServerManager.swift; sourceTree = "<group>"; };
-		56AAE15F2ECD467E0057E1DF /* DataView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataView.swift; sourceTree = "<group>"; };
-		56AAE1602ECD467E0057E1DF /* LiDARARView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiDARARView.swift; sourceTree = "<group>"; };
-		56AAE1612ECD467E0057E1DF /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		56AAE1632ECD467E0057E1DF /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
-		56AAE1652ECD467E0057E1DF /* aot_comp_option.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = aot_comp_option.h; sourceTree = "<group>"; };
-		56AAE1662ECD467E0057E1DF /* aot_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = aot_export.h; sourceTree = "<group>"; };
-		56AAE1672ECD467E0057E1DF /* gc_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = gc_export.h; sourceTree = "<group>"; };
-		56AAE1682ECD467E0057E1DF /* lib_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = lib_export.h; sourceTree = "<group>"; };
-		56AAE1692ECD467E0057E1DF /* wasm_c_api.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = wasm_c_api.h; sourceTree = "<group>"; };
-		56AAE16A2ECD467E0057E1DF /* wasm_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = wasm_export.h; sourceTree = "<group>"; };
-		56AAE16C2ECD467E0057E1DF /* libiwasm-arm.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = "libiwasm-arm.a"; sourceTree = "<group>"; };
-		56AAE16E2ECD467E0057E1DF /* add.wasm */ = {isa = PBXFileReference; lastKnownFileType = file; path = add.wasm; sourceTree = "<group>"; };
-		56AAE16F2ECD467E0057E1DF /* map.wasm */ = {isa = PBXFileReference; lastKnownFileType = file; path = map.wasm; sourceTree = "<group>"; };
-		56AAE1702ECD467E0057E1DF /* test.wasm */ = {isa = PBXFileReference; lastKnownFileType = file; path = test.wasm; sourceTree = "<group>"; };
-		56AAE1722ECD467E0057E1DF /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		56AAE1732ECD467E0057E1DF /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		56AAE1742ECD467E0057E1DF /* index.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = index.html; sourceTree = "<group>"; };
-		56AAE1752ECD467E0057E1DF /* roamr.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = roamr.swift; sourceTree = "<group>"; };
 		56AAE1772ECD46AF0057E1DF /* libm.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libm.tbd; path = usr/lib/libm.tbd; sourceTree = SDKROOT; };
 		56AAE1792ECD46B80057E1DF /* libc.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libc.tbd; path = usr/lib/libc.tbd; sourceTree = SDKROOT; };
 		56AAE17B2ECD46C20057E1DF /* libdl.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libdl.tbd; path = usr/lib/libdl.tbd; sourceTree = SDKROOT; };
-		56B658722ED12C1400A35411 /* Icon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Icon.swift; sourceTree = "<group>"; };
-		56B658732ED12C1400A35411 /* TabBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabBar.swift; sourceTree = "<group>"; };
-		56B658742ED12C1400A35411 /* WebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebView.swift; sourceTree = "<group>"; };
-		56B658762ED12C1400A35411 /* Color+Extensions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Color+Extensions.swift"; sourceTree = "<group>"; };
-		56B658772ED12C1400A35411 /* SafeAreaInsets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafeAreaInsets.swift; sourceTree = "<group>"; };
-		56B658792ED12C1400A35411 /* LiDARManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiDARManager.swift; sourceTree = "<group>"; };
-		56B6587A2ED12C1400A35411 /* WebSocketServerManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebSocketServerManager.swift; sourceTree = "<group>"; };
-		56B6587C2ED12C1400A35411 /* DataView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataView.swift; sourceTree = "<group>"; };
-		56B6587D2ED12C1400A35411 /* LiDARARView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiDARARView.swift; sourceTree = "<group>"; };
-		56B6587E2ED12C1400A35411 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
-		56B658802ED12C1400A35411 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
-		56B658822ED12C1400A35411 /* aot_comp_option.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = aot_comp_option.h; sourceTree = "<group>"; };
-		56B658832ED12C1400A35411 /* aot_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = aot_export.h; sourceTree = "<group>"; };
-		56B658842ED12C1400A35411 /* gc_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = gc_export.h; sourceTree = "<group>"; };
-		56B658852ED12C1400A35411 /* lib_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = lib_export.h; sourceTree = "<group>"; };
-		56B658862ED12C1400A35411 /* wasm_c_api.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = wasm_c_api.h; sourceTree = "<group>"; };
-		56B658872ED12C1400A35411 /* wasm_export.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = wasm_export.h; sourceTree = "<group>"; };
-		56B658892ED12C1400A35411 /* libiwasm.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; path = libiwasm.a; sourceTree = "<group>"; };
-		56B6588B2ED12C1400A35411 /* main.wasm */ = {isa = PBXFileReference; lastKnownFileType = file; path = main.wasm; sourceTree = "<group>"; };
-		56B6588C2ED12C1400A35411 /* map.wasm */ = {isa = PBXFileReference; lastKnownFileType = file; path = map.wasm; sourceTree = "<group>"; };
-		56B6588D2ED12C1400A35411 /* test.wasm */ = {isa = PBXFileReference; lastKnownFileType = file; path = test.wasm; sourceTree = "<group>"; };
-		56B6588F2ED12C1400A35411 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		56B658902ED12C1400A35411 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
-		56B658912ED12C1400A35411 /* index.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = index.html; sourceTree = "<group>"; };
-		56B658922ED12C1400A35411 /* roamr.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = roamr.swift; sourceTree = "<group>"; };
-		56B658932ED12C1400A35411 /* roamr-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "roamr-Bridging-Header.h"; sourceTree = "<group>"; };
 		56B658952ED23A6D00A35411 /* libc++.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = "libc++.tbd"; path = "usr/lib/libc++.tbd"; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
@@ -94,11 +38,6 @@
 				56AAE17C2ECD46C20057E1DF /* libdl.tbd in Frameworks */,
 				56AAE17A2ECD46B80057E1DF /* libc.tbd in Frameworks */,
 				56AAE1782ECD46AF0057E1DF /* libm.tbd in Frameworks */,
-				5684529F2EBC53F1007CCA23 /* WASI in Frameworks */,
-				568452A52EBC53F1007CCA23 /* WasmKit in Frameworks */,
-				568452A32EBC53F1007CCA23 /* WIT in Frameworks */,
-				568452A12EBC53F1007CCA23 /* WAT in Frameworks */,
-				568452A72EBC53F1007CCA23 /* WasmKitWASI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -126,206 +65,11 @@
 			isa = PBXGroup;
 			children = (
 				56B658952ED23A6D00A35411 /* libc++.tbd */,
-				56B658942ED12C1400A35411 /* roamr */,
 				56AAE17B2ECD46C20057E1DF /* libdl.tbd */,
 				56AAE1792ECD46B80057E1DF /* libc.tbd */,
 				56AAE1772ECD46AF0057E1DF /* libm.tbd */,
-				56AAE1762ECD467E0057E1DF /* roamr */,
 			);
 			name = Frameworks;
-			sourceTree = "<group>";
-		};
-		56AAE1582ECD467E0057E1DF /* Components */ = {
-			isa = PBXGroup;
-			children = (
-				56AAE1552ECD467E0057E1DF /* Icon.swift */,
-				56AAE1562ECD467E0057E1DF /* TabBar.swift */,
-				56AAE1572ECD467E0057E1DF /* WebView.swift */,
-			);
-			path = Components;
-			sourceTree = "<group>";
-		};
-		56AAE15B2ECD467E0057E1DF /* Extensions */ = {
-			isa = PBXGroup;
-			children = (
-				56AAE1592ECD467E0057E1DF /* Color+Extensions.swift */,
-				56AAE15A2ECD467E0057E1DF /* SafeAreaInsets.swift */,
-			);
-			path = Extensions;
-			sourceTree = "<group>";
-		};
-		56AAE15E2ECD467E0057E1DF /* Managers */ = {
-			isa = PBXGroup;
-			children = (
-				56AAE15C2ECD467E0057E1DF /* LiDARManager.swift */,
-				56AAE15D2ECD467E0057E1DF /* WebSocketServerManager.swift */,
-			);
-			path = Managers;
-			sourceTree = "<group>";
-		};
-		56AAE1622ECD467E0057E1DF /* Pages */ = {
-			isa = PBXGroup;
-			children = (
-				56AAE15F2ECD467E0057E1DF /* DataView.swift */,
-				56AAE1602ECD467E0057E1DF /* LiDARARView.swift */,
-				56AAE1612ECD467E0057E1DF /* SettingsView.swift */,
-			);
-			path = Pages;
-			sourceTree = "<group>";
-		};
-		56AAE1642ECD467E0057E1DF /* Preview Content */ = {
-			isa = PBXGroup;
-			children = (
-				56AAE1632ECD467E0057E1DF /* Preview Assets.xcassets */,
-			);
-			path = "Preview Content";
-			sourceTree = "<group>";
-		};
-		56AAE16B2ECD467E0057E1DF /* include */ = {
-			isa = PBXGroup;
-			children = (
-				56AAE1652ECD467E0057E1DF /* aot_comp_option.h */,
-				56AAE1662ECD467E0057E1DF /* aot_export.h */,
-				56AAE1672ECD467E0057E1DF /* gc_export.h */,
-				56AAE1682ECD467E0057E1DF /* lib_export.h */,
-				56AAE1692ECD467E0057E1DF /* wasm_c_api.h */,
-				56AAE16A2ECD467E0057E1DF /* wasm_export.h */,
-			);
-			path = include;
-			sourceTree = "<group>";
-		};
-		56AAE16D2ECD467E0057E1DF /* WAMR */ = {
-			isa = PBXGroup;
-			children = (
-				56AAE16B2ECD467E0057E1DF /* include */,
-				56AAE16C2ECD467E0057E1DF /* libiwasm-arm.a */,
-			);
-			path = WAMR;
-			sourceTree = "<group>";
-		};
-		56AAE1712ECD467E0057E1DF /* WASM */ = {
-			isa = PBXGroup;
-			children = (
-				56AAE16E2ECD467E0057E1DF /* add.wasm */,
-				56AAE16F2ECD467E0057E1DF /* map.wasm */,
-				56AAE1702ECD467E0057E1DF /* test.wasm */,
-			);
-			path = WASM;
-			sourceTree = "<group>";
-		};
-		56AAE1762ECD467E0057E1DF /* roamr */ = {
-			isa = PBXGroup;
-			children = (
-				56AAE1582ECD467E0057E1DF /* Components */,
-				56AAE15B2ECD467E0057E1DF /* Extensions */,
-				56AAE15E2ECD467E0057E1DF /* Managers */,
-				56AAE1622ECD467E0057E1DF /* Pages */,
-				56AAE1642ECD467E0057E1DF /* Preview Content */,
-				56AAE16D2ECD467E0057E1DF /* WAMR */,
-				56AAE1712ECD467E0057E1DF /* WASM */,
-				56AAE1722ECD467E0057E1DF /* Assets.xcassets */,
-				56AAE1732ECD467E0057E1DF /* ContentView.swift */,
-				56AAE1742ECD467E0057E1DF /* index.html */,
-				56AAE1752ECD467E0057E1DF /* roamr.swift */,
-			);
-			path = roamr;
-			sourceTree = "<group>";
-		};
-		56B658752ED12C1400A35411 /* Components */ = {
-			isa = PBXGroup;
-			children = (
-				56B658722ED12C1400A35411 /* Icon.swift */,
-				56B658732ED12C1400A35411 /* TabBar.swift */,
-				56B658742ED12C1400A35411 /* WebView.swift */,
-			);
-			path = Components;
-			sourceTree = "<group>";
-		};
-		56B658782ED12C1400A35411 /* Extensions */ = {
-			isa = PBXGroup;
-			children = (
-				56B658762ED12C1400A35411 /* Color+Extensions.swift */,
-				56B658772ED12C1400A35411 /* SafeAreaInsets.swift */,
-			);
-			path = Extensions;
-			sourceTree = "<group>";
-		};
-		56B6587B2ED12C1400A35411 /* Managers */ = {
-			isa = PBXGroup;
-			children = (
-				56B658792ED12C1400A35411 /* LiDARManager.swift */,
-				56B6587A2ED12C1400A35411 /* WebSocketServerManager.swift */,
-			);
-			path = Managers;
-			sourceTree = "<group>";
-		};
-		56B6587F2ED12C1400A35411 /* Pages */ = {
-			isa = PBXGroup;
-			children = (
-				56B6587C2ED12C1400A35411 /* DataView.swift */,
-				56B6587D2ED12C1400A35411 /* LiDARARView.swift */,
-				56B6587E2ED12C1400A35411 /* SettingsView.swift */,
-			);
-			path = Pages;
-			sourceTree = "<group>";
-		};
-		56B658812ED12C1400A35411 /* Preview Content */ = {
-			isa = PBXGroup;
-			children = (
-				56B658802ED12C1400A35411 /* Preview Assets.xcassets */,
-			);
-			path = "Preview Content";
-			sourceTree = "<group>";
-		};
-		56B658882ED12C1400A35411 /* include */ = {
-			isa = PBXGroup;
-			children = (
-				56B658822ED12C1400A35411 /* aot_comp_option.h */,
-				56B658832ED12C1400A35411 /* aot_export.h */,
-				56B658842ED12C1400A35411 /* gc_export.h */,
-				56B658852ED12C1400A35411 /* lib_export.h */,
-				56B658862ED12C1400A35411 /* wasm_c_api.h */,
-				56B658872ED12C1400A35411 /* wasm_export.h */,
-			);
-			path = include;
-			sourceTree = "<group>";
-		};
-		56B6588A2ED12C1400A35411 /* WAMR */ = {
-			isa = PBXGroup;
-			children = (
-				56B658882ED12C1400A35411 /* include */,
-				56B658892ED12C1400A35411 /* libiwasm.a */,
-			);
-			path = WAMR;
-			sourceTree = "<group>";
-		};
-		56B6588E2ED12C1400A35411 /* WASM */ = {
-			isa = PBXGroup;
-			children = (
-				56B6588B2ED12C1400A35411 /* main.wasm */,
-				56B6588C2ED12C1400A35411 /* map.wasm */,
-				56B6588D2ED12C1400A35411 /* test.wasm */,
-			);
-			path = WASM;
-			sourceTree = "<group>";
-		};
-		56B658942ED12C1400A35411 /* roamr */ = {
-			isa = PBXGroup;
-			children = (
-				56B658752ED12C1400A35411 /* Components */,
-				56B658782ED12C1400A35411 /* Extensions */,
-				56B6587B2ED12C1400A35411 /* Managers */,
-				56B6587F2ED12C1400A35411 /* Pages */,
-				56B658812ED12C1400A35411 /* Preview Content */,
-				56B6588A2ED12C1400A35411 /* WAMR */,
-				56B6588E2ED12C1400A35411 /* WASM */,
-				56B6588F2ED12C1400A35411 /* Assets.xcassets */,
-				56B658902ED12C1400A35411 /* ContentView.swift */,
-				56B658912ED12C1400A35411 /* index.html */,
-				56B658922ED12C1400A35411 /* roamr.swift */,
-				56B658932ED12C1400A35411 /* roamr-Bridging-Header.h */,
-			);
-			path = roamr;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -348,11 +92,6 @@
 			);
 			name = roamr;
 			packageProductDependencies = (
-				5684529E2EBC53F1007CCA23 /* WASI */,
-				568452A02EBC53F1007CCA23 /* WAT */,
-				568452A22EBC53F1007CCA23 /* WIT */,
-				568452A42EBC53F1007CCA23 /* WasmKit */,
-				568452A62EBC53F1007CCA23 /* WasmKitWASI */,
 			);
 			productName = roamr;
 			productReference = 56206B172EBAB1C600C8E9E8 /* roamr.app */;
@@ -384,7 +123,6 @@
 			mainGroup = 56206B0E2EBAB1C600C8E9E8;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				5684529D2EBC53F1007CCA23 /* XCRemoteSwiftPackageReference "WasmKit" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 56206B182EBAB1C600C8E9E8 /* Products */;
@@ -647,45 +385,6 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		5684529D2EBC53F1007CCA23 /* XCRemoteSwiftPackageReference "WasmKit" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/swiftwasm/WasmKit";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 0.1.6;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		5684529E2EBC53F1007CCA23 /* WASI */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5684529D2EBC53F1007CCA23 /* XCRemoteSwiftPackageReference "WasmKit" */;
-			productName = WASI;
-		};
-		568452A02EBC53F1007CCA23 /* WAT */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5684529D2EBC53F1007CCA23 /* XCRemoteSwiftPackageReference "WasmKit" */;
-			productName = WAT;
-		};
-		568452A22EBC53F1007CCA23 /* WIT */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5684529D2EBC53F1007CCA23 /* XCRemoteSwiftPackageReference "WasmKit" */;
-			productName = WIT;
-		};
-		568452A42EBC53F1007CCA23 /* WasmKit */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5684529D2EBC53F1007CCA23 /* XCRemoteSwiftPackageReference "WasmKit" */;
-			productName = WasmKit;
-		};
-		568452A62EBC53F1007CCA23 /* WasmKitWASI */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 5684529D2EBC53F1007CCA23 /* XCRemoteSwiftPackageReference "WasmKit" */;
-			productName = WasmKitWASI;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 56206B0F2EBAB1C600C8E9E8 /* Project object */;
 }

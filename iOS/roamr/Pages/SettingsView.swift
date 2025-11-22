@@ -7,13 +7,9 @@
 
 import Foundation
 import SwiftUI
-import WasmKit
-import CryptoKit // if available in your target
 
 struct SettingsPage: View {
 	@EnvironmentObject var lidarManager: LiDARManager
-//	@State private var wasmRunner: WasmRunner?
-	@State private var wasmResult: String = "..."
 
 	private var appVersion: String {
 		Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
@@ -38,28 +34,20 @@ struct SettingsPage: View {
 				.multilineTextAlignment(.center)
 				.padding(.horizontal, 30)
 
-			Text("Result: \(wasmResult)")
-				.font(.title2)
-
-			Button("Run processData") {
+			Button("Test WASM") {
 //				try? self.test()
 				runTest(operand1: Int32(6), operand2: Int32(7))
 			}
-			.font(.title)
 			.padding()
-			.background(Color.blue)
+			.background(Color.AppColor.accent.color)
 			.foregroundColor(.white)
-			.cornerRadius(10)
+			.cornerRadius(20)
 
 			Spacer()
 		}
 		.padding()
-		.onAppear {
-//			self.loadRunner()
-		}
 	}
 
-	// NOTE: Assuming you have defined defaultStackSize and wasmFileName (e.g., "main.wasm") somewhere
 	let defaultStackSize: UInt32 = 512 * 1024       // 512 KB
 	let heapSize: UInt32 = 16 * 1024 * 1024         // 16 MB
 
@@ -68,10 +56,7 @@ struct SettingsPage: View {
 		var moduleInstance: wasm_module_inst_t?
 		var execEnv: wasm_exec_env_t?
 
-		let wasmFileName = "main.wasm" // Set the correct file name here
-
 		// 1. Initialize the WAMR Runtime
-		print("--- WAMR Test: \(wasmFileName) ---")
 		print("Initializing WAMR runtime...")
 
 		guard wasm_runtime_init() else {
@@ -95,22 +80,9 @@ struct SettingsPage: View {
 		}
 
 		// 2. Read WASM file
-		guard let wasmURL = Bundle.main.url(forResource: "slam_main", withExtension: "wasm") else { // ⬅️ UPDATED: "add" to "main"
-			// self.wasmResult = "Error: main.wasm file not found in bundle." // Assuming self.wasmResult is defined elsewhere
+		guard let wasmURL = Bundle.main.url(forResource: "slam_main", withExtension: "wasm") else {
 			print("Error: main.wasm file not found in bundle.")
 			return
-		}
-
-		print("WASM file path:", wasmURL.path)
-		do {
-			let data = try Data(contentsOf: wasmURL)
-			print("WASM size (bytes):", data.count)
-
-			// sha256 (quick checksum to ensure file matches the file you inspected)
-			let sha = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-			print("WASM SHA256:", sha)
-		} catch {
-			print("Failed to read wasm for inspection:", error)
 		}
 
 		do {
@@ -123,7 +95,7 @@ struct SettingsPage: View {
 				guard let wasmFileCArray = wasmFilePtr.baseAddress?.assumingMemoryBound(to: UInt8.self) else { return }
 
 				// 3. Load the WASM module
-				print("Loading module '\(wasmFileName)'...")
+				print("Loading module")
 				wasmModule = wasm_runtime_load(wasmFileCArray, wasmFileSize, &errorBuffer, UInt32(errorBuffer.count))
 
 				guard let module = wasmModule else {
@@ -202,70 +174,5 @@ struct SettingsPage: View {
 			print("Error: \(error.localizedDescription)")
 		}
 
-	}
-
-	func test() throws {
-		guard wasm_runtime_init() else { return }
-
-		do {
-			// --- Step 1: Find and load the .wasm file ---
-			guard let wasmURL = Bundle.main.url(forResource: "add", withExtension: "wasm") else {
-				self.wasmResult = "Error: add.wasm file not found in bundle."
-				return
-			}
-			let wasmBytes = try Data(contentsOf: wasmURL)
-
-			// --- Step 2: Initialize WasmKit Runtime ---
-			let runtime = Engine()
-			let module: Module = try parseWasm(bytes: [UInt8](wasmBytes))
-
-			// --- Step 4: Find the exported 'add' function ---
-			let engine = Engine()
-			let store = Store(engine: engine)
-			let instance = try module.instantiate(store: store)
-			let input: UInt32 = 5
-			// Invoke the exported function "fac" with a single argument.
-			let testadd = instance.exports[function: "testadd"]!
-			let result = try testadd([.i32(6), .i32(7)])
-			print("added(\(input)) = \(result[0].i32)")
-
-		} catch {
-			// --- Error Handling ---
-			self.wasmResult = "Error: \(error.localizedDescription)"
-		}
-	}
-}
-
-// --- C-API Type Aliases ---
-// These are required because Swift needs to know the types used in the C headers.
-// OpaquePointer is used for the WAMR runtime's internal opaque types.
-typealias wasm_module_t = OpaquePointer
-typealias wasm_module_inst_t = OpaquePointer
-typealias wasm_exec_env_t = OpaquePointer
-typealias wasm_function_inst_t = OpaquePointer
-
-// Memory allocator types (from wasm_c_api.h)
-typealias mem_alloc_type_t = UInt32
-let Alloc_With_Pool: mem_alloc_type_t = 0
-let Alloc_With_Allocator: mem_alloc_type_t = 1
-let Alloc_With_System_Allocator: mem_alloc_type_t = 2
-
-// --- WAMR API Functions (Assuming existence via Bridging Header/Module Map) ---
-// We assume these are available as defined in the provided headers.
-// wasm_runtime_init, wasm_runtime_destroy, wasm_runtime_load, etc.
-
-/**
- * Reads a WebAssembly binary file into a Data buffer.
- * This helper simulates reading 'add.wasm' from the app bundle/filesystem.
- */
-func readWasmBinary(fileName: String) -> Data? {
-	let fileURL = URL(fileURLWithPath: fileName)
-	do {
-		let data = try Data(contentsOf: fileURL)
-		return data
-	} catch {
-		print("Error: Failed to read WASM file \(fileName). Please ensure 'add.wasm' is available at the expected path.")
-		print("Underlying error: \(error.localizedDescription)")
-		return nil
 	}
 }

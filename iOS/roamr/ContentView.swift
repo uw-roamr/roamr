@@ -9,7 +9,6 @@ import SwiftUI
 
 struct ContentView: View {
 	@EnvironmentObject var lidarManager: LiDARManager
-	// let server = WebSocketServerManager()
 	@State var currentPage: AppPage = .ARView
 
 	var body: some View {
@@ -41,39 +40,6 @@ struct ContentView: View {
 					FloatingBubbleTabBar(currentPage: $currentPage)
 				}
 			}
-
-//			LiDARView()
-//				.edgesIgnoringSafeArea(.all)
-//				.onAppear {
-//					lidarManager.startSession()
-//				}
-
-//			VStack(spacing: 16) {
-//				Text("LiDAR → Console")
-//					.font(.title)
-//
-//				VStack {
-//					Button("Start Server") {
-//						server.start()
-//					}
-//
-//					Button("Start WebPage") {
-//						showWebPage.toggle()
-//					}
-//
-//					Button("Send Message to Web Page") {
-//						server.broadcast("Hello from SwiftUI 🚀")
-//					}
-//				}
-//				.padding()
-//
-//				if showWebPage {
-//					WebView(fileName: "index")
-//				}
-//
-//				Spacer()
-//			}
-//			.padding()
 		}
 	}
 }
