@@ -70,7 +70,7 @@ class IMUManager {
 }
 
 // Exported function for Wasm
-@_cdecl("read_imu_impl")
+// @_cdecl("read_imu_impl")
 func read_imu_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     guard let ptr = ptr else { return }
     

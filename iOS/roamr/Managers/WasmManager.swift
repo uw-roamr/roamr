@@ -25,13 +25,16 @@ class WasmManager {
         let symbolPtr = symbolName.withCString { strdup($0) }
         let signaturePtr = signature.withCString { strdup($0) }
         
-        let cFunction: @convention(c) (wasm_exec_env_t?, UnsafeMutableRawPointer?) -> Void = read_imu_impl
+        // Get the C function pointer properly
+        typealias CFunction = @convention(c) (wasm_exec_env_t?, UnsafeMutableRawPointer?) -> Void
+        let cFunction: CFunction = read_imu_impl
+        let funcPtr = unsafeBitCast(cFunction as CFunction, to: UnsafeMutableRawPointer.self)
         
         // Allocate NativeSymbol array on the heap to ensure it persists
         let nativeSymbolPtr = UnsafeMutablePointer<NativeSymbol>.allocate(capacity: 1)
         nativeSymbolPtr.initialize(to: NativeSymbol(
             symbol: UnsafePointer(symbolPtr),
-            func_ptr: unsafeBitCast(cFunction, to: UnsafeMutableRawPointer.self),
+            func_ptr: funcPtr,
             signature: UnsafePointer(signaturePtr),
             attachment: nil
         ))
