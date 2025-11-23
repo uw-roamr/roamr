@@ -43,9 +43,9 @@ struct FloatingBubbleTabBar: View {
 			}
 
 			TabBubble(page: .bluetooth, currentPage: $currentPage)
-			
+
 			TabBubble(page: .websocket, currentPage: $currentPage)
-			
+
 			TabBubble(page: .settings, currentPage: $currentPage)
 		}
 		.padding(12)

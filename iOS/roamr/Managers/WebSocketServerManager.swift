@@ -102,7 +102,7 @@ class WebSocketServerManager: ObservableObject {
     }
 
     private func receiveHandshake(on connection: NWConnection) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, context, isComplete, error in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, _ in
             guard let self = self, let data = data, !data.isEmpty else { return }
 
             if let handshake = String(data: data, encoding: .utf8) {
@@ -163,7 +163,7 @@ class WebSocketServerManager: ObservableObject {
     }
 
     private func receiveWebSocketFrame(on connection: NWConnection) {
-        connection.receive(minimumIncompleteLength: 2, maximumLength: 65536) { [weak self] data, context, isComplete, error in
+        connection.receive(minimumIncompleteLength: 2, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self = self else { return }
 
             if let error = error {

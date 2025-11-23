@@ -20,9 +20,9 @@ struct WebSocketServerView: View {
 					.font(.largeTitle)
 					.fontWeight(.bold)
 					.padding()
-				
+
 				Spacer()
-				
+
 				// Server Control Button
 				Button(action: {
 					if serverManager.isServerRunning {

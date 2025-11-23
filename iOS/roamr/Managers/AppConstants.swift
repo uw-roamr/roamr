@@ -10,8 +10,8 @@ import SwiftUI
 @Observable
 class AppConstants {
 	static let shared = AppConstants()
-	
+
 	var tabBarHeight: CGFloat = 0
-	
+
 	private init() {}
 }

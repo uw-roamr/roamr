@@ -24,13 +24,13 @@ struct BluetoothView: View {
 				.padding(.horizontal)
 				.disabled(true)
 				.opacity(0)
-				
+
 				// Status
 				VStack(spacing: 8) {
 					Text(bluetoothManager.connectionStatus)
 						.font(.headline)
 						.foregroundColor(bluetoothManager.isConnected ? .green : .orange)
-					
+
 					if !bluetoothManager.lastMessage.isEmpty {
 						Text(bluetoothManager.lastMessage)
 							.font(.caption)
@@ -42,7 +42,7 @@ struct BluetoothView: View {
 				.cornerRadius(20)
 				.padding(.horizontal)
 				.frame(maxWidth: .infinity)
-				
+
 				// Disconnect Button
 				Button(action: {
 					bluetoothManager.disconnect()
