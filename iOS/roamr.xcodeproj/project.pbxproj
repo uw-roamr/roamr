@@ -21,9 +21,23 @@
 		56B658952ED23A6D00A35411 /* libc++.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = "libc++.tbd"; path = "usr/lib/libc++.tbd"; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		C9DC35EF2ED3B59D00043F0F /* Exceptions for "roamr" folder in "roamr" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				WASM/map.cpp,
+				WASM/slam_main.cpp,
+			);
+			target = 56206B162EBAB1C600C8E9E8 /* roamr */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		56206B192EBAB1C600C8E9E8 /* roamr */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				C9DC35EF2ED3B59D00043F0F /* Exceptions for "roamr" folder in "roamr" target */,
+			);
 			path = roamr;
 			sourceTree = "<group>";
 		};

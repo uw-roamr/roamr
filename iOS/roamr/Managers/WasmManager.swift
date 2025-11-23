@@ -81,8 +81,8 @@ class WasmManager {
                 }
                 
                 // Instantiate module
-                let stackSize: UInt32 = 8096
-                let heapSize: UInt32 = 8096
+                let stackSize: UInt32 = 65536  // 64KB for threading
+                let heapSize: UInt32 = 65536   // 64KB for threading
                 
                 guard let moduleInstance = wasm_runtime_instantiate(wasmModule, stackSize, heapSize, &errorBuf, UInt32(errorBuf.count)) else {
                     print("Error instantiating WASM module: \(String(cString: errorBuf))")
