@@ -1,4 +1,5 @@
 #include <iostream>
+#include <iomanip>
 #include <mutex>
 #include <thread>
 #include <chrono>
@@ -29,17 +30,16 @@ int main(){
 //    }
 
     auto logSensor = [&m, &data](){
+        
+        std::cout << std::fixed << std::setprecision(5);
         while(true){
-            std::this_thread::sleep_for(std::chrono::milliseconds(logIntervalMs)); 
+            std::this_thread::sleep_for(std::chrono::milliseconds(IMUIntervalMs)); 
             std::lock_guard<std::mutex> lk(m);
  
             read_imu(&data);
-            std::cout << " Acc T:" << data.acc_timestamp
-                      << " Acc:(" << data.acc_x << "," << data.acc_y << "," << data.acc_z << ")"
-                      << " Gyro T:" << data.gyro_timestamp
-                      << " Gyro:(" << data.gyro_x << "," << data.gyro_y << "," << data.gyro_z << ")"
-                    //   << " Mag:(" << data.mag_x << "," << data.mag_y << "," << data.mag_z << ")"
-                      << std::endl;
+            std::cout << "T:" << data.acc_timestamp << " acc:" << data.acc_x << "," << data.acc_y << "," << data.acc_z << std::endl
+                      << "T:" << data.gyro_timestamp << " gyro:" << data.gyro_x << "," << data.gyro_y << "," << data.gyro_z <<
+                      std::endl;
         }
     };
 
