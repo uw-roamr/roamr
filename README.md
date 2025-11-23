@@ -25,6 +25,17 @@ pip install pre-commit
 pre-commit
 ```
 
+## Run App with Robot
+- Open/build iOS app.
+- Connect to bluetooth using the app
+- Drive robot!
+  
+### Optional:
+- Open HTML page in webpage folder.
+- Run websocket on the websocket page of the app
+- Connect to app websocket
+- Drive robot!
+
 ## Localization Demo
 
 See [WASM/README.md](WASM/README.md)
