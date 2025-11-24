@@ -6,7 +6,9 @@
 #include <iostream>
 
 #include "imu.h"
+#include "lidar_camera.h"
 
 constexpr int log_interval_ms = 100;
 
-void log_sensors(std::mutex& m_imu, const IMUData& imu_data);
+void log_sensors(std::mutex& m_imu, const IMUData& imu_data, std::mutex& m_lc, const LidarCameraData& lc_data);
+

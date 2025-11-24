@@ -1,3 +1,10 @@
+//
+//  IMUManager.swift
+//  roamr
+//
+//  Created by Thomason Zhou on 2025-11-23.
+//
+
 import Foundation
 import CoreMotion
 

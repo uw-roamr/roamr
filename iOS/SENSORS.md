@@ -8,3 +8,9 @@ https://developer.apple.com/documentation/coremotion/getting-raw-accelerometer-e
 
 - Gyroscope: 100 Hz, in radians/s
 https://developer.apple.com/documentation/coremotion/getting-raw-gyroscope-events
+
+
+## LiDAR
+
+- iPhone 12 Pro+
+https://developer.apple.com/documentation/avfoundation/capturing-depth-using-the-lidar-camera

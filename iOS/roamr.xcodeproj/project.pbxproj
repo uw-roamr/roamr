@@ -27,7 +27,6 @@
 			membershipExceptions = (
 				WASM/map.cpp,
 				WASM/slam_main.cpp,
-				WASM/test.wasm,
 			);
 			target = 56206B162EBAB1C600C8E9E8 /* roamr */;
 		};

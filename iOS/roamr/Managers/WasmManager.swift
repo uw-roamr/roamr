@@ -1,4 +1,15 @@
+//
+//  WasmManager.swift
+//  roamr
+//
+//  Created by Thomason Zhou on 2025-11-23.
+//
+
 import Foundation
+
+
+typealias CFunction = @convention(c) (wasm_exec_env_t?, UnsafeMutableRawPointer?) -> Void
+
 
 class WasmManager {
     static let shared = WasmManager()
@@ -19,35 +30,47 @@ class WasmManager {
         }
 
         // Prepare Native Symbols
-        let symbolName = "read_imu"
-        let signature = "(*)" // pointer argument
+        struct NativeFunction {
+            let name: String
+            let signature: String
+            let impl: CFunction
+        }
+        
+        let nativeFunctions: [NativeFunction] = [
+            NativeFunction(name: "read_imu", signature: "(*)", impl: read_imu_impl),
+            NativeFunction(name: "read_lidar_camera", signature: "(*)", impl: read_lidar_camera_impl)
+        ]
 
-        let symbolPtr = symbolName.withCString { strdup($0) }
-        let signaturePtr = signature.withCString { strdup($0) }
-
-        // Get the C function pointer properly
-        typealias CFunction = @convention(c) (wasm_exec_env_t?, UnsafeMutableRawPointer?) -> Void
-        let cFunction: CFunction = read_imu_impl
-        let funcPtr = unsafeBitCast(cFunction as CFunction, to: UnsafeMutableRawPointer.self)
-
-        // Allocate NativeSymbol array on the heap to ensure it persists
-        let nativeSymbolPtr = UnsafeMutablePointer<NativeSymbol>.allocate(capacity: 1)
-        nativeSymbolPtr.initialize(to: NativeSymbol(
-            symbol: UnsafePointer(symbolPtr),
-            func_ptr: funcPtr,
-            signature: UnsafePointer(signaturePtr),
-            attachment: nil
-        ))
+        let nativeSymbolPtr = UnsafeMutablePointer<NativeSymbol>.allocate(capacity: nativeFunctions.count)
+        
+        var symbolPtrs: [UnsafeMutablePointer<CChar>] = []
+        
+        for (index, function) in nativeFunctions.enumerated() {
+            let namePtr = function.name.withCString { strdup($0) }
+            let sigPtr = function.signature.withCString { strdup($0) }
+            
+            if let namePtr = namePtr, let sigPtr = sigPtr {
+                symbolPtrs.append(namePtr)
+                symbolPtrs.append(sigPtr)
+                
+                let funcPtr = unsafeBitCast(function.impl, to: UnsafeMutableRawPointer.self)
+                
+                nativeSymbolPtr[index] = NativeSymbol(
+                    symbol: UnsafePointer(namePtr),
+                    func_ptr: funcPtr,
+                    signature: UnsafePointer(sigPtr),
+                    attachment: nil
+                )
+            }
+        }
 
         let moduleName = "host"
         let moduleNamePtr = moduleName.withCString { strdup($0) }
 
-        // Save globals to prevent leak/GC issues
         globalNativeSymbolPtr = nativeSymbolPtr
         globalModuleNamePtr = UnsafeMutablePointer(mutating: moduleNamePtr)
 
-        // Register Natives
-        guard wasm_runtime_register_natives(moduleNamePtr, nativeSymbolPtr, 1) else {
+        guard wasm_runtime_register_natives(moduleNamePtr, nativeSymbolPtr, UInt32(nativeFunctions.count)) else {
             print("Error: Failed to register native symbols")
             return false
         }
