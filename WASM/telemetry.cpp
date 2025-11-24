@@ -14,7 +14,7 @@ void log_sensors(std::mutex& m_imu, const IMUData& imu_data, std::mutex& m_lc, c
       imu_copy = imu_data;
     }
 
-    // very expensive to copy everything! 
+    // very expensive to copy everything!
     // LidarCameraData lc_copy;
     double lc_timestamp;
     size_t img_w, img_h;

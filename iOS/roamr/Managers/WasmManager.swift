@@ -7,9 +7,7 @@
 
 import Foundation
 
-
 typealias CFunction = @convention(c) (wasm_exec_env_t?, UnsafeMutableRawPointer?) -> Void
-
 
 class WasmManager {
     static let shared = WasmManager()
@@ -35,26 +33,26 @@ class WasmManager {
             let signature: String
             let impl: CFunction
         }
-        
+
         let nativeFunctions: [NativeFunction] = [
             NativeFunction(name: "read_imu", signature: "(*)", impl: read_imu_impl),
             NativeFunction(name: "read_lidar_camera", signature: "(*)", impl: read_lidar_camera_impl)
         ]
 
         let nativeSymbolPtr = UnsafeMutablePointer<NativeSymbol>.allocate(capacity: nativeFunctions.count)
-        
+
         var symbolPtrs: [UnsafeMutablePointer<CChar>] = []
-        
+
         for (index, function) in nativeFunctions.enumerated() {
             let namePtr = function.name.withCString { strdup($0) }
             let sigPtr = function.signature.withCString { strdup($0) }
-            
+
             if let namePtr = namePtr, let sigPtr = sigPtr {
                 symbolPtrs.append(namePtr)
                 symbolPtrs.append(sigPtr)
-                
+
                 let funcPtr = unsafeBitCast(function.impl, to: UnsafeMutableRawPointer.self)
-                
+
                 nativeSymbolPtr[index] = NativeSymbol(
                     symbol: UnsafePointer(namePtr),
                     func_ptr: funcPtr,

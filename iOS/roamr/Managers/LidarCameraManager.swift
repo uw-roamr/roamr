@@ -8,19 +8,19 @@
 // uses AVFoundation for lower level access of sensors
 import Foundation
 
-struct LidarCameraData{
+struct LidarCameraData {
     var timestamp: Double
     var image_height: Int32
     var image_width: Int32
 }
 
-class LidarCameraManager{
+class LidarCameraManager {
     static let shared = LidarCameraManager()
-    
+
     let lock = NSLock()
-    
+
     var currentData = LidarCameraData(timestamp: 0, image_height: 0, image_width: 0)
-    
+
     private init() {}
 }
 
