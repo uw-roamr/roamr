@@ -51,9 +51,11 @@ struct SettingsPage: View {
 		// userInitiated gives high priority to the thread
         DispatchQueue.global(qos: .userInitiated).async {
             IMUManager.shared.start()
+            LidarCameraManager.shared.start()
 
             WasmManager.shared.runWasmFile(named: "slam_main")
 
+            LidarCameraManager.shared.stop()
             IMUManager.shared.stop()
         }
     }

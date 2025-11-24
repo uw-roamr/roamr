@@ -67,12 +67,9 @@ class WasmManager {
         let moduleName = "host"
         let moduleNamePtr = moduleName.withCString { strdup($0) }
 
-        // Save globals to prevent leak/GC issues
-        // Note: In a real app, we might want better memory management for these C strings
         globalNativeSymbolPtr = nativeSymbolPtr
         globalModuleNamePtr = UnsafeMutablePointer(mutating: moduleNamePtr)
 
-        // Register Natives
         guard wasm_runtime_register_natives(moduleNamePtr, nativeSymbolPtr, UInt32(nativeFunctions.count)) else {
             print("Error: Failed to register native symbols")
             return false
