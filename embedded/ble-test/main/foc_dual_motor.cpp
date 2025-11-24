@@ -45,18 +45,20 @@ constexpr int PIN_MISO = 6;
 constexpr int PIN_CS1 = 7;
 constexpr int PIN_CS2 = 15;
 
-constexpr int PIN_DRIVER2_1 = 0;
-constexpr int PIN_DRIVER2_2 = 1;
-constexpr int PIN_DRIVER2_3 = 8;
-constexpr int PIN_DRIVER2_EN = 10;
+constexpr int PIN_DRIVER1_1 = 0;
+constexpr int PIN_DRIVER1_2 = 1;
+constexpr int PIN_DRIVER1_3 = 8;
+constexpr int PIN_DRIVER1_EN = 10;
 
-constexpr int PIN_DRIVER1_1 = 23;
-constexpr int PIN_DRIVER1_2 = 22;
-constexpr int PIN_DRIVER1_3 = 21;
-constexpr int PIN_DRIVER1_EN = 20;
+constexpr int PIN_DRIVER2_1 = 23;
+constexpr int PIN_DRIVER2_2 = 22;
+constexpr int PIN_DRIVER2_3 = 21;
+constexpr int PIN_DRIVER2_EN = 20;
 
-MagneticSensorAS5048A sensor1(PIN_CS1);
-MagneticSensorAS5048A sensor2(PIN_CS2);
+// Lower SPI frequency to 1MHz to avoid timing/signal issues
+SPISettings mySPISettings(1000000, MSBFIRST, SPI_MODE1);
+MagneticSensorAS5048A sensor1(PIN_CS1, false, mySPISettings);
+MagneticSensorAS5048A sensor2(PIN_CS2, false, mySPISettings);
 
 BLDCDriver3PWM driver1(PIN_DRIVER1_1, PIN_DRIVER1_2, PIN_DRIVER1_3,
                        PIN_DRIVER1_EN);
@@ -71,6 +73,9 @@ void doMotor2(char *cmd) { command.motor(&motor2, cmd); }
 
 static uint8_t raw_adv_data[] = {0x02, 0x01, 0x06, 0x09, 0x09, 'E', 'S',
                                  'P',  '3',  '2',  '_',  'C',  '6'};
+bool init_success = false;
+bool motor1_ready = false;
+bool motor2_ready = false;
 
 static esp_ble_adv_params_t adv_params = {
     .adv_int_min = 0x20,
@@ -171,7 +176,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
       if (sscanf(cmd, "%d %d %d", &left_pct, &right_pct, &duration_ms) == 3) {
         // Map percentage (-100 to 100) to voltage (-12 to 12)
         // Assuming 12V power supply as set in setup()
-        float left_voltage = (left_pct / 100.0f) * 12.0f;
+        float left_voltage = -(left_pct / 100.0f) * 12.0f;
         float right_voltage = (right_pct / 100.0f) * 12.0f;
 
         motor1.target = left_voltage;
@@ -244,6 +249,12 @@ void setup() {
   esp_ble_gatts_app_register(0);
 
   // SimpleFOC Setup
+  // Explicitly set CS pins high before SPI init to avoid bus contention
+  pinMode(PIN_CS1, OUTPUT);
+  digitalWrite(PIN_CS1, HIGH);
+  pinMode(PIN_CS2, OUTPUT);
+  digitalWrite(PIN_CS2, HIGH);
+
   SPI.begin(PIN_SCLK, PIN_MISO, PIN_MOSI);
 
   sensor1.init();
@@ -276,22 +287,30 @@ void setup() {
   motor1.useMonitoring(Serial);
   motor2.useMonitoring(Serial);
 
-  if (!motor1.init()) {
-    Serial.println("Motor 1 failed");
-    return;
-  }
-  if (!motor2.init()) {
-    Serial.println("Motor 2 failed");
-    return;
+  bool m1_ready = motor1.init();
+  bool m2_ready = motor2.init();
+
+  if (!m1_ready)
+    Serial.println("Motor 1 init failed");
+  if (!m2_ready)
+    Serial.println("Motor 2 init failed");
+
+  _delay(500);
+
+  if (m1_ready) {
+    if (!motor1.initFOC()) {
+      Serial.println("FOC 1 failed");
+      m1_ready = false;
+    }
   }
 
-  if (!motor1.initFOC()) {
-    Serial.println("FOC 1 failed");
-    return;
-  }
-  if (!motor2.initFOC()) {
-    Serial.println("FOC 2 failed");
-    return;
+  _delay(500);
+
+  if (m2_ready) {
+    if (!motor2.initFOC()) {
+      Serial.println("FOC 2 failed");
+      m2_ready = false;
+    }
   }
 
   motor1.target = 0.0; // Nm
@@ -301,21 +320,32 @@ void setup() {
   command.add('B', doMotor2, "Motor2");
   Serial.println(F("Motor ready."));
   Serial.println(F("Set the target with command A or B:"));
+
+  init_success = true;
+  motor1_ready = m1_ready;
+  motor2_ready = m2_ready;
 }
 
 void loop() {
-  motor1.loopFOC();
-  motor2.loopFOC();
-  motor1.move();
-  motor2.move();
+  if (!init_success)
+    return;
+  if (motor1_ready) {
+    motor1.loopFOC();
+    motor1.move();
+  }
+  if (motor2_ready) {
+    motor2.loopFOC();
+    motor2.move();
+  }
   command.run();
 
   static uint32_t last_print = 0;
   if (millis() - last_print > 1000) {
     last_print = millis();
-    Serial.printf("M1: Target=%.2f V, Vel=%.2f | M2: Target=%.2f V, Vel=%.2f\n",
+    Serial.printf("M1: Target=%.2f V, Vel=%.2f | M2: Target=%.2f V, Vel=%.2f | "
+                  "Status: %d/%d\n",
                   motor1.target, motor1.shaft_velocity, motor2.target,
-                  motor2.shaft_velocity);
+                  motor2.shaft_velocity, motor1_ready, motor2_ready);
   }
 }
 
@@ -324,5 +354,6 @@ extern "C" void app_main() {
   setup();
   while (true) {
     loop();
+    vTaskDelay(1); // Yield to feed WDT
   }
 }
