@@ -288,4 +288,94 @@ class WebSocketManager: ObservableObject {
         localIPAddress = address
         print("📍 Local IP: \(address)")
     }
+
+    // MARK: - Broadcasting
+
+    func broadcastBinaryData(_ data: Data) {
+        let frame = createBinaryFrame(data: data)
+
+        for connection in connections {
+            // Only send to connections that completed handshake
+            guard connectionStates[ObjectIdentifier(connection)] == true else { continue }
+
+            connection.send(content: frame, completion: .contentProcessed { error in
+                if let error = error {
+                    print("❌ Failed to send binary data: \(error)")
+                    self.removeConnection(connection)
+                }
+            })
+        }
+    }
+
+    func broadcastTextMessage(_ message: String) {
+        guard let data = message.data(using: .utf8) else { return }
+        let frame = createTextFrame(data: data)
+
+        for connection in connections {
+            // Only send to connections that completed handshake
+            guard connectionStates[ObjectIdentifier(connection)] == true else { continue }
+
+            connection.send(content: frame, completion: .contentProcessed { error in
+                if let error = error {
+                    print("❌ Failed to send text message: \(error)")
+                }
+            })
+        }
+    }
+
+    // MARK: - WebSocket Frame Creation
+
+    private func createBinaryFrame(data: Data) -> Data {
+        var frame = Data()
+
+        // FIN bit set, opcode 0x2 (binary)
+        frame.append(0x82)
+
+        // Payload length (server-to-client frames are not masked)
+        let length = data.count
+        if length < 126 {
+            frame.append(UInt8(length))
+        } else if length < 65536 {
+            frame.append(126)
+            frame.append(UInt8((length >> 8) & 0xFF))
+            frame.append(UInt8(length & 0xFF))
+        } else {
+            frame.append(127)
+            for i in (0..<8).reversed() {
+                frame.append(UInt8((length >> (i * 8)) & 0xFF))
+            }
+        }
+
+        // Append payload
+        frame.append(data)
+
+        return frame
+    }
+
+    private func createTextFrame(data: Data) -> Data {
+        var frame = Data()
+
+        // FIN bit set, opcode 0x1 (text)
+        frame.append(0x81)
+
+        // Payload length
+        let length = data.count
+        if length < 126 {
+            frame.append(UInt8(length))
+        } else if length < 65536 {
+            frame.append(126)
+            frame.append(UInt8((length >> 8) & 0xFF))
+            frame.append(UInt8(length & 0xFF))
+        } else {
+            frame.append(127)
+            for i in (0..<8).reversed() {
+                frame.append(UInt8((length >> (i * 8)) & 0xFF))
+            }
+        }
+
+        // Append payload
+        frame.append(data)
+
+        return frame
+    }
 }

@@ -25,7 +25,7 @@
             background: white;
             border-radius: 20px;
             padding: 40px;
-            max-width: 600px;
+            max-width: 900px;
             width: 100%;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
         }
@@ -259,6 +259,76 @@
             font-weight: bold;
             color: #667eea;
         }
+
+        .video-section {
+            display: none;
+            margin: 30px 0;
+            padding: 20px;
+            background: #f5f5f5;
+            border-radius: 15px;
+        }
+
+        .video-section.active {
+            display: block;
+        }
+
+        .video-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .video-title {
+            font-weight: 600;
+            color: #333;
+        }
+
+        .video-stats {
+            display: flex;
+            gap: 10px;
+            font-size: 12px;
+        }
+
+        .video-stat {
+            background: white;
+            padding: 4px 10px;
+            border-radius: 5px;
+            color: #666;
+        }
+
+        .video-stat strong {
+            color: #667eea;
+        }
+
+        .video-container {
+            position: relative;
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+            aspect-ratio: 16 / 9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #videoStream {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: none;
+        }
+
+        .video-placeholder {
+            color: #666;
+            text-align: center;
+            padding: 30px;
+        }
+
+        .video-placeholder-icon {
+            font-size: 3rem;
+            margin-bottom: 10px;
+        }
     </style>
 </head>
 <body>
@@ -309,6 +379,27 @@
             </div>
         </div>
 
+        <div id="videoSection" class="video-section">
+            <div class="video-header">
+                <div class="video-title">📹 Live Video Stream</div>
+                <div class="video-stats">
+                    <span class="video-stat">FPS: <strong id="videoFps">0</strong></span>
+                    <span class="video-stat">Frames: <strong id="videoFrames">0</strong></span>
+                    <span class="video-stat"><strong id="videoSize">0 KB</strong></span>
+                </div>
+            </div>
+            <div class="video-container">
+                <img id="videoStream" alt="Video Stream">
+                <div class="video-placeholder" id="videoPlaceholder">
+                    <div class="video-placeholder-icon">📹</div>
+                    <div>Waiting for video stream...</div>
+                    <div style="font-size: 12px; margin-top: 10px; color: #999;">
+                        Start video streaming from the iPhone app
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="input-group">
             <label for="message">Message to Send:</label>
             <input
@@ -340,11 +431,17 @@
         const sendBtn = document.getElementById('sendBtn');
         const messageLog = document.getElementById('messageLog');
         const joystickContainer = document.getElementById('joystickContainer');
+        const videoSection = document.getElementById('videoSection');
 
         // Joystick variables
         let joystickTimer = null;
         const SEND_INTERVAL = 50; // 50ms
         const HOLD_DURATION = 100; // 100ms
+
+        // Video streaming variables
+        let videoFrameCount = 0;
+        let videoFpsCounter = 0;
+        let lastVideoFpsUpdate = Date.now();
 
         function updateStatus(connected) {
             if (connected) {
@@ -356,6 +453,7 @@
                 messageInput.disabled = false;
                 sendBtn.disabled = false;
                 joystickContainer.classList.add('active');
+                videoSection.classList.add('active');
                 initJoystick();
             } else {
                 statusEl.className = 'status disconnected';
@@ -366,6 +464,12 @@
                 messageInput.disabled = true;
                 sendBtn.disabled = true;
                 joystickContainer.classList.remove('active');
+                videoSection.classList.remove('active');
+                // Reset video
+                document.getElementById('videoStream').style.display = 'none';
+                document.getElementById('videoPlaceholder').style.display = 'block';
+                videoFrameCount = 0;
+                videoFpsCounter = 0;
             }
         }
 
@@ -394,6 +498,7 @@
 
             try {
                 ws = new WebSocket(wsUrl);
+                ws.binaryType = 'arraybuffer'; // Important for receiving video frames
 
                 ws.onopen = function() {
                     updateStatus(true);
@@ -401,7 +506,12 @@
                 };
 
                 ws.onmessage = function(event) {
-                    addLog(`📱 Received: ${event.data}`);
+                    // Check if it's binary data (video frame) or text message
+                    if (event.data instanceof ArrayBuffer) {
+                        handleVideoFrame(event.data);
+                    } else {
+                        addLog(`📱 Received: ${event.data}`);
+                    }
                 };
 
                 ws.onerror = function(error) {
@@ -417,6 +527,39 @@
             } catch (error) {
                 addLog(`❌ Failed to connect: ${error.message}`);
                 console.error('Connection error:', error);
+            }
+        }
+
+        function handleVideoFrame(arrayBuffer) {
+            // Convert ArrayBuffer to Blob and create object URL
+            const blob = new Blob([arrayBuffer], { type: 'image/jpeg' });
+            const url = URL.createObjectURL(blob);
+
+            const videoImg = document.getElementById('videoStream');
+            const placeholder = document.getElementById('videoPlaceholder');
+
+            // Update image and show it when loaded
+            videoImg.onload = () => {
+                // Show video, hide placeholder (do this inside onload)
+                videoImg.style.display = 'block';
+                placeholder.style.display = 'none';
+                URL.revokeObjectURL(url);  // Free memory
+            };
+
+            videoImg.src = url;
+
+            // Update statistics
+            videoFrameCount++;
+            videoFpsCounter++;
+            document.getElementById('videoFrames').textContent = videoFrameCount;
+            document.getElementById('videoSize').textContent = (arrayBuffer.byteLength / 1024).toFixed(1) + ' KB';
+
+            // Calculate FPS
+            const now = Date.now();
+            if (now - lastVideoFpsUpdate >= 1000) {
+                document.getElementById('videoFps').textContent = videoFpsCounter;
+                videoFpsCounter = 0;
+                lastVideoFpsUpdate = now;
             }
         }
 

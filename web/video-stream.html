@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ROAMR Video Stream</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 30px;
+            max-width: 1200px;
+            width: 100%;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.5rem;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1rem;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            flex: 1;
+            min-width: 300px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 10px;
+            font-size: 1rem;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button {
+            padding: 12px 25px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+
+        .btn-connect {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-connect:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-connect:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .btn-disconnect {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-disconnect:hover {
+            background: #dc2626;
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 15px 20px;
+            background: #f5f5f5;
+            border-radius: 10px;
+            margin-bottom: 25px;
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #ef4444;
+            animation: pulse 2s infinite;
+        }
+
+        .status-indicator.connected {
+            background: #10b981;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .status-text {
+            flex: 1;
+            font-weight: 500;
+            color: #333;
+        }
+
+        .stats {
+            display: flex;
+            gap: 10px;
+            font-size: 0.9rem;
+            color: #666;
+        }
+
+        .stat {
+            background: white;
+            padding: 5px 12px;
+            border-radius: 5px;
+        }
+
+        .video-container {
+            position: relative;
+            background: #000;
+            border-radius: 15px;
+            overflow: hidden;
+            aspect-ratio: 16 / 9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #videoImage {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: none;
+        }
+
+        .placeholder {
+            color: #666;
+            text-align: center;
+            padding: 40px;
+        }
+
+        .placeholder-icon {
+            font-size: 4rem;
+            margin-bottom: 15px;
+        }
+
+        .logs {
+            margin-top: 25px;
+            background: #f9fafb;
+            border-radius: 10px;
+            padding: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .logs h3 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 1rem;
+        }
+
+        .log-entry {
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            padding: 5px 0;
+            color: #555;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .log-entry:last-child {
+            border-bottom: none;
+        }
+
+        .log-time {
+            color: #9ca3af;
+            margin-right: 10px;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 20px;
+            }
+
+            h1 {
+                font-size: 2rem;
+            }
+
+            .controls {
+                flex-direction: column;
+            }
+
+            .input-group {
+                width: 100%;
+                min-width: 0;
+            }
+
+            button {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 ROAMR Video Stream</h1>
+        <p class="subtitle">Real-time video streaming from your iPhone robot</p>
+
+        <div class="controls">
+            <div class="input-group">
+                <input type="text" id="wsUrl" placeholder="ws://192.168.1.2:8080" value="ws://192.168.1.2:8080">
+                <button class="btn-connect" id="connectBtn" onclick="connect()">Connect</button>
+            </div>
+            <button class="btn-disconnect" id="disconnectBtn" onclick="disconnect()" style="display: none;">Disconnect</button>
+        </div>
+
+        <div class="status">
+            <div class="status-indicator" id="statusIndicator"></div>
+            <span class="status-text" id="statusText">Disconnected</span>
+            <div class="stats">
+                <span class="stat">FPS: <strong id="fps">0</strong></span>
+                <span class="stat">Frames: <strong id="frameCount">0</strong></span>
+                <span class="stat">Size: <strong id="frameSize">0 KB</strong></span>
+            </div>
+        </div>
+
+        <div class="video-container">
+            <img id="videoImage" alt="Video Stream">
+            <div class="placeholder" id="placeholder">
+                <div class="placeholder-icon">📹</div>
+                <div>Enter the WebSocket URL from your iPhone and click Connect to start streaming</div>
+            </div>
+        </div>
+
+        <div class="logs">
+            <h3>Connection Log</h3>
+            <div id="logs"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let frameCount = 0;
+        let lastFrameTime = Date.now();
+        let fps = 0;
+        let fpsCounter = 0;
+        let lastFpsUpdate = Date.now();
+
+        function log(message) {
+            const logsDiv = document.getElementById('logs');
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<span class="log-time">${time}</span>${message}`;
+            logsDiv.insertBefore(entry, logsDiv.firstChild);
+
+            // Keep only last 50 entries
+            while (logsDiv.children.length > 50) {
+                logsDiv.removeChild(logsDiv.lastChild);
+            }
+        }
+
+        function updateStatus(text, connected = false) {
+            document.getElementById('statusText').textContent = text;
+            const indicator = document.getElementById('statusIndicator');
+            if (connected) {
+                indicator.classList.add('connected');
+            } else {
+                indicator.classList.remove('connected');
+            }
+        }
+
+        function connect() {
+            const url = document.getElementById('wsUrl').value.trim();
+            if (!url) {
+                alert('Please enter a WebSocket URL');
+                return;
+            }
+
+            try {
+                log(`Connecting to ${url}...`);
+                updateStatus('Connecting...', false);
+
+                ws = new WebSocket(url);
+                ws.binaryType = 'arraybuffer';
+
+                ws.onopen = () => {
+                    log('✅ Connected successfully');
+                    updateStatus('Connected - Waiting for video...', true);
+                    document.getElementById('connectBtn').style.display = 'none';
+                    document.getElementById('disconnectBtn').style.display = 'block';
+                    frameCount = 0;
+                    fpsCounter = 0;
+                    lastFpsUpdate = Date.now();
+                };
+
+                ws.onmessage = (event) => {
+                    if (event.data instanceof ArrayBuffer) {
+                        displayFrame(event.data);
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    log('❌ WebSocket error occurred');
+                    console.error('WebSocket error:', error);
+                };
+
+                ws.onclose = () => {
+                    log('Connection closed');
+                    updateStatus('Disconnected', false);
+                    document.getElementById('connectBtn').style.display = 'block';
+                    document.getElementById('disconnectBtn').style.display = 'none';
+                    document.getElementById('videoImage').style.display = 'none';
+                    document.getElementById('placeholder').style.display = 'block';
+                    ws = null;
+                };
+            } catch (error) {
+                log(`❌ Connection failed: ${error.message}`);
+                updateStatus('Connection failed', false);
+            }
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+
+        function displayFrame(arrayBuffer) {
+            // Convert ArrayBuffer to Blob and create object URL
+            const blob = new Blob([arrayBuffer], { type: 'image/jpeg' });
+            const url = URL.createObjectURL(blob);
+
+            const img = document.getElementById('videoImage');
+            const placeholder = document.getElementById('placeholder');
+
+            // Update image
+            img.onload = () => {
+                URL.revokeObjectURL(url);  // Free memory
+            };
+            img.src = url;
+
+            // Show image, hide placeholder
+            if (img.style.display === 'none') {
+                img.style.display = 'block';
+                placeholder.style.display = 'none';
+                updateStatus('Streaming video', true);
+            }
+
+            // Update stats
+            frameCount++;
+            fpsCounter++;
+            document.getElementById('frameCount').textContent = frameCount;
+            document.getElementById('frameSize').textContent = (arrayBuffer.byteLength / 1024).toFixed(1);
+
+            // Calculate FPS
+            const now = Date.now();
+            if (now - lastFpsUpdate >= 1000) {
+                fps = fpsCounter;
+                document.getElementById('fps').textContent = fps;
+                fpsCounter = 0;
+                lastFpsUpdate = now;
+            }
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && document.activeElement.id === 'wsUrl') {
+                connect();
+            }
+        });
+
+        // Auto-detect IP from URL if available
+        window.addEventListener('load', () => {
+            const params = new URLSearchParams(window.location.search);
+            const ip = params.get('ip');
+            if (ip) {
+                document.getElementById('wsUrl').value = `ws://${ip}:8080`;
+            }
+        });
+    </script>
+</body>
+</html>
