@@ -172,7 +172,6 @@ class LidarCameraManager: NSObject, AVCaptureDataOutputSynchronizerDelegate {
 // exported function for Wasm
 func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     guard let ptr = ptr else {
-        print("bad fn")
         return }
 
     let lidarCameraDataPtr = ptr.bindMemory(to: LidarCameraData.self, capacity: 1)
