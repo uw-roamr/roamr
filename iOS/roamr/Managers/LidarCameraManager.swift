@@ -12,11 +12,11 @@ import AVFoundation
 struct LidarCameraData {
     var timestamp: Double
 
-    var depth_map: UnsafeMutableRawPointer 
+    var depth_map: UnsafeMutableRawPointer?
     var depth_width: Int32
     var depth_height: Int32
 
-    var image: UnsafeMutableRawPointer
+    var image: UnsafeMutableRawPointer?
     var image_width: Int32
     var image_height: Int32
     var image_channels: Int32
@@ -61,15 +61,15 @@ class LidarCameraManager: NSObject, AVCaptureDataOutputSynchronizerDelegate {
 
     var currentData = LidarCameraData(
         timestamp: 0, 
-        depth_map: UnsafeMutableRawPointer(bitPattern: 0)!,
+        depth_map: nil,
         depth_width: 0,
         depth_height: 0,
-        image: UnsafeMutableRawPointer(bitPattern: 0)!,
+        image: nil,
         image_width: 0,
         image_height: 0, 
         image_channels: 0)
 
-    func start(){
+    private func startCapture(){
         videoOutput.alwaysDiscardsLateVideoFrames = true
         depthOutput.alwaysDiscardsLateDepthData = true
 
@@ -90,7 +90,8 @@ class LidarCameraManager: NSObject, AVCaptureDataOutputSynchronizerDelegate {
         // outputs
         guard captureSession.canAddOutput(videoOutput) else{return}
         videoOutput.videoSettings = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32RGBA]
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+        ]
         captureSession.addOutput(videoOutput)
         guard captureSession.canAddOutput(depthOutput) else {return}
         captureSession.addOutput(depthOutput)
@@ -100,6 +101,25 @@ class LidarCameraManager: NSObject, AVCaptureDataOutputSynchronizerDelegate {
 
         captureSession.commitConfiguration()
         captureSession.startRunning()
+    }
+
+    func start(){
+        switch AVCaptureDevice.authorizationStatus(for: .video){
+        case .denied, .restricted:
+            fatalError("Camera permission denied")
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video){ granted in 
+                guard granted else {return}
+                DispatchQueue.main.async {
+                    self.startCapture()
+                }
+            }
+            return
+        case .authorized:
+            startCapture()
+        @unknown default:
+            break
+        }
     }
 
     func stop(){
@@ -151,7 +171,9 @@ class LidarCameraManager: NSObject, AVCaptureDataOutputSynchronizerDelegate {
 
 // exported function for Wasm
 func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
-    guard let ptr = ptr else { return }
+    guard let ptr = ptr else {
+        print("bad fn")
+        return }
 
     let lidarCameraDataPtr = ptr.bindMemory(to: LidarCameraData.self, capacity: 1)
 
