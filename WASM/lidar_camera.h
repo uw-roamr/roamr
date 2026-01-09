@@ -3,7 +3,7 @@
 #include <stddef.h> // size_t
 #include <stdint.h> // uint8_t
 
-// synchronized LiDAR points and camera image
+// time synchronized LiDAR points and camera image
 // todo: double buffering
 struct LidarCameraData {
   double timestamp;

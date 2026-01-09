@@ -7,21 +7,102 @@
 
 // uses AVFoundation for lower level access of sensors
 import Foundation
+import AVFoundation
 
 struct LidarCameraData {
     var timestamp: Double
+
+    var depth_map: UnsafeMutableRawPointer 
+    var depth_width: Int32
+    var depth_height: Int32
+
+    var image: UnsafeMutableRawPointer
     var image_height: Int32
     var image_width: Int32
+    var image_channels: Int32
 }
+// struct LidarCameraData {
+//   double timestamp;
+
+//   const float *depth_map;
+//   int depth_width;
+//   int depth_height;
+
+//   const uint8_t *image;
+//   int image_width;
+//   int image_height;
+//   int image_channels;
+// };
 
 class LidarCameraManager {
     static let shared = LidarCameraManager()
 
+    private let captureSession = AVCaptureSession()
+    private let videoOutput = AVCaptureVideoDataOutput()
+    private let depthOutput = AVCaptureDepthDataOutput()
+    private let outputQueue = DispatchQueue(label: "com.roamr.lidar.camera.queue")
+
+    private var outputSynchronizer: AVCaptureDataOutputSynchronizer?
+
+    // choose an option that can provide depth: lidar, truedepth, or dual camera, fallback to back camera
+    let discoverySession = AVCaptureDevice.DiscoverySession(deviceTypes: [
+        .builtInLiDARDepthCamera,
+        .builtInTrueDepthCamera,
+        .builtInDualCamera,
+        .builtInWideAngleCamera
+    ], mediaType: .video, position: .back)
+
+
     let lock = NSLock()
 
-    var currentData = LidarCameraData(timestamp: 0, image_height: 0, image_width: 0)
+    var currentData = LidarCameraData(
+        timestamp: 0, 
+        depth_map: UnsafeMutableRawPointer(bitPattern: 0)!,
+        depth_width: 0,
+        depth_height: 0,
+        image: UnsafeMutableRawPointer(bitPattern: 0)!,
+        image_height: 0, 
+        image_width: 0,
+        image_channels: 0)
 
     private init() {}
+
+    func start(){
+        videoOutput.alwaysDiscardsLateVideoFrames = true
+        depthOutput.alwaysDiscardsLateDepthData = true
+
+        captureSession.beginConfiguration()
+
+        // inputs
+        // at least one sensor should be available
+        let lidarCameraDevices = self.discoverySession.devices
+        guard !lidarCameraDevices.isEmpty else {fatalError("No compatible camera/lidar detected")}
+
+        let backVideoDevice = lidarCameraDevices.first(where: {device in device.position == AVCaptureDevice.Position.back})!
+        guard
+            let backVideoDeviceInput = try? AVCaptureDeviceInput(device: backVideoDevice),
+            captureSession.canAddInput(backVideoDeviceInput)
+            else {return}
+        captureSession.addInput(backVideoDeviceInput)
+
+        // outputs
+        guard captureSession.canAddOutput(videoOutput) else{return}
+        videoOutput.videoSettings = [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32RGBA]
+        captureSession.addOutput(videoOutput)
+        guard captureSession.canAddOutput(depthOutput) else {return}
+        captureSession.addOutput(depthOutput)
+
+        outputSynchronizer = AVCaptureDataOutputSynchronizer(dataOutputs: [videoOutput, depthOutput])
+        outputSynchronizer?.setDelegate(self, queue: outputQueue)
+
+        captureSession.commitConfiguration()
+        captureSession.startRunning()
+    }
+
+    func stop(){
+        captureSession.stopRunning()
+    }
 }
 
 // exported function for Wasm
