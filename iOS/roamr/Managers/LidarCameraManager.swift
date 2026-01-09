@@ -17,8 +17,8 @@ struct LidarCameraData {
     var depth_height: Int32
 
     var image: UnsafeMutableRawPointer
-    var image_height: Int32
     var image_width: Int32
+    var image_height: Int32
     var image_channels: Int32
 }
 // struct LidarCameraData {
@@ -34,7 +34,7 @@ struct LidarCameraData {
 //   int image_channels;
 // };
 
-class LidarCameraManager {
+class LidarCameraManager: NSObject, AVCaptureDataOutputSynchronizerDelegate {
     static let shared = LidarCameraManager()
 
     private let captureSession = AVCaptureSession()
@@ -43,6 +43,10 @@ class LidarCameraManager {
     private let outputQueue = DispatchQueue(label: "com.roamr.lidar.camera.queue")
 
     private var outputSynchronizer: AVCaptureDataOutputSynchronizer?
+    private var currentVideoBuffer: CMSampleBuffer?
+    private var currentDepthData: AVDepthData?
+
+    var isDataDirty = false
 
     // choose an option that can provide depth: lidar, truedepth, or dual camera, fallback to back camera
     let discoverySession = AVCaptureDevice.DiscoverySession(deviceTypes: [
@@ -61,11 +65,9 @@ class LidarCameraManager {
         depth_width: 0,
         depth_height: 0,
         image: UnsafeMutableRawPointer(bitPattern: 0)!,
-        image_height: 0, 
         image_width: 0,
+        image_height: 0, 
         image_channels: 0)
-
-    private init() {}
 
     func start(){
         videoOutput.alwaysDiscardsLateVideoFrames = true
@@ -103,6 +105,48 @@ class LidarCameraManager {
     func stop(){
         captureSession.stopRunning()
     }
+
+    func dataOutputSynchronizer(
+        _ synchronizer: AVCaptureDataOutputSynchronizer,
+        didOutput synchronizedDataCollection: AVCaptureSynchronizedDataCollection
+    ){
+        guard let syncedVideoData = synchronizedDataCollection.synchronizedData(for: videoOutput) as? AVCaptureSynchronizedSampleBufferData else {return}
+        guard let synchedDepthData = synchronizedDataCollection.synchronizedData(for: depthOutput) as? AVCaptureSynchronizedDepthData else {return}
+
+        guard !syncedVideoData.sampleBufferWasDropped, !synchedDepthData.depthDataWasDropped else {return}
+
+        let videoBuffer = syncedVideoData.sampleBuffer
+        let depthData = synchedDepthData.depthData
+        let timestamp = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(videoBuffer))
+
+        let imageBuffer = CMSampleBufferGetImageBuffer(videoBuffer)!
+        CVPixelBufferLockBaseAddress(imageBuffer, .readOnly)
+        let depthMap = depthData.depthDataMap
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+
+        let imageBaseAddress = CVPixelBufferGetBaseAddress(imageBuffer)
+        let imageWidth = CVPixelBufferGetWidth(imageBuffer)
+        let imageHeight = CVPixelBufferGetHeight(imageBuffer)
+
+        let depthBaseAddress = CVPixelBufferGetBaseAddress(depthMap)
+        let depthWidth = CVPixelBufferGetWidth(depthMap)
+        let depthHeight = CVPixelBufferGetHeight(depthMap)
+
+        lock.lock()
+        self.currentVideoBuffer = videoBuffer
+        self.currentDepthData = depthData
+
+        currentData.timestamp = timestamp
+        currentData.image = imageBaseAddress!
+        currentData.image_width = Int32(imageWidth)
+        currentData.image_height = Int32(imageHeight)
+        currentData.image_channels = 4 // hardcoded to RGBA
+        currentData.depth_map = depthBaseAddress!
+        currentData.depth_width = Int32(depthWidth)
+        currentData.depth_height = Int32(depthHeight)
+        isDataDirty = true
+        lock.unlock()
+    }
 }
 
 // exported function for Wasm
@@ -113,7 +157,12 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
 
     let manager = LidarCameraManager.shared
     manager.lock.lock()
+    guard manager.isDataDirty else{
+        manager.lock.unlock()
+        return
+    }
     let data = manager.currentData
+    manager.isDataDirty = false
     manager.lock.unlock()
 
     lidarCameraDataPtr.pointee = data
