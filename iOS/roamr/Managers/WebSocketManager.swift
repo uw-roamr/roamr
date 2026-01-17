@@ -1,5 +1,5 @@
 //
-//  WebSocketServerManager.swift
+//  WebSocketManager.swift
 //  roamr
 //
 //  Created by Anders Tai on 2025-11-23.
@@ -10,7 +10,7 @@ import Network
 import Combine
 import CryptoKit
 
-class WebSocketServerManager: ObservableObject {
+class WebSocketManager: ObservableObject {
     @Published var isServerRunning = false
     @Published var localIPAddress: String = "Not available"
     @Published var serverStatus: String = "Stopped"
@@ -37,17 +37,14 @@ class WebSocketServerManager: ObservableObject {
                     switch state {
                     case .ready:
                         self?.isServerRunning = true
-                        self?.serverStatus = "Running on port \(self?.port.rawValue ?? 0)"
+                        self?.serverStatus = "Running"
                         self?.getLocalIPAddress()
-                        print("✅ WebSocket server started on port \(self?.port.rawValue ?? 0)")
                     case .failed(let error):
                         self?.isServerRunning = false
                         self?.serverStatus = "Failed: \(error.localizedDescription)"
-                        print("❌ Server failed: \(error)")
                     case .cancelled:
                         self?.isServerRunning = false
                         self?.serverStatus = "Stopped"
-                        print("⚠️ Server cancelled")
                     default:
                         break
                     }
@@ -61,7 +58,6 @@ class WebSocketServerManager: ObservableObject {
             listener?.start(queue: .main)
         } catch {
             serverStatus = "Error: \(error.localizedDescription)"
-            print("❌ Failed to start server: \(error)")
         }
     }
 
@@ -72,7 +68,6 @@ class WebSocketServerManager: ObservableObject {
         isServerRunning = false
         serverStatus = "Stopped"
         connectedClients = 0
-        print("🛑 Server stopped")
     }
 
     private func handleNewConnection(_ connection: NWConnection) {

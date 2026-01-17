@@ -8,25 +8,24 @@
 import SwiftUI
 
 struct ContentView: View {
-	@EnvironmentObject var lidarManager: LiDARManager
 	@StateObject private var bluetoothManager = BluetoothManager()
-	@State var currentPage: AppPage = .ARView
+	@State var currentPage: AppPage = .wasm
 
 	var body: some View {
 		VStack {
 			ZStack {
 				Group {
 					switch currentPage {
-					case .ARView:
-						LiDARView()
-					case .data:
-						EmptyView()
-					case .settings:
-						SettingsPage()
+					case .wasm:
+						WasmView()
+					case .camera:
+						CameraDepthView()
 					case .bluetooth:
 						BluetoothView()
 					case .websocket:
-						WebSocketServerView()
+						WebSocketView()
+					case .settings:
+						SettingsPage()
 					}
 				}
 				.ignoresSafeArea()
@@ -35,12 +34,6 @@ struct ContentView: View {
 
 				VStack {
 					Spacer()
-
-					if lidarManager.showDataSheet {
-						DataView()
-							.transition(.scale.combined(with: .opacity))
-							.animation(.easeInOut(duration: 0.13), value: lidarManager.showDataSheet)
-					}
 
 					FloatingBubbleTabBar(currentPage: $currentPage)
 				}

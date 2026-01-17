@@ -15,41 +15,17 @@ struct BluetoothView: View {
     @State private var messageToSend = ""
 
     var body: some View {
-        VStack(spacing: 20) {
-			HStack {
-				Button(action: {
-				}) {
-					Icon(color: bluetoothManager.isConnected ? Color.red : Color.gray, iconName: "xmark")
-				}
-				.padding(.horizontal)
-				.disabled(true)
-				.opacity(0)
-
-				// Status
-				VStack(spacing: 8) {
-					Text(bluetoothManager.connectionStatus)
-						.font(.headline)
-						.foregroundColor(bluetoothManager.isConnected ? .green : .orange)
-
-					if !bluetoothManager.lastMessage.isEmpty {
-						Text(bluetoothManager.lastMessage)
-							.font(.caption)
-							.foregroundColor(.gray)
-					}
-				}
-				.padding()
-				.background(Color(.systemGray6))
-				.cornerRadius(20)
-				.padding(.horizontal)
-				.frame(maxWidth: .infinity)
-
-				// Disconnect Button
-				Button(action: {
+        VStack {
+			PageHeader(
+				title: "Bluetooth",
+				statusText: bluetoothManager.connectionStatus,
+				statusColor: bluetoothManager.isConnected ? .green : .orange
+			) {
+				Button {
 					bluetoothManager.disconnect()
-				}) {
-					Icon(color: bluetoothManager.isConnected ? Color.red : Color.gray, iconName: "xmark")
+				} label: {
+					PlayButton(color: bluetoothManager.isConnected ? Color.red : Color.gray, iconName: "xmark")
 				}
-				.padding(.horizontal)
 				.disabled(!bluetoothManager.isConnected)
 				.opacity(bluetoothManager.isConnected ? 1 : 0)
 			}
@@ -78,33 +54,30 @@ struct BluetoothView: View {
 						}
 					}
 				}
-				.listStyle(InsetGroupedListStyle())
+				.listStyle(.plain)
+				.scrollContentBackground(.hidden)
             } else {
 				// DEVICE CONNECTED
                 VStack(spacing: 20) {
-                    VStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .font(.system(size: 50))
-                            .foregroundColor(.green)
-                        Text("Connected to")
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                        Text(bluetoothManager.connectedDevice?.name ?? "Unknown Device")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                    }
-                    .padding()
+                    Spacer()
 
                     // Joystick Control
 					VStack(spacing: 15) {
                         JoystickView { left, right, duration in
                             let message = "\(left) \(right) \(duration)"
-							// print(message)
                             bluetoothManager.sendMessage(message)
                         }
                     }
 
                     Spacer()
+
+					// Last Message
+					Text(bluetoothManager.lastMessage.isEmpty ? " " : bluetoothManager.lastMessage)
+						.font(.caption2)
+						.foregroundColor(.gray)
+						.lineLimit(1)
+						.truncationMode(.middle)
+						.padding()
                 }
 				.padding(.bottom, AppConstants.shared.tabBarHeight)
             }

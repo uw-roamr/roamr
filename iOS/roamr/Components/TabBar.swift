@@ -8,17 +8,17 @@
 import SwiftUI
 
 enum AppPage {
-	case ARView
-	case data
+	case wasm
+	case camera
 	case settings
 	case bluetooth
 	case websocket
 
 	var iconName: String {
 		switch self {
-		case .ARView: return "macbook.and.vision.pro"
-		case .data: return "text.page.fill"
-		case .bluetooth: return "wifi"
+		case .wasm: return "scroll.fill"
+		case .camera: return "camera.viewfinder"
+		case .bluetooth: return "antenna.radiowaves.left.and.right"
 		case .settings: return "gearshape.fill"
 		case .websocket: return "network"
 		}
@@ -26,21 +26,13 @@ enum AppPage {
 }
 
 struct FloatingBubbleTabBar: View {
-	@EnvironmentObject var lidarManager: LiDARManager
 	@Binding var currentPage: AppPage
 
 	var body: some View {
 		HStack(spacing: 30) {
-			TabBubble(page: .ARView, currentPage: $currentPage)
+			TabBubble(page: .wasm, currentPage: $currentPage)
 
-			if currentPage == .ARView {
-				TabBubble(page: .data, currentPage: $currentPage) {
-					withAnimation {
-						lidarManager.showDataSheet.toggle()
-					}
-				}
-				.transition(.scale.combined(with: .opacity))
-			}
+			TabBubble(page: .camera, currentPage: $currentPage)
 
 			TabBubble(page: .bluetooth, currentPage: $currentPage)
 
@@ -94,7 +86,7 @@ struct TabBubble: View {
 				currentPage = page
 			}
 		} label: {
-			Icon(color: isActive ? Color.AppColor.accent.color : Color.gray.opacity(0.2), iconName: page.iconName, fontSize: fontSize, size: circleSize)
+			PlayButton(color: isActive ? Color.AppColor.accent.color : Color.gray.opacity(0.2), iconName: page.iconName, fontSize: fontSize, size: circleSize)
 				.shadow(color: isActive ? Color("AccentColor").opacity(0.4) : .clear, radius: 6, y: 3)
 		}
 		.buttonStyle(.plain)
