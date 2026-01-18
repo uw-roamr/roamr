@@ -18,17 +18,28 @@ struct LidarCameraInitData {
 	var image_channels: Int32
 }
 
+struct LidarCameraInitData {
+	var timestamp: Double
+	var image_width: Int32
+	var image_height: Int32
+	var image_channels: Int32
+}
+
+struct LidarCameraConfig {
+    var timestamp: Double
+
+    var image_height: Int32
+    var image_width: Int32
+    var image_channels: Int32
+}
 struct LidarCameraData {
     var timestamp: Double
 
-    var depth_map: UnsafeMutableRawPointer?
-    var depth_width: Int32
-    var depth_height: Int32
+    var points: [Float32]
+    var points_size: Int32
 
-    var image: UnsafeMutableRawPointer?
-    var image_width: Int32
-    var image_height: Int32
-    var image_channels: Int32
+    var image: [Float32]
+    var image_size: Int32
 }
 
 struct PointCloudData {
@@ -497,7 +508,19 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
     }
 }
 
-// WASM export function
+// WASM export functions
+func init_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+    guard let ptr = ptr else { return }
+
+    let lidarCameraConfigPtr = ptr.bindMemory(to: LidarCameraData.self, capacity: 1)
+    let manager = AVManager.shared
+
+    while !manager.isActive {}
+    // populate fields
+
+    lidarCameraConfig.pointee = data
+}
+
 func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     guard let ptr = ptr else { return }
 
@@ -509,7 +532,9 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
         manager.lock.unlock()
         return
     }
-    let data = manager.currentData
+    // update data
+    
+
     manager.isDataDirty = false
     manager.lock.unlock()
 
