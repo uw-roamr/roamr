@@ -49,6 +49,15 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
     @Published var pointCloud: PointCloudData?
     @Published var depthPixels: DepthPixelData?
 
+    // Video streaming
+    @Published var isStreaming = false
+    @Published var streamFPS: Double = 0.0
+    private var streamTargetFPS: Int = 15
+    private var streamJpegQuality: CGFloat = 0.5
+    private var lastStreamTime: TimeInterval = 0
+    private var streamFrameCount: Int = 0
+    private var lastFPSUpdateTime: TimeInterval = 0
+
     private let captureSession = AVCaptureSession()
     private let videoOutput = AVCaptureVideoDataOutput()
     private let depthOutput = AVCaptureDepthDataOutput()
@@ -64,13 +73,10 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
 
     var currentData = LidarCameraData(
         timestamp: 0,
-        depth_map: nil,
-        depth_width: 0,
-        depth_height: 0,
-        image: nil,
-        image_width: 0,
-        image_height: 0,
-        image_channels: 0)
+		points: [Float32](),
+		points_size: 0,
+		image: [Float32](),
+		image_size: 0)
 
     private func startCapture() {
         // Stop any existing session
@@ -253,6 +259,60 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
             stop()
         } else {
             start()
+        }
+    }
+
+    // MARK: - Video Streaming
+
+    func startStreaming(fps: Int = 15, quality: CGFloat = 0.5) {
+        streamTargetFPS = fps
+        streamJpegQuality = quality
+        lastStreamTime = 0
+        streamFrameCount = 0
+        lastFPSUpdateTime = CACurrentMediaTime()
+        isStreaming = true
+        print("📹 Video streaming started (target: \(fps) FPS, quality: \(Int(quality * 100))%)")
+    }
+
+    func stopStreaming() {
+        isStreaming = false
+        streamFPS = 0
+        print("📹 Video streaming stopped")
+    }
+
+    func toggleStreaming() {
+        if isStreaming {
+            stopStreaming()
+        } else {
+            startStreaming()
+        }
+    }
+
+    private func streamFrame(image: UIImage) {
+        guard isStreaming else { return }
+
+        let currentTime = CACurrentMediaTime()
+        let frameInterval = 1.0 / Double(streamTargetFPS)
+
+        // Throttle frame rate
+        if currentTime - lastStreamTime < frameInterval {
+            return
+        }
+        lastStreamTime = currentTime
+
+        // Update FPS counter
+        streamFrameCount += 1
+        if currentTime - lastFPSUpdateTime >= 1.0 {
+            DispatchQueue.main.async {
+                self.streamFPS = Double(self.streamFrameCount)
+            }
+            streamFrameCount = 0
+            lastFPSUpdateTime = currentTime
+        }
+
+        // Encode to JPEG and broadcast
+        if let jpegData = image.jpegData(compressionQuality: streamJpegQuality) {
+            WebSocketManager.shared.broadcastBinaryData(jpegData)
         }
     }
 
@@ -468,21 +528,26 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         lock.lock()
         currentVideoBuffer = videoBuffer
         currentDepthData = depthData
-		currentData = LidarCameraData(
-			timestamp: timestamp,
-			depth_map: depthBaseAddress,
-			depth_width: Int32(depthWidth),
-			depth_height: Int32(depthHeight),
-			image: imageBaseAddress,
-			image_width: Int32(imageWidth),
-			image_height: Int32(imageHeight),
-			image_channels: 4)
+//		currentData = LidarCameraData(
+//			timestamp: timestamp,
+//			depth_map: depthBaseAddress,
+//			depth_width: Int32(depthWidth),
+//			depth_height: Int32(depthHeight),
+//			image: imageBaseAddress,
+//			image_width: Int32(imageWidth),
+//			image_height: Int32(imageHeight),
+//			image_channels: 4)
         isDataDirty = true
         lock.unlock()
 
         // Generate UI images and point cloud
         let depthImage = depthDataToUIImage(depthData: depthData)
         let camImage = sampleBufferToUIImage(sampleBuffer: videoBuffer)
+
+        // Stream video if enabled
+        if let image = camImage {
+            streamFrame(image: image)
+        }
 
         DispatchQueue.main.async {
             self.depthMapImage = depthImage
@@ -503,7 +568,7 @@ func init_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
     while !manager.isActive {}
     // populate fields
 
-    lidarCameraConfig.pointee = data
+//    lidarCameraConfig.pointee = data
 }
 
 func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
@@ -523,5 +588,5 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
     manager.isDataDirty = false
     manager.lock.unlock()
 
-    lidarCameraDataPtr.pointee = data
+//    lidarCameraDataPtr.pointee = data
 }
