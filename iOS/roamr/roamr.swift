@@ -9,12 +9,9 @@ import SwiftUI
 
 @main
 struct roamr: App {
-	@StateObject private var lidarManager = LiDARManager()
-
     var body: some Scene {
         WindowGroup {
             ContentView()
-				.environmentObject(lidarManager)
         }
     }
 }

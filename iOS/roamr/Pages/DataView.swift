@@ -10,7 +10,6 @@ import MapKit
 import CoreMotion
 
 struct DataView: View {
-	@EnvironmentObject var lidarManager: LiDARManager
 	@StateObject private var motionManager = MotionManager()
 	@State private var region = MKCoordinateRegion(
 		center: CLLocationCoordinate2D(latitude: 43.6532, longitude: -79.3832), // hardcoded to Toronto
@@ -27,7 +26,8 @@ struct DataView: View {
 				}
 
 				SensorCard {
-					NumberStreamView(numbers: lidarManager.pointsLog)
+					Text("Depth Data")
+						.foregroundColor(.white)
 				}
 			}
 
