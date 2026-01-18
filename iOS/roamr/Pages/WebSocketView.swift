@@ -10,6 +10,7 @@ import SwiftUI
 struct WebSocketView: View {
     @Environment(\.safeAreaInsets) private var safeAreaInsets
     @ObservedObject private var serverManager = WebSocketManager.shared
+    @ObservedObject private var avManager = AVManager.shared
     @EnvironmentObject var bluetoothManager: BluetoothManager
 
     var body: some View {
@@ -75,6 +76,51 @@ struct WebSocketView: View {
                             .background(Color(.systemGray6))
                             .cornerRadius(8)
                             .textSelection(.enabled)
+                }
+                .padding()
+                .background(Color(.systemGray6))
+                .cornerRadius(10)
+                .padding(.horizontal)
+
+                // Video Streaming Section
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Video Stream")
+                            .font(.headline)
+                        Spacer()
+                        if avManager.isStreaming {
+                            Text("\(String(format: "%.1f", avManager.streamFPS)) FPS")
+                                .font(.caption)
+                                .foregroundColor(.green)
+                        }
+                    }
+
+                    HStack {
+                        Text("Status:")
+                            .font(.subheadline)
+                            .foregroundColor(.gray)
+                        Spacer()
+                        Text(avManager.isStreaming ? "Streaming" : "Stopped")
+                            .font(.subheadline)
+                            .foregroundColor(avManager.isStreaming ? .green : .gray)
+                    }
+
+                    Button {
+                        if !avManager.isActive {
+                            avManager.start()
+                        }
+                        avManager.toggleStreaming()
+                    } label: {
+                        HStack {
+                            Image(systemName: avManager.isStreaming ? "stop.fill" : "video.fill")
+                            Text(avManager.isStreaming ? "Stop Streaming" : "Start Streaming")
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(avManager.isStreaming ? Color.red : Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                    }
                 }
                 .padding()
                 .background(Color(.systemGray6))
