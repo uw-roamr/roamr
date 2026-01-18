@@ -25,7 +25,7 @@ struct LidarCameraData {
 
     var image: [Float32]
     var image_size: Int32
-}a
+}
 
 struct PointCloudData {
     var points: [SIMD3<Float>]  // 3D world coordinates (meters)
