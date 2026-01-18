@@ -10,7 +10,7 @@ import SwiftUI
 // MARK: - Constants
 
 struct PointCloudConfig {
-    static let maxPoints: Int = 7000  // Adjust density: higher = more points
+    static let maxPoints: Int = 3000  // Adjust density: higher = more points
 }
 
 enum CameraViewMode: String, CaseIterable {
@@ -190,6 +190,8 @@ struct PointCloudCanvasView: View {
 // MARK: - Depth Pixel Canvas View (for video overlay)
 
 struct DepthPixelCanvasView: View {
+	@Environment(\.safeAreaInsets) private var safeAreaInsets
+
     let data: DepthPixelData
     let size: CGSize
 
@@ -257,6 +259,7 @@ struct DepthPixelCanvasView: View {
                 .background(Color.black.opacity(0.5))
                 .cornerRadius(4)
                 .padding(16)
+				.padding(.bottom, AppConstants.shared.tabBarHeight + safeAreaInsets.bottom)
         }
     }
 }

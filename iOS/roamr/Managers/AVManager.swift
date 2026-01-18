@@ -11,6 +11,13 @@ import AVFoundation
 import Combine
 import UIKit
 
+struct LidarCameraInitData {
+	var timestamp: Double
+	var image_width: Int32
+	var image_height: Int32
+	var image_channels: Int32
+}
+
 struct LidarCameraData {
     var timestamp: Double
 
@@ -176,6 +183,9 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         }
 
         // Configure video output
+		
+//		print(videoOutput.availableVideoPixelFormatTypes)
+		
         videoOutput.videoSettings = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
         ]
