@@ -17,21 +17,6 @@ struct LidarCameraInitData {
 	var image_height: Int32
 	var image_channels: Int32
 }
-
-struct LidarCameraInitData {
-	var timestamp: Double
-	var image_width: Int32
-	var image_height: Int32
-	var image_channels: Int32
-}
-
-struct LidarCameraConfig {
-    var timestamp: Double
-
-    var image_height: Int32
-    var image_width: Int32
-    var image_channels: Int32
-}
 struct LidarCameraData {
     var timestamp: Double
 
@@ -40,7 +25,7 @@ struct LidarCameraData {
 
     var image: [Float32]
     var image_size: Int32
-}
+}a
 
 struct PointCloudData {
     var points: [SIMD3<Float>]  // 3D world coordinates (meters)
