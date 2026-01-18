@@ -24,6 +24,18 @@ struct LidarCameraData {
     var image_channels: Int32
 }
 
+struct PointCloudData {
+    var points: [SIMD3<Float>]  // 3D world coordinates (meters)
+    var count: Int
+}
+
+struct DepthPixelData {
+    var pixels: [(x: Int, y: Int, depth: Float)]  // Pixel coords + depth for visualization
+    var width: Int
+    var height: Int
+    var count: Int
+}
+
 class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDelegate {
     static let shared = AVManager()
     static var firstCapture = true
@@ -31,6 +43,8 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
     @Published var isActive = false
     @Published var depthMapImage: UIImage?
     @Published var cameraImage: UIImage?
+    @Published var pointCloud: PointCloudData?
+    @Published var depthPixels: DepthPixelData?
 
     private let captureSession = AVCaptureSession()
     private let videoOutput = AVCaptureVideoDataOutput()
@@ -236,6 +250,97 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         }
     }
 
+    // MARK: - Depth Data Conversion
+
+    func depthDataToPixels(depthData: AVDepthData) -> DepthPixelData? {
+        let convertedDepthData: AVDepthData
+        let pixelFormat = CVPixelBufferGetPixelFormatType(depthData.depthDataMap)
+
+        if pixelFormat == kCVPixelFormatType_DepthFloat16 || pixelFormat == kCVPixelFormatType_DisparityFloat16 {
+            convertedDepthData = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
+        } else {
+            convertedDepthData = depthData
+        }
+
+        let depthMap = convertedDepthData.depthDataMap
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
+        let depthPointer = baseAddress.assumingMemoryBound(to: Float32.self)
+
+        var pixels: [(x: Int, y: Int, depth: Float)] = []
+        pixels.reserveCapacity(width * height / 4)
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let depth = depthPointer[y * width + x]
+                guard depth > 0 && depth.isFinite else { continue }
+                pixels.append((x: x, y: y, depth: depth))
+            }
+        }
+
+        return DepthPixelData(pixels: pixels, width: width, height: height, count: pixels.count)
+    }
+
+    func depthDataToPointCloud(depthData: AVDepthData) -> PointCloudData? {
+        // Convert to Float32 if needed
+        let convertedDepthData: AVDepthData
+        let pixelFormat = CVPixelBufferGetPixelFormatType(depthData.depthDataMap)
+
+        if pixelFormat == kCVPixelFormatType_DepthFloat16 || pixelFormat == kCVPixelFormatType_DisparityFloat16 {
+            convertedDepthData = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
+        } else {
+            convertedDepthData = depthData
+        }
+
+        let depthMap = convertedDepthData.depthDataMap
+        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
+
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+
+        guard let baseAddress = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
+        let depthPointer = baseAddress.assumingMemoryBound(to: Float32.self)
+
+        // Get camera intrinsics
+        guard let calibration = convertedDepthData.cameraCalibrationData else {
+            print("❌ No camera calibration data available")
+            return nil
+        }
+
+        let intrinsics = calibration.intrinsicMatrix
+        let fx = intrinsics[0][0]
+        let fy = intrinsics[1][1]
+        let cx = intrinsics[2][0]
+        let cy = intrinsics[2][1]
+
+        var points: [SIMD3<Float>] = []
+        points.reserveCapacity(width * height / 4)
+
+        for y in 0..<height {
+            for x in 0..<width {
+                let depth = depthPointer[y * width + x]
+
+                // Skip invalid depth values
+                guard depth > 0 && depth.isFinite else { continue }
+
+                // Unproject: pixel (x,y) + depth -> 3D point
+                let xWorld = (Float(x) - cx) * depth / fx
+                let yWorld = (Float(y) - cy) * depth / fy
+                let zWorld = depth
+
+                points.append(SIMD3<Float>(xWorld, yWorld, zWorld))
+            }
+        }
+
+        return PointCloudData(points: points, count: points.count)
+    }
+
     // MARK: - Image Conversion
 
     private func depthDataToUIImage(depthData: AVDepthData) -> UIImage? {
@@ -329,6 +434,10 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         let depthData = syncedDepthData.depthData
         let timestamp = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(videoBuffer))
 
+        // Generate point cloud and depth pixels for visualization
+        let pointCloudData = depthDataToPointCloud(depthData: depthData)
+        let depthPixelData = depthDataToPixels(depthData: depthData)
+
         guard let imageBuffer = CMSampleBufferGetImageBuffer(videoBuffer) else { return }
 
         // Lock buffers
@@ -365,17 +474,15 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         isDataDirty = true
         lock.unlock()
 
-        // Generate UI images
-        if let depthImage = depthDataToUIImage(depthData: depthData) {
-            DispatchQueue.main.async {
-                self.depthMapImage = depthImage
-            }
-        }
+        // Generate UI images and point cloud
+        let depthImage = depthDataToUIImage(depthData: depthData)
+        let camImage = sampleBufferToUIImage(sampleBuffer: videoBuffer)
 
-        if let camImage = sampleBufferToUIImage(sampleBuffer: videoBuffer) {
-            DispatchQueue.main.async {
-                self.cameraImage = camImage
-            }
+        DispatchQueue.main.async {
+            self.depthMapImage = depthImage
+            self.cameraImage = camImage
+            self.pointCloud = pointCloudData
+            self.depthPixels = depthPixelData
         }
     }
 }

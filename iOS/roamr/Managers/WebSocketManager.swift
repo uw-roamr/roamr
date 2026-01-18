@@ -11,6 +11,8 @@ import Combine
 import CryptoKit
 
 class WebSocketManager: ObservableObject {
+    static let shared = WebSocketManager()
+
     @Published var isServerRunning = false
     @Published var localIPAddress: String = "Not available"
     @Published var serverStatus: String = "Stopped"
