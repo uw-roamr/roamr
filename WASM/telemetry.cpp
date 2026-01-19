@@ -2,6 +2,11 @@
 #include "lidar_camera.h"
 #include <mutex>
 
+void log_config(const CameraConfig& cam_config){
+  std::cout << "Sensor config" << std::endl;
+  std::cout << "T: " << cam_config.timestamp << ", height: " << cam_config.image_height << ", width: " << cam_config.image_width << ", channels: " << cam_config.image_channels << std::endl;
+}
+
 // log sensors without significant delays in processing
 void log_sensors(std::mutex& m_imu, const IMUData& imu_data, std::mutex& m_lc, const LidarCameraData& lc_data){
   std::cout << std::fixed << std::setprecision(5);
@@ -15,20 +20,19 @@ void log_sensors(std::mutex& m_imu, const IMUData& imu_data, std::mutex& m_lc, c
     }
 
     // very expensive to copy everything!
-    // LidarCameraData lc_copy;
     double lc_timestamp;
-    size_t img_w, img_h;
+    size_t image_size, points_size;
+    
     {
       std::lock_guard<std::mutex> lk(m_lc);
       lc_timestamp = lc_data.timestamp;
-      img_h = lc_data.image_height;
-      img_w = lc_data.image_width;
+      points_size = lc_data.points_size;
+      image_size = lc_data.image_size; 
     }
 
         std::cout << "T:" << imu_copy.acc_timestamp << " acc:" << imu_copy.acc_x << "," << imu_copy.acc_y << "," << imu_copy.acc_z << std::endl
                     << "T:" << imu_copy.gyro_timestamp << " gyro:" << imu_copy.gyro_x << "," << imu_copy.gyro_y << "," << imu_copy.gyro_z <<
                     std::endl;
-        // not sure what the best way to log lidar_camera_data is
-        std::cout << "T:" << lc_timestamp << " lidar camera: " << img_h << ", " << img_w << std::endl;
+        std::cout << "T:" << lc_timestamp << " points size: " << points_size << ", image size: " << image_size << std::endl;
   }
 };

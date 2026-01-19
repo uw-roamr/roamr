@@ -39,6 +39,18 @@ struct DepthPixelData {
     var count: Int
 }
 
+// equivalent to C++ constants
+enum LidarCameraConstants {
+    static let maxPointsPerScan = 100000
+    static let floatsPerPoint = 3
+    static let maxPointsSize = maxPointsPerScan * floatsPerPoint
+
+    static let maxImageWidth = 1920
+    static let maxImageHeight = 1440
+    static let maxImageChannels = 3
+    static let maxImageSize = maxImageWidth * maxImageHeight * maxImageChannels
+}
+
 class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDelegate {
     static let shared = AVManager()
     static var firstCapture = true
@@ -71,6 +83,10 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
 
     let lock = NSLock()
 
+    var currentImageWidth: Int32 = 0
+    var currentImageHeight: Int32 = 0
+    var currentImageChannels: Int32 = 0
+
     var currentData = LidarCameraData(
         timestamp: 0,
 		points: [Float32](),
@@ -81,7 +97,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
     private func startCapture() {
         // Stop any existing session
         if captureSession.isRunning {
-            print("⚠️ Session already running, stopping it first...")
+            print("Session already running, stopping it first...")
             captureSession.stopRunning()
         }
 
@@ -103,7 +119,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         )
 
         guard let device = discoverySession.devices.first else {
-            print("❌ No LiDAR camera found")
+            print("No LiDAR camera found")
             captureSession.commitConfiguration()
             return
         }
@@ -111,7 +127,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         // Add device input
         guard let input = try? AVCaptureDeviceInput(device: device),
               captureSession.canAddInput(input) else {
-            print("❌ Cannot add device input")
+            print("Cannot add device input")
             captureSession.commitConfiguration()
             return
         }
@@ -121,9 +137,9 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         // Use .inputPriority when manually configuring device formats
         if captureSession.canSetSessionPreset(.inputPriority) {
             captureSession.sessionPreset = .inputPriority
-            print("✅ Set session preset to inputPriority")
+            print("Set session preset to inputPriority")
         } else {
-            print("⚠️ Cannot set inputPriority preset")
+            print("Cannot set inputPriority preset")
         }
 
         // Configure device format
@@ -173,15 +189,15 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
                     device.activeDepthDataFormat = depthFormat
                     let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
                     let depthDims = CMVideoFormatDescriptionGetDimensions(depthFormat.formatDescription)
-                    print("✅ Set format: video \(dims.width)x\(dims.height), depth \(depthDims.width)x\(depthDims.height)")
+                    print("Set format: video \(dims.width)x\(dims.height), depth \(depthDims.width)x\(depthDims.height)")
                 }
             } else {
-                print("⚠️ No suitable format with depth found, using default")
+                print("No suitable format with depth found, using default")
             }
 
             device.unlockForConfiguration()
         } catch {
-            print("❌ Error configuring device: \(error)")
+            print("Error configuring device: \(error)")
         }
 
         // Configure video output
@@ -194,7 +210,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         videoOutput.alwaysDiscardsLateVideoFrames = true
 
         guard captureSession.canAddOutput(videoOutput) else {
-            print("❌ Cannot add video output")
+            print("Cannot add video output")
             captureSession.commitConfiguration()
             return
         }
@@ -205,7 +221,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         depthOutput.alwaysDiscardsLateDepthData = true
 
         guard captureSession.canAddOutput(depthOutput) else {
-            print("❌ Cannot add depth output")
+            print("Cannot add depth output")
             captureSession.commitConfiguration()
             return
         }
@@ -224,7 +240,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .denied, .restricted:
 			isActive = false
-            print("❌ Camera permission denied")
+            print("Camera permission denied")
             return
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { granted in
@@ -271,13 +287,13 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         streamFrameCount = 0
         lastFPSUpdateTime = CACurrentMediaTime()
         isStreaming = true
-        print("📹 Video streaming started (target: \(fps) FPS, quality: \(Int(quality * 100))%)")
+        print("Video streaming started (target: \(fps) FPS, quality: \(Int(quality * 100))%)")
     }
 
     func stopStreaming() {
         isStreaming = false
         streamFPS = 0
-        print("📹 Video streaming stopped")
+        print("Video streaming stopped")
     }
 
     func toggleStreaming() {
@@ -375,7 +391,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
 
         // Get camera intrinsics
         guard let calibration = convertedDepthData.cameraCalibrationData else {
-            print("❌ No camera calibration data available")
+            print("No camera calibration data available")
             return nil
         }
 
@@ -521,22 +537,57 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
 
         let imageWidth = CVPixelBufferGetWidth(imageBuffer)
         let imageHeight = CVPixelBufferGetHeight(imageBuffer)
-        let depthWidth = CVPixelBufferGetWidth(depthMap)
-        let depthHeight = CVPixelBufferGetHeight(depthMap)
+        let srcChannels = 4
+        let imageChannels = 3
+        let imagePixelCount = imageWidth * imageHeight
+        let imageFloatCount = imagePixelCount * imageChannels
+        let cappedImageFloatCount = min(imageFloatCount, LidarCameraConstants.maxImageSize)
+        let maxImageRows = cappedImageFloatCount / (imageWidth * imageChannels)
+
+        var imageFloats = [Float32](repeating: 0, count: cappedImageFloatCount)
+        let imageBytes = imageBaseAddress.assumingMemoryBound(to: UInt8.self)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer)
+
+        for y in 0..<min(imageHeight, maxImageRows) {
+            let rowBase = imageBytes.advanced(by: y * bytesPerRow)
+            for x in 0..<imageWidth {
+                let pixelBase = rowBase.advanced(by: x * srcChannels)
+                let dstIndex = (y * imageWidth + x) * imageChannels
+                if dstIndex + 2 >= imageFloats.count {
+                    break
+                }
+                imageFloats[dstIndex] = Float32(pixelBase[0])
+                imageFloats[dstIndex + 1] = Float32(pixelBase[1])
+                imageFloats[dstIndex + 2] = Float32(pixelBase[2])
+            }
+        }
+
+        var pointsFloats: [Float32] = []
+        if let pointCloudData = pointCloudData {
+            let pointCount = min(pointCloudData.count, LidarCameraConstants.maxPointsPerScan)
+            pointsFloats.reserveCapacity(pointCount * LidarCameraConstants.floatsPerPoint)
+            for i in 0..<pointCount {
+                let point = pointCloudData.points[i]
+                pointsFloats.append(point.x)
+                pointsFloats.append(point.y)
+                pointsFloats.append(point.z)
+            }
+        }
 
         // Update current data for WASM
         lock.lock()
         currentVideoBuffer = videoBuffer
         currentDepthData = depthData
-//		currentData = LidarCameraData(
-//			timestamp: timestamp,
-//			depth_map: depthBaseAddress,
-//			depth_width: Int32(depthWidth),
-//			depth_height: Int32(depthHeight),
-//			image: imageBaseAddress,
-//			image_width: Int32(imageWidth),
-//			image_height: Int32(imageHeight),
-//			image_channels: 4)
+        currentImageWidth = Int32(imageWidth)
+        currentImageHeight = Int32(imageHeight)
+        currentImageChannels = Int32(imageChannels)
+        currentData = LidarCameraData(
+            timestamp: timestamp,
+            points: pointsFloats,
+            points_size: Int32(pointsFloats.count),
+            image: imageFloats,
+            image_size: Int32(imageFloats.count)
+        )
         isDataDirty = true
         lock.unlock()
 
@@ -559,22 +610,44 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
 }
 
 // WASM export functions
-func init_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+func init_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     guard let ptr = ptr else { return }
 
-    let lidarCameraConfigPtr = ptr.bindMemory(to: LidarCameraData.self, capacity: 1)
+    let cameraConfigPtr = ptr.bindMemory(to: LidarCameraInitData.self, capacity: 1)
     let manager = AVManager.shared
 
-    while !manager.isActive {}
-    // populate fields
+    while !manager.isActive {
+        Thread.sleep(forTimeInterval: 0.001)
+    }
 
-//    lidarCameraConfig.pointee = data
+    var width: Int32 = 0
+    var height: Int32 = 0
+    var channels: Int32 = 0
+    var timestamp: Double = 0
+
+    while width == 0 || height == 0 || channels == 0 {
+        manager.lock.lock()
+        width = manager.currentImageWidth
+        height = manager.currentImageHeight
+        channels = manager.currentImageChannels
+        timestamp = manager.currentData.timestamp
+        manager.lock.unlock()
+        if width == 0 || height == 0 || channels == 0 {
+            Thread.sleep(forTimeInterval: 0.001)
+        }
+    }
+
+    cameraConfigPtr.pointee = LidarCameraInitData(
+        timestamp: timestamp,
+        image_width: width,
+        image_height: height,
+        image_channels: channels
+    )
 }
 
 func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
-    guard let ptr = ptr else { return }
+    guard let ptr = ptr, let exec_env = exec_env else { return }
 
-    let lidarCameraDataPtr = ptr.bindMemory(to: LidarCameraData.self, capacity: 1)
     let manager = AVManager.shared
 
     manager.lock.lock()
@@ -582,11 +655,65 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
         manager.lock.unlock()
         return
     }
-    // update data
-    
-
+    let data = manager.currentData
     manager.isDataDirty = false
     manager.lock.unlock()
 
-//    lidarCameraDataPtr.pointee = data
+    let basePtr = ptr.assumingMemoryBound(to: UInt8.self)
+    guard let moduleInst = wasm_runtime_get_module_inst(exec_env) else {
+        return
+    }
+    var nativeStart: UnsafeMutablePointer<UInt8>?
+    var nativeEnd: UnsafeMutablePointer<UInt8>?
+    if !wasm_runtime_get_native_addr_range(moduleInst, basePtr, &nativeStart, &nativeEnd) {
+        return
+    }
+    let pointsOffset = MemoryLayout<Double>.size
+    let pointsMaxCount = LidarCameraConstants.maxPointsSize
+    let pointsByteCount = pointsMaxCount * MemoryLayout<Float32>.size
+    let pointsSizeOffset = pointsOffset + pointsByteCount
+
+    let imageOffset = pointsSizeOffset + MemoryLayout<Int32>.size
+    let imageMaxCount = LidarCameraConstants.maxImageSize
+    let imageByteCount = imageMaxCount * MemoryLayout<Float32>.size
+    let imageSizeOffset = imageOffset + imageByteCount
+    let totalBytes = imageSizeOffset + MemoryLayout<Int32>.size
+
+    if let nativeEnd = nativeEnd {
+        let baseAddr = UInt(bitPattern: basePtr)
+        let endAddr = UInt(bitPattern: nativeEnd)
+        if baseAddr + UInt(totalBytes) > endAddr {
+            return
+        }
+    }
+
+    basePtr.withMemoryRebound(to: Double.self, capacity: 1) { rebounded in
+        rebounded.pointee = data.timestamp
+    }
+
+    let pointsCount = min(Int(data.points_size), pointsMaxCount)
+    if pointsCount > 0 {
+        data.points.withUnsafeBytes { src in
+            if let srcBase = src.baseAddress {
+                memcpy(basePtr.advanced(by: pointsOffset), srcBase, pointsCount * MemoryLayout<Float32>.size)
+            }
+        }
+    }
+    let pointsSizeValue = Int32(pointsCount)
+    basePtr.advanced(by: pointsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = pointsSizeValue
+    }
+
+    let imageCount = min(Int(data.image_size), imageMaxCount)
+    if imageCount > 0 {
+        data.image.withUnsafeBytes { src in
+            if let srcBase = src.baseAddress {
+                memcpy(basePtr.advanced(by: imageOffset), srcBase, imageCount * MemoryLayout<Float32>.size)
+            }
+        }
+    }
+    let imageSizeValue = Int32(imageCount)
+    basePtr.advanced(by: imageSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = imageSizeValue
+    }
 }
