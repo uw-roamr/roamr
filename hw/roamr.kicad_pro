@@ -412,6 +412,22 @@
     [
       "bfe84b16-3df2-48dd-882e-523c3a68f778",
       "Root"
+    ],
+    [
+      "c4e91d11-f2d8-4a42-9b4b-e52a2392c417",
+      "Connectors"
+    ],
+    [
+      "0386725f-1a55-43a2-acca-ca865340222a",
+      "12V to 5V"
+    ],
+    [
+      "23838391-83af-4fd8-ba8b-bd59ae2cd1f8",
+      "12V to 3V3"
+    ],
+    [
+      "7cadbd84-e43d-43ba-a052-9e62bf6faf2f",
+      "Phone Charging"
     ]
   ],
   "text_variables": {}

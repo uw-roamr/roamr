@@ -1,0 +1,51 @@
+(kicad_sch
+	(version 20250114)
+	(generator "eeschema")
+	(generator_version "9.0")
+	(uuid "afc31cbc-eebe-4e8d-80d8-d9e54988b145")
+	(paper "USLetter")
+	(lib_symbols)
+	(text "current limiter load switch here"
+		(exclude_from_sim no)
+		(at 110.49 85.09 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "e897eeb6-4c21-4a1a-b8ad-5a2b6eaa3603")
+	)
+	(hierarchical_label "USB_PWR_OUT-"
+		(shape input)
+		(at 152.4 87.63 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "1f6f5f98-3988-4214-be6c-bdfd4818f2aa")
+	)
+	(hierarchical_label "USB_PWR_OUT+"
+		(shape input)
+		(at 152.4 82.55 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left)
+		)
+		(uuid "9fa340c9-e2a2-453a-bb2e-4b39bf3cde5f")
+	)
+	(hierarchical_label "5V"
+		(shape input)
+		(at 71.12 82.55 180)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "f5a65b66-7cbf-479e-93ca-fbc342b935e2")
+	)
+)
