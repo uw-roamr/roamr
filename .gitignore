@@ -5,3 +5,6 @@ iOS/roamr.xcodeproj/xcuserdata/
 iOS/roamr.xcodeproj/project.xcworkspace/xcuserdata/
 embedded/ble-test/build/
 .vscode/
+
+hw/**/*.lck
+hw/**/*backup*
