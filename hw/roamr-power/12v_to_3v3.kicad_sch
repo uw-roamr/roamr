@@ -4,6 +4,11 @@
 	(generator_version "9.0")
 	(uuid "8298a393-93d2-420f-bff8-fb76c231b515")
 	(paper "USLetter")
+	(title_block
+		(title "ROAMR power board")
+		(date "2026-01-18")
+		(rev "1.0")
+	)
 	(lib_symbols)
 	(text "12V to 3V3 buck here"
 		(exclude_from_sim no)

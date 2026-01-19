@@ -5,7 +5,7 @@
 	(uuid "bfe84b16-3df2-48dd-882e-523c3a68f778")
 	(paper "USLetter")
 	(title_block
-		(title "ROAMR power")
+		(title "ROAMR power board")
 		(date "2026-01-18")
 		(rev "1.0")
 	)
@@ -1076,7 +1076,7 @@
 			)
 		)
 		(instances
-			(project "roamr"
+			(project "roamr-power"
 				(path "/bfe84b16-3df2-48dd-882e-523c3a68f778"
 					(page "3")
 				)
@@ -1138,7 +1138,7 @@
 			)
 		)
 		(instances
-			(project "roamr"
+			(project "roamr-power"
 				(path "/bfe84b16-3df2-48dd-882e-523c3a68f778"
 					(page "4")
 				)
@@ -1210,7 +1210,7 @@
 			)
 		)
 		(instances
-			(project "roamr"
+			(project "roamr-power"
 				(path "/bfe84b16-3df2-48dd-882e-523c3a68f778"
 					(page "5")
 				)
@@ -1302,7 +1302,7 @@
 			)
 		)
 		(instances
-			(project "roamr"
+			(project "roamr-power"
 				(path "/bfe84b16-3df2-48dd-882e-523c3a68f778"
 					(page "2")
 				)

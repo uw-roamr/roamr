@@ -4,6 +4,11 @@
 	(generator_version "9.0")
 	(uuid "7d15acc3-2eeb-4c64-b68d-0931e80e697c")
 	(paper "USLetter")
+	(title_block
+		(title "ROAMR power board")
+		(date "2026-01-18")
+		(rev "1.0")
+	)
 	(lib_symbols
 		(symbol "Device:C"
 			(pin_numbers

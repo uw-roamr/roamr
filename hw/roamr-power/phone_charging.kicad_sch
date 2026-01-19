@@ -4,6 +4,11 @@
 	(generator_version "9.0")
 	(uuid "afc31cbc-eebe-4e8d-80d8-d9e54988b145")
 	(paper "USLetter")
+	(title_block
+		(title "ROAMR power board")
+		(date "2026-01-18")
+		(rev "1.0")
+	)
 	(lib_symbols)
 	(text "current limiter load switch here"
 		(exclude_from_sim no)

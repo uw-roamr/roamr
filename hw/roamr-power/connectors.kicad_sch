@@ -4,6 +4,11 @@
 	(generator_version "9.0")
 	(uuid "95196f54-0f50-4c32-b6d8-f9a56b416570")
 	(paper "USLetter")
+	(title_block
+		(title "ROAMR power board")
+		(date "2026-01-18")
+		(rev "1.0")
+	)
 	(lib_symbols
 		(symbol "power:GND"
 			(power)

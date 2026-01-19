@@ -6,5 +6,5 @@ iOS/roamr.xcodeproj/project.xcworkspace/xcuserdata/
 embedded/ble-test/build/
 .vscode/
 
-hw/*.lck
-hw/*backups*
+hw/**/*.lck
+hw/**/*backups*

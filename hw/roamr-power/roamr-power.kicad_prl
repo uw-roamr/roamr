@@ -59,7 +59,7 @@
     "ssh_key": ""
   },
   "meta": {
-    "filename": "roamr.kicad_prl",
+    "filename": "roamr-power.kicad_prl",
     "version": 5
   },
   "net_inspector_panel": {
