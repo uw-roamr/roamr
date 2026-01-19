@@ -81,13 +81,29 @@ class WasmManager {
     func runWasmFile(named fileName: String) {
         guard initializeRuntime() else { return }
 
-        guard let wasmPath = Bundle.main.path(forResource: fileName, ofType: "wasm") else {
-            print("Error: Could not find \(fileName).wasm")
+        let bundle = Bundle.main
+        var wasmURL: URL?
+
+        if let url = bundle.url(forResource: fileName, withExtension: "wasm") {
+            wasmURL = url
+        } else if let url = bundle.url(forResource: fileName, withExtension: "wasm", subdirectory: "WASM") {
+            wasmURL = url
+        } else if let resourceURL = bundle.resourceURL {
+            // Fallback for folder references packaged as subdirectories
+            let candidate = resourceURL.appendingPathComponent("WASM/\(fileName).wasm")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                wasmURL = candidate
+            }
+        }
+
+        guard let resolvedWasmURL = wasmURL else {
+            let present = bundle.paths(forResourcesOfType: "wasm", inDirectory: nil)
+            print("Error: Could not find \(fileName).wasm. Bundle currently has: \(present)")
             return
         }
 
         do {
-            let wasmBytes = try Data(contentsOf: URL(fileURLWithPath: wasmPath))
+            let wasmBytes = try Data(contentsOf: resolvedWasmURL)
 
             wasmBytes.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
                 guard let baseAddress = buffer.baseAddress else { return }
