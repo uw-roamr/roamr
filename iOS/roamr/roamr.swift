@@ -6,9 +6,14 @@
 //
 
 import SwiftUI
+import FirebaseCore
 
 @main
 struct roamr: App {
+    init() {
+        FirebaseApp.configure()
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()

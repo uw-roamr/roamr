@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		56387F1B2F2161F1006D4C83 /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 56FIREBASE012EE0000000001 /* FirebaseAuth */; };
+		56387F1C2F2161F1006D4C83 /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 56FIREBASE012EE0000000002 /* FirebaseFirestore */; };
+		56387F1D2F2161F1006D4C83 /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 56FIREBASE012EE0000000003 /* FirebaseStorage */; };
 		56AAE1782ECD46AF0057E1DF /* libm.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 56AAE1772ECD46AF0057E1DF /* libm.tbd */; };
 		56AAE17A2ECD46B80057E1DF /* libc.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 56AAE1792ECD46B80057E1DF /* libc.tbd */; };
 		56AAE17C2ECD46C20057E1DF /* libdl.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 56AAE17B2ECD46C20057E1DF /* libdl.tbd */; };
@@ -49,6 +52,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				56387F1D2F2161F1006D4C83 /* FirebaseStorage in Frameworks */,
+				56387F1C2F2161F1006D4C83 /* FirebaseFirestore in Frameworks */,
+				56387F1B2F2161F1006D4C83 /* FirebaseAuth in Frameworks */,
 				56B658962ED23A6D00A35411 /* libc++.tbd in Frameworks */,
 				56AAE17C2ECD46C20057E1DF /* libdl.tbd in Frameworks */,
 				56AAE17A2ECD46B80057E1DF /* libc.tbd in Frameworks */,
@@ -107,6 +113,9 @@
 			);
 			name = roamr;
 			packageProductDependencies = (
+				56FIREBASE012EE0000000001 /* FirebaseAuth */,
+				56FIREBASE012EE0000000002 /* FirebaseFirestore */,
+				56FIREBASE012EE0000000003 /* FirebaseStorage */,
 			);
 			productName = roamr;
 			productReference = 56206B172EBAB1C600C8E9E8 /* roamr.app */;
@@ -138,6 +147,7 @@
 			mainGroup = 56206B0E2EBAB1C600C8E9E8;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				56FIREBASE002EE0000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 56206B182EBAB1C600C8E9E8 /* Products */;
@@ -302,7 +312,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"roamr/Preview Content\"";
-				DEVELOPMENT_TEAM = 6N3CP34ZJA;
+				DEVELOPMENT_TEAM = Z4H6YA468R;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Our robot wants to talk to its friends!";
@@ -327,7 +337,7 @@
 					"-ldl",
 					"-lm",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.ders.roamr;
+				PRODUCT_BUNDLE_IDENTIFIER = com.capstone.roamr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "roamr/roamr-Bridging-Header.h";
@@ -347,7 +357,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"roamr/Preview Content\"";
-				DEVELOPMENT_TEAM = 6N3CP34ZJA;
+				DEVELOPMENT_TEAM = Z4H6YA468R;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Our robot wants to talk to its friends!";
@@ -372,7 +382,7 @@
 					"-ldl",
 					"-lm",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.ders.roamr;
+				PRODUCT_BUNDLE_IDENTIFIER = com.capstone.roamr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = "roamr/roamr-Bridging-Header.h";
@@ -404,6 +414,35 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		56FIREBASE002EE0000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 11.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		56FIREBASE012EE0000000001 /* FirebaseAuth */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 56FIREBASE002EE0000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseAuth;
+		};
+		56FIREBASE012EE0000000002 /* FirebaseFirestore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 56FIREBASE002EE0000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseFirestore;
+		};
+		56FIREBASE012EE0000000003 /* FirebaseStorage */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 56FIREBASE002EE0000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
+			productName = FirebaseStorage;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 56206B0F2EBAB1C600C8E9E8 /* Project object */;
 }

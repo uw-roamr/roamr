@@ -16,7 +16,21 @@ class WasmManager {
     private var globalNativeSymbolPtr: UnsafeMutablePointer<NativeSymbol>?
     private var globalModuleNamePtr: UnsafeMutablePointer<CChar>?
 
+    private var currentModuleInstance: OpaquePointer?
+    private var shouldStop = false
+    private let lock = NSLock()
+
     private init() {}
+
+    func stop() {
+        lock.lock()
+        shouldStop = true
+        if let moduleInstance = currentModuleInstance {
+            wasm_runtime_terminate(moduleInstance)
+        }
+        lock.unlock()
+        print("WASM stop requested")
+    }
 
     func initializeRuntime() -> Bool {
         if isInitialized { return true }
@@ -78,15 +92,22 @@ class WasmManager {
     }
 
     func runWasmFile(named fileName: String) {
-        guard initializeRuntime() else { return }
-
         guard let wasmPath = Bundle.main.path(forResource: fileName, ofType: "wasm") else {
             print("Error: Could not find \(fileName).wasm")
             return
         }
+        runWasmFile(at: URL(fileURLWithPath: wasmPath))
+    }
+
+    func runWasmFile(at fileURL: URL) {
+        guard initializeRuntime() else { return }
+
+        lock.lock()
+        shouldStop = false
+        lock.unlock()
 
         do {
-            let wasmBytes = try Data(contentsOf: URL(fileURLWithPath: wasmPath))
+            let wasmBytes = try Data(contentsOf: fileURL)
 
             wasmBytes.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
                 guard let baseAddress = buffer.baseAddress else { return }
@@ -111,39 +132,42 @@ class WasmManager {
                     return
                 }
 
+                // Store module instance for potential termination
+                lock.lock()
+                currentModuleInstance = moduleInstance
+                lock.unlock()
+
                 // Create execution environment
                 guard let execEnv = wasm_runtime_create_exec_env(moduleInstance, stackSize) else {
                     print("Error creating execution environment")
+                    lock.lock()
+                    currentModuleInstance = nil
+                    lock.unlock()
                     wasm_runtime_deinstantiate(moduleInstance)
                     wasm_runtime_unload(wasmModule)
                     return
                 }
 
-                print("Running WASM module...")
+                print("Running WASM module from: \(fileURL.lastPathComponent)")
 
                 // Call _start function (default entry point for WASI)
-                // Note: wasm_application_execute_main is often used for WASI modules
-                // but if we just want to run the main function we can use this or lookup "_start"
-
-                // For this specific test, we can use wasm_application_execute_main if the module is built as a command
-                // Or lookup "_start" manually.
-                // The previous code used wasm_application_execute_main logic implicitly or explicitly?
-                // Previous code:
-                /*
-                 let func_inst = wasm_runtime_lookup_function(moduleInstance, "_start", nil)
-                 if func_inst != nil {
-                     wasm_runtime_call_wasm(execEnv, func_inst, 0, nil)
-                 }
-                 */
-
-                // Let's stick to looking up _start for now as it's standard for WASI commands
                 if let startFunc = wasm_runtime_lookup_function(moduleInstance, "_start") {
                      if !wasm_runtime_call_wasm(execEnv, startFunc, 0, nil) {
-                         print("Error calling _start: \(String(cString: wasm_runtime_get_exception(moduleInstance)))")
+                         let wasStopped = shouldStop
+                         if wasStopped {
+                             print("WASM execution was stopped")
+                         } else {
+                             print("Error calling _start: \(String(cString: wasm_runtime_get_exception(moduleInstance)))")
+                         }
                      }
                 } else {
                     print("Error: Could not find _start function")
                 }
+
+                // Clear module instance reference
+                lock.lock()
+                currentModuleInstance = nil
+                lock.unlock()
 
                 // Cleanup instance-specific resources
                 wasm_runtime_destroy_exec_env(execEnv)
