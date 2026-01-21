@@ -2,6 +2,5 @@
   (version 7)
   (lib (name "TPS56A37RPAR")(type "KiCad")(uri "${KIPRJMOD}/ul_TPS56A37RPAR/KiCADv6/2026-01-19_00-17-59.kicad_sym")(options "")(descr ""))
   (lib (name "TPS2065DDBVR")(type "KiCad")(uri "${KIPRJMOD}/ul_TPS2065DDBVR/KiCADv6/2026-01-20_19-41-11.kicad_sym")(options "")(descr ""))
-  (lib (name "DRV8316CRRGFR")(type "KiCad")(uri "${KIPRJMOD}/ul_DRV8316CRRGFR/KiCADv6/2026-01-19_20-40-12.kicad_sym")(options "")(descr ""))
   (lib (name "TPS2553DDBVR")(type "KiCad")(uri "${KIPRJMOD}/ul_TPS2553DDBVR/KiCADv6/2026-01-20_20-07-34.kicad_sym")(options "")(descr ""))
 )
