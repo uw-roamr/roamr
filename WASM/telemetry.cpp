@@ -10,6 +10,7 @@ void log_config(const CameraConfig& cam_config){
 // log sensors without significant delays in processing
 void log_sensors(std::mutex& m_imu, const IMUData& imu_data, std::mutex& m_lc, const LidarCameraData& lc_data){
   std::cout << std::fixed << std::setprecision(5);
+  double last_lc_timestamp = -1.0;
   while (true) {
     std::this_thread::sleep_for(std::chrono::milliseconds(log_interval_ms));
 
@@ -30,9 +31,12 @@ void log_sensors(std::mutex& m_imu, const IMUData& imu_data, std::mutex& m_lc, c
       image_size = lc_data.image_size; 
     }
 
-        std::cout << "T:" << imu_copy.acc_timestamp << " acc:" << imu_copy.acc_x << "," << imu_copy.acc_y << "," << imu_copy.acc_z << std::endl
-                    << "T:" << imu_copy.gyro_timestamp << " gyro:" << imu_copy.gyro_x << "," << imu_copy.gyro_y << "," << imu_copy.gyro_z <<
-                    std::endl;
-        std::cout << "T:" << lc_timestamp << " points size: " << points_size << ", image size: " << image_size << std::endl;
+        // std::cout << "T:" << imu_copy.acc_timestamp << " acc:" << imu_copy.acc_x << "," << imu_copy.acc_y << "," << imu_copy.acc_z << std::endl
+        //             << "T:" << imu_copy.gyro_timestamp << " gyro:" << imu_copy.gyro_x << "," << imu_copy.gyro_y << "," << imu_copy.gyro_z <<
+        //             std::endl;
+        if (lc_timestamp != last_lc_timestamp) {
+          std::cout << "T:" << lc_timestamp << " points size: " << points_size << ", image size: " << image_size << std::endl;
+          last_lc_timestamp = lc_timestamp;
+        }
   }
 };

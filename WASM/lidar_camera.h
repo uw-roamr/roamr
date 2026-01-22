@@ -29,7 +29,7 @@ struct LidarCameraData {
   std::array<float, max_points_size> points;
   size_t points_size;
 
-  std::array<float, max_image_size> image;
+  std::array<uint8_t, max_image_size> image;
   size_t image_size;
 };
 

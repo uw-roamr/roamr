@@ -23,7 +23,7 @@ struct LidarCameraData {
     var points: [Float32]
     var points_size: Int32
 
-    var image: [Float32]
+    var image: [UInt8]
     var image_size: Int32
 }
 
@@ -64,7 +64,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
     // Video streaming
     @Published var isStreaming = false
     @Published var streamFPS: Double = 0.0
-    private var streamTargetFPS: Int = 15
+    private var streamTargetFPS: Int = 30
     private var streamJpegQuality: CGFloat = 0.5
     private var lastStreamTime: TimeInterval = 0
     private var streamFrameCount: Int = 0
@@ -78,6 +78,9 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
     private var outputSynchronizer: AVCaptureDataOutputSynchronizer?
     private var currentVideoBuffer: CMSampleBuffer?
     private var currentDepthData: AVDepthData?
+    private let processingQueue = DispatchQueue(label: "com.roamr.lidar.processing", qos: .userInitiated)
+    private var isProcessingFrame = false
+    private var hasNewFrame = false
 
     var isDataDirty = false
 
@@ -91,7 +94,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         timestamp: 0,
 		points: [Float32](),
 		points_size: 0,
-		image: [Float32](),
+		image: [UInt8](),
 		image_size: 0)
 
     private func startCapture() {
@@ -147,10 +150,10 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
             try device.lockForConfiguration()
 
             // Target resolutions (set to 0 to use largest available)
-            let targetVideoWidth: Int32 = 1920
-            let targetVideoHeight: Int32 = 1440
-            let targetDepthWidth: Int32 = 1920
-            let targetDepthHeight: Int32 = 1440
+            let targetVideoWidth: Int32 = 1280
+            let targetVideoHeight: Int32 = 720
+            let targetDepthWidth: Int32 = 1280
+            let targetDepthHeight: Int32 = 720
 
             // Find a format with depth support matching target size
             let formatsWithDepth = device.formats.filter { format in
@@ -516,95 +519,137 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         let depthData = syncedDepthData.depthData
         let timestamp = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(videoBuffer))
 
-        // Generate point cloud and depth pixels for visualization
-        let pointCloudData = depthDataToPointCloud(depthData: depthData)
-        let depthPixelData = depthDataToPixels(depthData: depthData)
-
         guard let imageBuffer = CMSampleBufferGetImageBuffer(videoBuffer) else { return }
-
-        // Lock buffers
-        CVPixelBufferLockBaseAddress(imageBuffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(imageBuffer, .readOnly) }
-
-        let depthMap = depthData.depthDataMap
-        CVPixelBufferLockBaseAddress(depthMap, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
-
-        guard let imageBaseAddress = CVPixelBufferGetBaseAddress(imageBuffer),
-              let depthBaseAddress = CVPixelBufferGetBaseAddress(depthMap) else {
-            return
-        }
-
         let imageWidth = CVPixelBufferGetWidth(imageBuffer)
         let imageHeight = CVPixelBufferGetHeight(imageBuffer)
-        let srcChannels = 4
-        let imageChannels = 3
-        let imagePixelCount = imageWidth * imageHeight
-        let imageFloatCount = imagePixelCount * imageChannels
-        let cappedImageFloatCount = min(imageFloatCount, LidarCameraConstants.maxImageSize)
-        let maxImageRows = cappedImageFloatCount / (imageWidth * imageChannels)
 
-        var imageFloats = [Float32](repeating: 0, count: cappedImageFloatCount)
-        let imageBytes = imageBaseAddress.assumingMemoryBound(to: UInt8.self)
-        let bytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer)
-
-        for y in 0..<min(imageHeight, maxImageRows) {
-            let rowBase = imageBytes.advanced(by: y * bytesPerRow)
-            for x in 0..<imageWidth {
-                let pixelBase = rowBase.advanced(by: x * srcChannels)
-                let dstIndex = (y * imageWidth + x) * imageChannels
-                if dstIndex + 2 >= imageFloats.count {
-                    break
-                }
-                imageFloats[dstIndex] = Float32(pixelBase[0])
-                imageFloats[dstIndex + 1] = Float32(pixelBase[1])
-                imageFloats[dstIndex + 2] = Float32(pixelBase[2])
-            }
-        }
-
-        var pointsFloats: [Float32] = []
-        if let pointCloudData = pointCloudData {
-            let pointCount = min(pointCloudData.count, LidarCameraConstants.maxPointsPerScan)
-            pointsFloats.reserveCapacity(pointCount * LidarCameraConstants.floatsPerPoint)
-            for i in 0..<pointCount {
-                let point = pointCloudData.points[i]
-                pointsFloats.append(point.x)
-                pointsFloats.append(point.y)
-                pointsFloats.append(point.z)
-            }
-        }
-
-        // Update current data for WASM
+        // Minimal work in callback: just stash latest buffers/metadata and signal processing queue
         lock.lock()
         currentVideoBuffer = videoBuffer
         currentDepthData = depthData
         currentImageWidth = Int32(imageWidth)
         currentImageHeight = Int32(imageHeight)
-        currentImageChannels = Int32(imageChannels)
-        currentData = LidarCameraData(
-            timestamp: timestamp,
-            points: pointsFloats,
-            points_size: Int32(pointsFloats.count),
-            image: imageFloats,
-            image_size: Int32(imageFloats.count)
-        )
-        isDataDirty = true
+        currentImageChannels = 3 // we output RGB bytes
+        hasNewFrame = true
+        let shouldStartProcessing = !isProcessingFrame
+        if shouldStartProcessing { isProcessingFrame = true }
         lock.unlock()
 
-        // Generate UI images and point cloud
-        let depthImage = depthDataToUIImage(depthData: depthData)
-        let camImage = sampleBufferToUIImage(sampleBuffer: videoBuffer)
+        if shouldStartProcessing {
+            processingQueue.async { [weak self] in
+                guard let self = self else { return }
+                while true {
+                    var requestedExit = false
+                    autoreleasepool {
+                        // Snapshot latest buffers
+                        self.lock.lock()
+                        let localVideoBuffer = self.currentVideoBuffer
+                        let localDepthData = self.currentDepthData
+                        self.hasNewFrame = false
+                        self.lock.unlock()
 
-        // Stream video if enabled
-        if let image = camImage {
-            streamFrame(image: image)
-        }
+                        guard let localVideoBuffer = localVideoBuffer,
+                              let localDepthData = localDepthData,
+                              let localImageBuffer = CMSampleBufferGetImageBuffer(localVideoBuffer)
+                        else {
+                            requestedExit = true
+                            return
+                        }
 
-        DispatchQueue.main.async {
-            self.depthMapImage = depthImage
-            self.cameraImage = camImage
-            self.pointCloud = pointCloudData
-            self.depthPixels = depthPixelData
+                        let localTimestamp = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(localVideoBuffer))
+
+                        // Build RGB bytes (uint8) from BGRA
+                        let imageWidth = CVPixelBufferGetWidth(localImageBuffer)
+                        let imageHeight = CVPixelBufferGetHeight(localImageBuffer)
+                        let srcChannels = 4
+                        let imageChannels = 3
+                        let imagePixelCount = imageWidth * imageHeight
+                        let imageElementCount = min(imagePixelCount * imageChannels, LidarCameraConstants.maxImageSize)
+                        var imageBytesOut = [UInt8](repeating: 0, count: imageElementCount)
+
+                        CVPixelBufferLockBaseAddress(localImageBuffer, .readOnly)
+                        if let baseAddr = CVPixelBufferGetBaseAddress(localImageBuffer) {
+                            let bytesPerRow = CVPixelBufferGetBytesPerRow(localImageBuffer)
+                            let src = baseAddr.assumingMemoryBound(to: UInt8.self)
+                            let maxRows = imageElementCount / (imageWidth * imageChannels)
+                            let rows = min(imageHeight, maxRows)
+                            var y = 0
+                            while y < rows {
+                                let rowBase = src.advanced(by: y * bytesPerRow)
+                                var x = 0
+                                while x < imageWidth {
+                                    let pixelBase = rowBase.advanced(by: x * srcChannels)
+                                    let dstIndex = (y * imageWidth + x) * imageChannels
+                                    if dstIndex + 2 >= imageBytesOut.count {
+                                        // stop filling this row
+                                        x = imageWidth
+                                        continue
+                                    }
+                                    imageBytesOut[dstIndex] = pixelBase[0]
+                                    imageBytesOut[dstIndex + 1] = pixelBase[1]
+                                    imageBytesOut[dstIndex + 2] = pixelBase[2]
+                                    x += 1
+                                }
+                                y += 1
+                            }
+                        }
+                        CVPixelBufferUnlockBaseAddress(localImageBuffer, .readOnly)
+
+                        // Heavy computations off the capture queue
+                        let pointCloudData = self.depthDataToPointCloud(depthData: localDepthData)
+                        let depthPixelData = self.depthDataToPixels(depthData: localDepthData)
+                        let depthImage = self.depthDataToUIImage(depthData: localDepthData)
+                        let camImage = self.sampleBufferToUIImage(sampleBuffer: localVideoBuffer)
+
+                        // Stream video if enabled
+                        if let image = camImage {
+                            self.streamFrame(image: image)
+                        }
+
+                        // Prepare points array for WASM
+                        var pointsFloats: [Float32] = []
+                        if let pointCloudData = pointCloudData {
+                            let pointCount = min(pointCloudData.count, LidarCameraConstants.maxPointsPerScan)
+                            pointsFloats.reserveCapacity(pointCount * LidarCameraConstants.floatsPerPoint)
+                            var i = 0
+                            while i < pointCount {
+                                let p = pointCloudData.points[i]
+                                pointsFloats.append(p.x)
+                                pointsFloats.append(p.y)
+                                pointsFloats.append(p.z)
+                                i += 1
+                            }
+                        }
+
+                        // Publish UI updates
+                        DispatchQueue.main.async {
+                            self.depthMapImage = depthImage
+                            self.cameraImage = camImage
+                            self.pointCloud = pointCloudData
+                            self.depthPixels = depthPixelData
+                        }
+
+                        // Update current data for WASM
+                        self.lock.lock()
+                        self.currentData = LidarCameraData(
+                            timestamp: localTimestamp,
+                            points: pointsFloats,
+                            points_size: Int32(pointsFloats.count),
+                            image: imageBytesOut,
+                            image_size: Int32(imageBytesOut.count)
+                        )
+                        self.isDataDirty = true
+
+                        // Decide whether to process another pending frame
+                        let shouldContinue = self.hasNewFrame
+                        if !shouldContinue { self.isProcessingFrame = false }
+                        self.lock.unlock()
+
+                        if !shouldContinue { requestedExit = true }
+                    }
+                    if requestedExit { break }
+                }
+            }
         }
     }
 }
@@ -675,7 +720,7 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
 
     let imageOffset = pointsSizeOffset + MemoryLayout<Int32>.size
     let imageMaxCount = LidarCameraConstants.maxImageSize
-    let imageByteCount = imageMaxCount * MemoryLayout<Float32>.size
+    let imageByteCount = imageMaxCount * MemoryLayout<UInt8>.size
     let imageSizeOffset = imageOffset + imageByteCount
     let totalBytes = imageSizeOffset + MemoryLayout<Int32>.size
 
@@ -708,7 +753,7 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
     if imageCount > 0 {
         data.image.withUnsafeBytes { src in
             if let srcBase = src.baseAddress {
-                memcpy(basePtr.advanced(by: imageOffset), srcBase, imageCount * MemoryLayout<Float32>.size)
+                memcpy(basePtr.advanced(by: imageOffset), srcBase, imageCount * MemoryLayout<UInt8>.size)
             }
         }
     }
