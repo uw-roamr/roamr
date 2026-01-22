@@ -9,6 +9,8 @@ import Foundation
 import SwiftUI
 
 struct SettingsPage: View {
+	@State private var rerunURL: String = RerunWebSocketClient.shared.serverURLString
+
 	private var appVersion: String {
 		Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
 	}
@@ -16,6 +18,32 @@ struct SettingsPage: View {
 	var body: some View {
 		VStack(spacing: 30) {
 			Spacer()
+
+			VStack(alignment: .leading, spacing: 12) {
+				Text("Rerun WebSocket")
+					.font(.headline)
+				TextField("ws://host:port", text: $rerunURL)
+					.textInputAutocapitalization(.never)
+					.autocorrectionDisabled(true)
+					.keyboardType(.URL)
+					.textFieldStyle(.roundedBorder)
+				Text("Default: \(RerunWebSocketClient.defaultServerURLString)")
+					.font(.caption)
+					.foregroundColor(.secondary)
+				Button("Apply") {
+					RerunWebSocketClient.shared.updateServerURL(rerunURL)
+				}
+				.buttonStyle(.borderedProminent)
+				Button("Reset to Default") {
+					rerunURL = RerunWebSocketClient.defaultServerURLString
+					RerunWebSocketClient.shared.updateServerURL(rerunURL)
+				}
+				.buttonStyle(.bordered)
+			}
+			.padding()
+			.background(Color(.systemGray6))
+			.cornerRadius(12)
+			.padding(.horizontal)
 
 			// App name
 			Text("roamr")
@@ -36,5 +64,8 @@ struct SettingsPage: View {
 			Spacer()
 		}
 		.padding()
+		.onAppear {
+			rerunURL = RerunWebSocketClient.shared.serverURLString
+		}
 	}
 }

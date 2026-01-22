@@ -37,7 +37,8 @@ class WasmManager {
         let nativeFunctions: [NativeFunction] = [
             NativeFunction(name: "read_imu", signature: "(*)", impl: read_imu_impl),
             NativeFunction(name: "init_camera", signature: "(*)", impl: init_camera_impl),
-            NativeFunction(name: "read_lidar_camera", signature: "(*)", impl: read_lidar_camera_impl)
+            NativeFunction(name: "read_lidar_camera", signature: "(*)", impl: read_lidar_camera_impl),
+            NativeFunction(name: "rerun_log_points", signature: "(*)", impl: rerun_log_points_impl)
         ]
 
         let nativeSymbolPtr = UnsafeMutablePointer<NativeSymbol>.allocate(capacity: nativeFunctions.count)
