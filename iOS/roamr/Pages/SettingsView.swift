@@ -10,7 +10,8 @@ import SwiftUI
 
 struct SettingsPage: View {
     @Environment(\.safeAreaInsets) private var safeAreaInsets
-    @State private var showLoginSheet = false
+    @State private var isLoading = false
+    @State private var errorMessage: String?
 
     private var authManager: AuthManager { AuthManager.shared }
 
@@ -19,87 +20,86 @@ struct SettingsPage: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                accountSection
-
-                Divider()
-                    .padding(.horizontal)
-
-                appInfoSection
+        VStack(spacing: 0) {
+            PageHeader(
+                title: "Settings",
+                statusText: authManager.isAuthenticated ? "\(authManager.email)" : "Not signed in",
+                statusColor: authManager.isAuthenticated ? .green : .gray
+            ) {
+                ProfileButton(isAuthenticated: authManager.isAuthenticated)
             }
-            .padding(.vertical)
+
+			VStack(spacing: 24) {
+				Spacer()
+				appInfoSection
+
+				accountSection
+				Spacer()
+			}
+			.padding(.vertical)
         }
         .padding(.top, safeAreaInsets.top)
         .padding(.bottom, safeAreaInsets.bottom + AppConstants.shared.tabBarHeight)
-        .sheet(isPresented: $showLoginSheet) {
-            LoginView()
-        }
     }
 
     @ViewBuilder
     private var accountSection: some View {
         VStack(spacing: 16) {
-            Text("Account")
-                .font(.headline)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal)
+            if let error = errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
 
             if authManager.isAuthenticated {
-                VStack(spacing: 12) {
-                    HStack(spacing: 16) {
-                        Image(systemName: "person.circle.fill")
-                            .font(.system(size: 48))
-                            .foregroundStyle(.blue)
-
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(authManager.displayName)
-                                .font(.headline)
-                            Text(authManager.email)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer()
-                    }
-                    .padding()
-                    .background(Color(.systemGray6))
-                    .cornerRadius(12)
-                    .padding(.horizontal)
-
-                    Button {
-                        signOut()
-                    } label: {
-                        Text("Sign Out")
-                            .foregroundStyle(.red)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color(.systemGray6))
-                            .cornerRadius(10)
-                    }
-                    .padding(.horizontal)
-                }
+                // Signed in - show sign out button
+				Button {
+					signOut()
+				} label: {
+					HStack(spacing: 10) {
+						Image(systemName: "rectangle.portrait.and.arrow.right")
+							.font(.body)
+						Text("Sign Out")
+							.fontWeight(.medium)
+					}
+					.padding(.horizontal, 20)
+					.padding(.vertical, 14)
+					.background(Color.red)
+					.foregroundStyle(.white)
+					.clipShape(Capsule())
+					.overlay(
+						Capsule()
+							.stroke(Color.gray.opacity(0.5), lineWidth: 1)
+					)
+				}
             } else {
-                VStack(spacing: 12) {
-                    Text("Sign in to access your WASM files and sync across devices")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-
+                // Not signed in - show Google sign in button
                     Button {
-                        showLoginSheet = true
+                        Task {
+                            await signInWithGoogle()
+                        }
                     } label: {
-                        Text("Sign In")
-                            .fontWeight(.semibold)
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(Color.blue)
-                            .cornerRadius(10)
+                        HStack(spacing: 10) {
+                            Image("google")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: 20, height: 20)
+                            Text(isLoading ? "Signing in..." : "Sign in with Google")
+                                .fontWeight(.medium)
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 14)
+                        .background(Color.black)
+                        .foregroundStyle(.white)
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.gray.opacity(0.5), lineWidth: 1)
+                        )
                     }
-                    .padding(.horizontal)
-                }
+                    .disabled(isLoading)
             }
         }
     }
@@ -107,10 +107,6 @@ struct SettingsPage: View {
     @ViewBuilder
     private var appInfoSection: some View {
         VStack(spacing: 16) {
-            Image(systemName: "antenna.radiowaves.left.and.right")
-                .font(.system(size: 48))
-                .foregroundStyle(.blue)
-
             Text("roamr")
                 .font(.largeTitle)
                 .fontWeight(.bold)
@@ -125,14 +121,40 @@ struct SettingsPage: View {
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 30)
         }
-        .padding(.top, 20)
+    }
+
+    private func signInWithGoogle() async {
+        isLoading = true
+        errorMessage = nil
+
+        do {
+            try await AuthManager.shared.signInWithGoogle()
+        } catch {
+            errorMessage = AuthManager.shared.error ?? error.localizedDescription
+        }
+
+        isLoading = false
     }
 
     private func signOut() {
         do {
             try authManager.signOut()
+            errorMessage = nil
         } catch {
-            print("Sign out error: \(error)")
+            errorMessage = "Sign out failed"
         }
+    }
+}
+
+struct ProfileButton: View {
+    let isAuthenticated: Bool
+
+    var body: some View {
+        Image(systemName: isAuthenticated ? "person.crop.circle.fill.badge.checkmark" : "person.crop.circle")
+            .font(.title)
+            .foregroundStyle(isAuthenticated ? .green : .secondary)
+            .frame(width: 44, height: 44)
+            .background(isAuthenticated ? Color.green.opacity(0.15) : Color.gray.opacity(0.15))
+            .clipShape(Circle())
     }
 }

@@ -1,12 +1,16 @@
 import {
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
+  signInWithPopup,
+  GoogleAuthProvider,
   signOut,
   updateProfile,
   User,
 } from 'firebase/auth';
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { auth, db } from '../config/firebase';
+
+const googleProvider = new GoogleAuthProvider();
 
 export interface AuthError {
   code: string;
@@ -36,6 +40,24 @@ export async function signUp(
 export async function signIn(email: string, password: string): Promise<User> {
   const userCredential = await signInWithEmailAndPassword(auth, email, password);
   return userCredential.user;
+}
+
+export async function signInWithGoogle(): Promise<User> {
+  const userCredential = await signInWithPopup(auth, googleProvider);
+  const user = userCredential.user;
+
+  // Check if user document exists, create if not
+  const userDoc = await getDoc(doc(db, 'users', user.uid));
+  if (!userDoc.exists()) {
+    await setDoc(doc(db, 'users', user.uid), {
+      email: user.email,
+      displayName: user.displayName,
+      createdAt: serverTimestamp(),
+      uploadCount: 0,
+    });
+  }
+
+  return user;
 }
 
 export async function logOut(): Promise<void> {

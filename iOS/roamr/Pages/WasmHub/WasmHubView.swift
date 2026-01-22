@@ -8,7 +8,7 @@
 import SwiftUI
 
 enum WasmHubTab: String, CaseIterable {
-    case hub = "Hub"
+    case hub = "Home"
     case downloaded = "Downloaded"
 }
 

@@ -8,6 +8,8 @@
 import Foundation
 import FirebaseAuth
 import FirebaseFirestore
+import FirebaseCore
+import GoogleSignIn
 
 @Observable
 class AuthManager {
@@ -38,6 +40,62 @@ class AuthManager {
     private func setupAuthStateListener() {
         authStateListener = Auth.auth().addStateDidChangeListener { [weak self] _, user in
             self?.currentUser = user
+        }
+    }
+
+    @MainActor
+    func signInWithGoogle() async throws {
+        isLoading = true
+        error = nil
+
+        guard let clientID = FirebaseApp.app()?.options.clientID else {
+            isLoading = false
+            self.error = "Firebase configuration error"
+            throw NSError(domain: "AuthManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing client ID"])
+        }
+
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let rootViewController = windowScene.windows.first?.rootViewController else {
+            isLoading = false
+            self.error = "Unable to get root view controller"
+            throw NSError(domain: "AuthManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "No root view controller"])
+        }
+
+        let config = GIDConfiguration(clientID: clientID)
+        GIDSignIn.sharedInstance.configuration = config
+
+        do {
+            let result = try await GIDSignIn.sharedInstance.signIn(withPresenting: rootViewController)
+            guard let idToken = result.user.idToken?.tokenString else {
+                isLoading = false
+                self.error = "Failed to get ID token"
+                throw NSError(domain: "AuthManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Missing ID token"])
+            }
+
+            let credential = GoogleAuthProvider.credential(
+                withIDToken: idToken,
+                accessToken: result.user.accessToken.tokenString
+            )
+
+            let authResult = try await Auth.auth().signIn(with: credential)
+
+            // Create user document if it doesn't exist
+            let db = Firestore.firestore()
+            let userDoc = try await db.collection("users").document(authResult.user.uid).getDocument()
+            if !userDoc.exists {
+                try await db.collection("users").document(authResult.user.uid).setData([
+                    "email": authResult.user.email ?? "",
+                    "displayName": authResult.user.displayName ?? "",
+                    "createdAt": FieldValue.serverTimestamp(),
+                    "uploadCount": 0
+                ])
+            }
+
+            isLoading = false
+        } catch {
+            isLoading = false
+            self.error = error.localizedDescription
+            throw error
         }
     }
 

@@ -98,7 +98,7 @@ struct WasmFileRow: View {
             Button(action: onDownload) {
                 Image(systemName: "arrow.down.circle.fill")
                     .font(.system(size: 32))
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(Color("AccentColor"))
             }
         }
     }

@@ -29,9 +29,6 @@ export function Header() {
         </Link>
 
         <nav className={styles.nav}>
-          <Link to="/browse" className={styles.navLink}>
-            Browse
-          </Link>
           {user ? (
             <>
               <Link to="/dashboard" className={styles.navLink}>
@@ -50,16 +47,9 @@ export function Header() {
               </div>
             </>
           ) : (
-            <div className={styles.authButtons}>
-              <Link to="/login">
-                <Button variant="ghost" size="sm">
-                  Log in
-                </Button>
-              </Link>
-              <Link to="/register">
-                <Button size="sm">Sign up</Button>
-              </Link>
-            </div>
+            <Link to="/login">
+              <Button size="sm">Log in</Button>
+            </Link>
           )}
         </nav>
       </div>

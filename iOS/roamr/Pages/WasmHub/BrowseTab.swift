@@ -26,23 +26,19 @@ struct BrowseTab: View {
     var body: some View {
         VStack(spacing: 0) {
             VStack(spacing: 12) {
-                HStack {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField("Search WASM files...", text: $searchText)
-                }
-                .padding(10)
-                .background(Color(.systemGray6))
-                .cornerRadius(10)
-                .padding(.horizontal)
-
+                // Filter chips at top
                 if authManager.isAuthenticated {
-                    Picker("Filter", selection: $selectedFilter) {
+                    HStack(spacing: 8) {
                         ForEach(BrowseFilter.allCases, id: \.self) { filter in
-                            Text(filter.rawValue).tag(filter)
+                            FilterChip(
+                                title: filter.rawValue,
+                                isSelected: selectedFilter == filter
+                            ) {
+                                selectedFilter = filter
+                            }
                         }
+                        Spacer()
                     }
-                    .pickerStyle(.segmented)
                     .padding(.horizontal)
                 }
             }
@@ -162,6 +158,25 @@ struct BrowseTab: View {
             onSelectFile(localFile)
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+}
+
+struct FilterChip: View {
+    let title: String
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(isSelected ? Color("AccentColor") : Color.gray.opacity(0.4))
+                .foregroundStyle(isSelected ? .white : .secondary)
+                .clipShape(Capsule())
         }
     }
 }
