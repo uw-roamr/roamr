@@ -2,6 +2,7 @@
 import argparse
 import asyncio
 import json
+from collections import deque
 
 import rerun as rr
 import websockets
@@ -58,7 +59,7 @@ def set_rerun_time(timestamp):
         rr.set_time_sequence("timestamp", int(timestamp * 1e6))
 
 
-async def handle_client(websocket):
+async def handle_client(websocket, history):
     peer = websocket.remote_address
     print(f"[rerun] client connected: {peer}")
     async for message in websocket:
@@ -79,34 +80,31 @@ async def handle_client(websocket):
 
         timestamp = float(payload.get("timestamp") or 0.0)
         points = points_from_flat(flat_points)
-        # set_rerun_time(timestamp)
-        print(points)
-        rr.log("lidar/points", rr.Points3D(points))
+        history.append((timestamp, points))
+        for ts, pts in history:
+            set_rerun_time(ts)
+            rr.log("lidar/points", rr.Points3D(pts))
 
 
 def main():
     parser = argparse.ArgumentParser(description="Rerun websocket bridge for roamr point clouds.")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=9877)
-    parser.add_argument("--spawn", action="store_true", help="Spawn the Rerun viewer.")
+    parser.add_argument("--spawn", action="store_true", help="Spawn the Rerun viewer.", default=True)
     parser.add_argument(
-        "--spawn-if-possible",
-        action="store_true",
-        help="Try to spawn the Rerun viewer; fall back if already running.",
+        "--history",
+        type=int,
+        default=10,
+        help="Number of recent scans to retain and replay each update.",
     )
 
     args = parser.parse_args()
 
     rr.init("roamr")
     server_uri = None
-    if args.spawn or args.spawn_if_possible:
-        try:
-            server_uri = rr.serve_grpc()
-        except Exception as exc:
-            if args.spawn_if_possible and not args.spawn:
-                print(f"[rerun] gRPC server already running, continuing without: {exc}")
-            else:
-                raise
+    if args.spawn:
+        
+        server_uri = rr.serve_grpc()
         if server_uri is not None:
             try:
                 rr.serve_web_viewer(connect_to=server_uri)
@@ -117,9 +115,10 @@ def main():
                     raise
 
     async def runner():
+        history = deque(maxlen=max(1, args.history))
         print(f"[rerun] listening on {args.host}:{args.port}")
         async with websockets.serve(
-            handle_client,
+            lambda ws: handle_client(ws, history),
             args.host,
             args.port,
             max_size=20 * 1024 * 1024,
