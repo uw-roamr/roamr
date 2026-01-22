@@ -1,0 +1,83 @@
+.page {
+  max-width: 600px;
+  margin: 0 auto;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.title {
+  margin: 0 0 0.5rem 0;
+  font-size: 2rem;
+  font-weight: 700;
+  color: #f0f0f0;
+}
+
+.subtitle {
+  margin: 0;
+  font-size: 1rem;
+  color: #888;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #e0e0e0;
+}
+
+.textarea {
+  padding: 0.75rem 1rem;
+  font-size: 1rem;
+  border-radius: 8px;
+  border: 1px solid #3a3a3a;
+  background: #1a1a1a;
+  color: #f0f0f0;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 80px;
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: #646cff;
+}
+
+.textarea::placeholder {
+  color: #666;
+}
+
+.checkboxLabel {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  font-size: 0.875rem;
+  color: #e0e0e0;
+}
+
+.checkboxLabel input[type='checkbox'] {
+  width: 1.25rem;
+  height: 1.25rem;
+  accent-color: #646cff;
+  cursor: pointer;
+}
+
+.hint {
+  margin: 0;
+  font-size: 0.75rem;
+  color: #666;
+}
