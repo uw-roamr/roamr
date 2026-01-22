@@ -1,0 +1,46 @@
+.container {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  z-index: 1100;
+}
+
+.toast {
+  padding: 1rem 1.5rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  animation: slideIn 0.3s ease;
+  max-width: 350px;
+  word-break: break-word;
+}
+
+.success {
+  background: #28a745;
+  color: white;
+}
+
+.error {
+  background: #dc3545;
+  color: white;
+}
+
+.info {
+  background: #17a2b8;
+  color: white;
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}

@@ -17,7 +17,7 @@ struct ContentView: View {
 				Group {
 					switch currentPage {
 					case .wasm:
-						WasmView()
+						WasmHubView()
 					case .camera:
 						CameraDepthView()
 					case .bluetooth:

@@ -1,0 +1,35 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Users collection
+    match /users/{userId} {
+      // Users can read their own profile
+      allow read: if request.auth != null && request.auth.uid == userId;
+      // Users can create their own profile on signup
+      allow create: if request.auth != null && request.auth.uid == userId;
+      // Users can update their own profile (uploadCount)
+      allow update: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // WASM files collection
+    match /wasmFiles/{fileId} {
+      // Anyone can read public files
+      // Only owner can read private files
+      allow read: if resource.data.isPublic == true ||
+                    (request.auth != null && request.auth.uid == resource.data.uploaderId);
+
+      // Only authenticated users can create files
+      allow create: if request.auth != null &&
+                      request.auth.uid == request.resource.data.uploaderId;
+
+      // Only owner can update their files
+      allow update: if request.auth != null &&
+                      request.auth.uid == resource.data.uploaderId;
+
+      // Only owner can delete their files
+      allow delete: if request.auth != null &&
+                      request.auth.uid == resource.data.uploaderId;
+    }
+  }
+}
