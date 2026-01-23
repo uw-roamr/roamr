@@ -50,7 +50,9 @@ class WasmManager {
 
         let nativeFunctions: [NativeFunction] = [
             NativeFunction(name: "read_imu", signature: "(*)", impl: read_imu_impl),
-            NativeFunction(name: "read_lidar_camera", signature: "(*)", impl: read_lidar_camera_impl)
+            NativeFunction(name: "init_camera", signature: "(*)", impl: init_camera_impl),
+            NativeFunction(name: "read_lidar_camera", signature: "(*)", impl: read_lidar_camera_impl),
+            NativeFunction(name: "rerun_log_points", signature: "(*)", impl: rerun_log_points_impl)
         ]
 
         let nativeSymbolPtr = UnsafeMutablePointer<NativeSymbol>.allocate(capacity: nativeFunctions.count)
@@ -92,8 +94,26 @@ class WasmManager {
     }
 
     func runWasmFile(named fileName: String) {
-        guard let wasmPath = Bundle.main.path(forResource: fileName, ofType: "wasm") else {
-            print("Error: Could not find \(fileName).wasm")
+        guard initializeRuntime() else { return }
+
+        let bundle = Bundle.main
+        var wasmURL: URL?
+
+        if let url = bundle.url(forResource: fileName, withExtension: "wasm") {
+            wasmURL = url
+        } else if let url = bundle.url(forResource: fileName, withExtension: "wasm", subdirectory: "WASM") {
+            wasmURL = url
+        } else if let resourceURL = bundle.resourceURL {
+            // Fallback for folder references packaged as subdirectories
+            let candidate = resourceURL.appendingPathComponent("WASM/\(fileName).wasm")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                wasmURL = candidate
+            }
+        }
+
+        guard let resolvedWasmURL = wasmURL else {
+            let present = bundle.paths(forResourcesOfType: "wasm", inDirectory: nil)
+            print("Error: Could not find \(fileName).wasm. Bundle currently has: \(present)")
             return
         }
         runWasmFile(at: URL(fileURLWithPath: wasmPath))
@@ -107,7 +127,7 @@ class WasmManager {
         lock.unlock()
 
         do {
-            let wasmBytes = try Data(contentsOf: fileURL)
+            let wasmBytes = try Data(contentsOf: resolvedWasmURL)
 
             wasmBytes.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
                 guard let baseAddress = buffer.baseAddress else { return }

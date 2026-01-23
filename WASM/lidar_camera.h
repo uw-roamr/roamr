@@ -6,7 +6,7 @@
 
 // time synchronized LiDAR points and camera image
 
-struct LidarCameraConfig {
+struct CameraConfig {
   double timestamp;
 
   int image_width;
@@ -16,24 +16,24 @@ struct LidarCameraConfig {
 
 constexpr int max_points_per_scan = 100000;
 constexpr int float_per_point = 3;
-constexpr int max_points_size_float = max_points_per_scan * float_per_point;
+constexpr size_t max_points_size = static_cast<size_t>(max_points_per_scan * float_per_point);
 
-constexpr int max_image_height = 1920;
-constexpr int max_image_width = 1080;
+constexpr int max_image_height = 1440;
+constexpr int max_image_width = 1920;
 constexpr int max_image_channels = 3;
-constexpr int max_image_size_float = max_points_per_scan * max_image_height * max_image_channels;
+constexpr size_t max_image_size = static_cast<size_t> (max_image_width * max_image_height * max_image_channels);
 
 struct LidarCameraData {
   double timestamp;
 
-  std::array<float, max_points_size_float> points;
-  int points_size;
+  std::array<float, max_points_size> points;
+  size_t points_size;
 
-  std::array<float, max_image_size_float> image;
-  int image_size;
+  std::array<uint8_t, max_image_size> image;
+  size_t image_size;
 };
 
-WASM_IMPORT("host", "init_lidar_camera") void init_lidar_camera(LidarCameraConfig *config);
+WASM_IMPORT("host", "init_camera") void init_camera(CameraConfig *config);
 WASM_IMPORT("host", "read_lidar_camera") void read_lidar_camera(LidarCameraData *data);
 
 constexpr double LidarCameraRefreshHz = 30.0;
