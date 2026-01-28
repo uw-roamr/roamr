@@ -112,39 +112,6 @@
 			(embedded_fonts no)
 		)
 	)
-	(hierarchical_label "12V"
-		(shape input)
-		(at 137.16 66.04 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "22ad95a9-6596-4ffd-a07f-341ebdf26976")
-	)
-	(hierarchical_label "3V"
-		(shape input)
-		(at 137.16 92.71 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "2c44fc58-e8eb-4961-a324-ad3022eccabc")
-	)
-	(hierarchical_label "5V"
-		(shape input)
-		(at 137.16 78.74 0)
-		(effects
-			(font
-				(size 1.27 1.27)
-			)
-			(justify left)
-		)
-		(uuid "8ca9a11d-3994-4719-8542-c1b1a35950e8")
-	)
 	(symbol
 		(lib_id "power:GND")
 		(at 137.16 104.14 0)

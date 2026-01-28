@@ -1122,7 +1122,7 @@
 	)
 	(symbol
 		(lib_id "ul_DRV8316CRRGFR:DRV8316CRRGFR")
-		(at 64.77 60.96 0)
+		(at 62.23 60.96 0)
 		(unit 2)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -1131,7 +1131,7 @@
 		(fields_autoplaced yes)
 		(uuid "7f26bfa2-6028-4ddb-9e88-bb6a5223d870")
 		(property "Reference" "U1"
-			(at 99.06 93.9799 0)
+			(at 96.52 93.9799 0)
 			(effects
 				(font
 					(size 1.524 1.524)
@@ -1140,7 +1140,7 @@
 			)
 		)
 		(property "Value" "DRV8316CRRGFR"
-			(at 99.06 96.5199 0)
+			(at 96.52 96.5199 0)
 			(effects
 				(font
 					(size 1.524 1.524)
@@ -1149,7 +1149,7 @@
 			)
 		)
 		(property "Footprint" "VQFN40_RGF_TEX"
-			(at 64.77 60.96 0)
+			(at 62.23 60.96 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1159,7 +1159,7 @@
 			)
 		)
 		(property "Datasheet" "https://www.ti.com/lit/gpn/drv8316c"
-			(at 64.77 60.96 0)
+			(at 62.23 60.96 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -1169,7 +1169,7 @@
 			)
 		)
 		(property "Description" ""
-			(at 64.77 60.96 0)
+			(at 62.23 60.96 0)
 			(effects
 				(font
 					(size 1.27 1.27)
