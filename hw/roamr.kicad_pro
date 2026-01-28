@@ -250,7 +250,7 @@
     "pinned_symbol_libs": []
   },
   "meta": {
-    "filename": "roamr-motors.kicad_pro",
+    "filename": "roamr.kicad_pro",
     "version": 3
   },
   "net_settings": {
@@ -410,24 +410,8 @@
   },
   "sheets": [
     [
-      "db664d1d-d972-4e66-af85-94b6971e1c6e",
+      "bfe84b16-3df2-48dd-882e-523c3a68f778",
       "Root"
-    ],
-    [
-      "13aa2ca6-0712-4a81-a789-524f2cf7987a",
-      "Power (page 2)"
-    ],
-    [
-      "206ea9a6-1e38-4e76-a070-d60887d5750e",
-      "Microcontroller"
-    ],
-    [
-      "c69cc801-0c40-4712-a8df-c9e7b1a11d6f",
-      "BLDC Driver 1"
-    ],
-    [
-      "6fb3ef19-f3df-431d-bde7-764fb42db7f0",
-      "BLDC Driver 2"
     ]
   ],
   "text_variables": {}
