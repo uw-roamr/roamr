@@ -7,6 +7,7 @@
 
 import Foundation
 import CoreMotion
+import QuartzCore
 
 struct IMUData {
     var acc_timestamp: Double
@@ -19,13 +20,25 @@ struct IMUData {
     var gyro_z: Double
 }
 
+struct AttitudeData {
+    var timestamp: Double
+    var quat_x: Double
+    var quat_y: Double
+    var quat_z: Double
+    var quat_w: Double
+}
+
 class IMUManager {
     static let shared = IMUManager()
 
     private let motionManager = CMMotionManager()
+    private var lastPoseSendTime: CFTimeInterval = 0
+    private let poseSendInterval: CFTimeInterval = 1.0 / 30.0  // throttle to ~30 Hz
+
     let lock = NSLock()
     var currentData = IMUData(acc_timestamp: 0, acc_x: 0, acc_y: 0, acc_z: 0, gyro_timestamp: 0, gyro_x: 0, gyro_y: 0, gyro_z: 0
     )
+    var currentAttitude = AttitudeData(timestamp: 0, quat_x: 0, quat_y: 0, quat_z: 0, quat_w: 1)
 
     private init() {}
 
@@ -60,11 +73,36 @@ class IMUManager {
                 self.lock.unlock()
             }
         }
+
+        if motionManager.isDeviceMotionAvailable {
+            motionManager.deviceMotionUpdateInterval = 1.0 / 60.0 // 60 Hz for pose
+            motionManager.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] (motion, _) in
+                guard let self = self, let motion = motion else { return }
+                let q = motion.attitude.quaternion
+                self.lock.lock()
+                self.currentAttitude = AttitudeData(
+                    timestamp: motion.timestamp,
+                    quat_x: q.x, quat_y: q.y, quat_z: q.z, quat_w: q.w
+                )
+                self.lock.unlock()
+
+                // Stream pose to Rerun (throttled)
+                let now = CACurrentMediaTime()
+                if now - self.lastPoseSendTime >= self.poseSendInterval {
+                    self.lastPoseSendTime = now
+                    RerunWebSocketClient.shared.logPose(
+                        timestamp: motion.timestamp,
+                        quaternion: [q.x, q.y, q.z, q.w]
+                    )
+                }
+            }
+        }
     }
 
     func stop() {
         motionManager.stopAccelerometerUpdates()
         motionManager.stopGyroUpdates()
+        motionManager.stopDeviceMotionUpdates()
     }
 }
 

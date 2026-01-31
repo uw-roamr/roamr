@@ -27,6 +27,25 @@ def points_from_flat(flat_points):
     return points
 
 
+def colors_from_z(points):
+    """Map z-coordinate to RGB colors (blue=low z, red=high z)."""
+    if not points:
+        return None
+    z_vals = [p[2] for p in points]
+    min_z, max_z = min(z_vals), max(z_vals)
+    span = max_z - min_z
+    if span == 0:
+        span = 1.0
+    colors = []
+    for p in points:
+        t = (p[2] - min_z) / span
+        r = int(255 * t)
+        g = int(128 + 127 * (1 - abs(2 * t - 1)))
+        b = int(255 * (1 - t))
+        colors.append([r, g, b])
+    return colors
+
+
 def log_handshake(*args, **kwargs):
     try:
         if len(args) >= 2 and hasattr(args[1], "items"):
@@ -71,19 +90,52 @@ async def handle_client(websocket, history):
         if not payload:
             continue
 
-        if payload.get("type") != "points3d":
+        msg_type = payload.get("type")
+
+        timestamp = float(payload.get("timestamp") or 0.0)
+        set_rerun_time(timestamp)
+
+        if msg_type == "pose":
+            quat = payload.get("quaternion") or []
+            if len(quat) == 4:
+                rr.log(
+                    "phone/pose",
+                    rr.Transform3D(
+                        translation=[0, 0, 0],
+                        rotation=rr.Quaternion(xyzw=quat),
+                    ),
+                )
+            continue
+
+        if msg_type != "points3d":
             continue
 
         flat_points = payload.get("points") or []
         if not flat_points:
             continue
+        flat_colors = payload.get("colors") or []
 
-        timestamp = float(payload.get("timestamp") or 0.0)
         points = points_from_flat(flat_points)
-        history.append((timestamp, points))
-        for ts, pts in history:
-            set_rerun_time(ts)
-            rr.log("lidar/points", rr.Points3D(pts))
+        # Align colors to points if present (expect RGB triplets)
+        colors = None
+        if flat_colors:
+            colors = []
+            for i in range(0, min(len(flat_colors), len(points) * 3) - 2, 3):
+                colors.append([flat_colors[i], flat_colors[i + 1], flat_colors[i + 2]])
+
+        history.append((timestamp, points, colors))
+        merged_points = []
+        merged_colors = [] if any(c is not None for _, _, c in history) else None
+        for _, pts, cols in history:
+            merged_points.extend(pts)
+            if merged_colors is not None:
+                if cols is not None:
+                    merged_colors.extend(cols)
+                else:
+                    merged_colors.extend(colors_from_z(pts))
+        set_rerun_time(timestamp)
+        final_colors = merged_colors if merged_colors else colors_from_z(merged_points)
+        rr.log("lidar/points", rr.Points3D(merged_points, colors=final_colors))
 
 
 def main():
@@ -94,8 +146,8 @@ def main():
     parser.add_argument(
         "--history",
         type=int,
-        default=10,
-        help="Number of recent scans to retain and replay each update.",
+        default=5,
+        help="Number of recent scans to retain and replay each update. Set >1 only if points are pose-compensated.",
     )
 
     args = parser.parse_args()

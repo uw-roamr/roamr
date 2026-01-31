@@ -11,6 +11,13 @@ private struct RerunPointsMessage: Codable {
     let type: String
     let timestamp: Double
     let points: [Float]
+    let colors: [UInt8]?
+}
+
+private struct RerunPoseMessage: Codable {
+    let type: String
+    let timestamp: Double
+    let quaternion: [Double]  // x, y, z, w
 }
 
 final class RerunWebSocketClient {
@@ -32,13 +39,34 @@ final class RerunWebSocketClient {
         }
     }
 
-    func logPoints(timestamp: Double, points: [Float]) {
+    func logPoints(timestamp: Double, points: [Float], colors: [UInt8]?) {
         guard !points.isEmpty else { return }
         queue.async { [weak self] in
             guard let self = self else { return }
             self.connectIfNeeded()
 
-            let message = RerunPointsMessage(type: "points3d", timestamp: timestamp, points: points)
+            let message = RerunPointsMessage(type: "points3d", timestamp: timestamp, points: points, colors: colors)
+            guard let payload = try? JSONEncoder().encode(message),
+                  let payloadString = String(data: payload, encoding: .utf8) else {
+                return
+            }
+
+            self.task?.send(.string(payloadString)) { error in
+                if let error = error {
+                    print("Rerun websocket send error: \(error)")
+                    self.isConnected = false
+                }
+            }
+        }
+    }
+
+    func logPose(timestamp: Double, quaternion: [Double]) {
+        guard quaternion.count == 4 else { return }
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            self.connectIfNeeded()
+
+            let message = RerunPoseMessage(type: "pose", timestamp: timestamp, quaternion: quaternion)
             guard let payload = try? JSONEncoder().encode(message),
                   let payloadString = String(data: payload, encoding: .utf8) else {
                 return
@@ -136,16 +164,24 @@ func rerun_log_points_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoin
     let pointsSizeOffset = pointsOffset + pointsByteCount
     let pointsSizeBytes = MemoryLayout<Int32>.size
 
+    let colorsOffset = pointsSizeOffset + pointsSizeBytes
+    let colorsMaxCount = LidarCameraConstants.maxColorsSize
+    let colorsByteCount = colorsMaxCount * MemoryLayout<UInt8>.size
+    let colorsSizeOffset = colorsOffset + colorsByteCount
+    let colorsSizeBytes = MemoryLayout<Int32>.size
+
     if let nativeEnd = nativeEnd {
         let baseAddr = UInt(bitPattern: basePtr)
         let endAddr = UInt(bitPattern: nativeEnd)
-        if baseAddr + UInt(pointsSizeOffset + pointsSizeBytes) > endAddr {
+        if baseAddr + UInt(colorsSizeOffset + colorsSizeBytes) > endAddr {
             return
         }
     }
 
     let timestamp = basePtr.withMemoryRebound(to: Double.self, capacity: 1) { $0.pointee }
     let pointsSizeValue = basePtr.advanced(by: pointsSizeOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let colorsSizeValue = basePtr.advanced(by: colorsSizeOffset)
         .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
 
     let floatsCount = max(0, min(Int(pointsSizeValue), pointsMaxCount))
@@ -155,7 +191,8 @@ func rerun_log_points_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoin
         let baseAddr = UInt(bitPattern: basePtr)
         let endAddr = UInt(bitPattern: nativeEnd)
         let pointsEnd = baseAddr + UInt(pointsOffset + floatsCount * MemoryLayout<Float32>.size)
-        if pointsEnd > endAddr {
+        let colorsEnd = baseAddr + UInt(colorsOffset + max(0, min(Int(colorsSizeValue), colorsMaxCount)) * MemoryLayout<UInt8>.size)
+        if pointsEnd > endAddr || colorsEnd > endAddr {
             return
         }
     }
@@ -176,5 +213,35 @@ func rerun_log_points_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoin
         i += stride
     }
 
-    RerunWebSocketClient.shared.logPoints(timestamp: timestamp, points: sampled)
+    var sampledColors: [UInt8]? = nil
+    if colorsSizeValue > 0 {
+        let colorsCount = max(0, min(Int(colorsSizeValue), colorsMaxCount))
+        let colorsPtr = basePtr.advanced(by: colorsOffset)
+        let strideColors = stride
+        var tmp: [UInt8] = []
+        tmp.reserveCapacity(sampled.count) // 3 bytes per point
+        var iPoint = 0
+        while iPoint < totalPoints {
+            let colorIdx = iPoint * LidarCameraConstants.colorsPerPoint
+            if colorIdx + 2 < colorsCount {
+                tmp.append(colorsPtr[colorIdx + 0])
+                tmp.append(colorsPtr[colorIdx + 1])
+                tmp.append(colorsPtr[colorIdx + 2])
+            }
+            iPoint += strideColors
+        }
+        sampledColors = tmp
+    }
+
+    RerunWebSocketClient.shared.logPoints(timestamp: timestamp, points: sampled, colors: sampledColors)
+
+    // Also ship current phone pose for synchronized visualization
+    let attitude: AttitudeData
+    IMUManager.shared.lock.lock()
+    attitude = IMUManager.shared.currentAttitude
+    IMUManager.shared.lock.unlock()
+    RerunWebSocketClient.shared.logPose(
+        timestamp: timestamp,
+        quaternion: [attitude.quat_x, attitude.quat_y, attitude.quat_z, attitude.quat_w]
+    )
 }

@@ -17,6 +17,8 @@ struct CameraConfig {
 constexpr int max_points_per_scan = 100000;
 constexpr int float_per_point = 3;
 constexpr size_t max_points_size = static_cast<size_t>(max_points_per_scan * float_per_point);
+constexpr int colors_per_point = 3;
+constexpr size_t max_colors_size = static_cast<size_t>(max_points_per_scan * colors_per_point);
 
 constexpr int max_image_height = 1440;
 constexpr int max_image_width = 1920;
@@ -28,6 +30,9 @@ struct LidarCameraData {
 
   std::array<float, max_points_size> points;
   size_t points_size;
+
+  std::array<uint8_t, max_colors_size> colors; // RGB per point
+  size_t colors_size;
 
   std::array<uint8_t, max_image_size> image;
   size_t image_size;

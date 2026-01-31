@@ -23,12 +23,16 @@ struct LidarCameraData {
     var points: [Float32]
     var points_size: Int32
 
+    var colors: [UInt8]
+    var colors_size: Int32
+
     var image: [UInt8]
     var image_size: Int32
 }
 
 struct PointCloudData {
     var points: [SIMD3<Float>]  // 3D world coordinates (meters)
+    var colors: [UInt8]         // RGB per point (len = points.count * 3)
     var count: Int
 }
 
@@ -44,7 +48,9 @@ enum LidarCameraConstants {
     static let maxPointsPerScan = 100000
     static let floatsPerPoint = 3
     static let maxPointsSize = maxPointsPerScan * floatsPerPoint
-
+    
+    static let colorsPerPoint = 3
+    static let maxColorsSize = maxPointsPerScan * colorsPerPoint
     static let maxImageWidth = 1920
     static let maxImageHeight = 1440
     static let maxImageChannels = 3
@@ -94,6 +100,8 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         timestamp: 0,
 		points: [Float32](),
 		points_size: 0,
+		colors: [UInt8](),
+		colors_size: 0,
 		image: [UInt8](),
 		image_size: 0)
 
@@ -371,7 +379,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         return DepthPixelData(pixels: pixels, width: width, height: height, count: pixels.count)
     }
 
-    func depthDataToPointCloud(depthData: AVDepthData) -> PointCloudData? {
+    func depthDataToPointCloud(depthData: AVDepthData, imageBuffer: CVPixelBuffer) -> PointCloudData? {
         // Convert to Float32 if needed
         let convertedDepthData: AVDepthData
         let pixelFormat = CVPixelBufferGetPixelFormatType(depthData.depthDataMap)
@@ -389,8 +397,14 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
 
-        guard let baseAddress = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
-        let depthPointer = baseAddress.assumingMemoryBound(to: Float32.self)
+        guard let depthBaseAddress = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
+        let depthPointer = depthBaseAddress.assumingMemoryBound(to: Float32.self)
+
+        // Get color buffer access (BGRA)
+        CVPixelBufferLockBaseAddress(imageBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(imageBuffer, .readOnly) }
+        guard let colorBaseAddress = CVPixelBufferGetBaseAddress(imageBuffer) else { return nil }
+        let colorBytesPerRow = CVPixelBufferGetBytesPerRow(imageBuffer)
 
         // Get camera intrinsics
         guard let calibration = convertedDepthData.cameraCalibrationData else {
@@ -398,14 +412,30 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
             return nil
         }
 
+        // Scale intrinsics to the actual depth map resolution (depth maps are often downsampled)
         let intrinsics = calibration.intrinsicMatrix
-        let fx = intrinsics[0][0]
-        let fy = intrinsics[1][1]
-        let cx = intrinsics[2][0]
-        let cy = intrinsics[2][1]
+        let refDims = calibration.intrinsicMatrixReferenceDimensions
+        let sx = Float(width) / Float(refDims.width)
+        let sy = Float(height) / Float(refDims.height)
+        let fx = intrinsics[0][0] * sx
+        let fy = intrinsics[1][1] * sy
+        let cx = intrinsics[2][0] * sx
+        let cy = intrinsics[2][1] * sy
+
+        // Prepare optional lens undistortion mapping (distorted -> rectilinear)
+        let inverseLUT = calibration.inverseLensDistortionLookupTable
+        let distortionCenter = calibration.lensDistortionCenter
+
+        // Color buffer sizing may differ from depth; scale sampling coords accordingly
+        let colorWidth = CVPixelBufferGetWidth(imageBuffer)
+        let colorHeight = CVPixelBufferGetHeight(imageBuffer)
+        let colorScaleX = Float(colorWidth) / Float(width)
+        let colorScaleY = Float(colorHeight) / Float(height)
 
         var points: [SIMD3<Float>] = []
         points.reserveCapacity(width * height / 4)
+        var colors: [UInt8] = []
+        colors.reserveCapacity(width * height / 4 * LidarCameraConstants.colorsPerPoint)
 
         for y in 0..<height {
             for x in 0..<width {
@@ -414,16 +444,32 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
                 // Skip invalid depth values
                 guard depth > 0 && depth.isFinite else { continue }
 
-                // Unproject: pixel (x,y) + depth -> 3D point
-                let xWorld = (Float(x) - cx) * depth / fx
-                let yWorld = (Float(y) - cy) * depth / fy
+                // Undistort pixel if calibration data available
+                var px = CGFloat(x)
+                var py = CGFloat(y)
+                // Undistortion: some SDKs ship `lensDistortionPoint(for:lookupTable:distortionCenter:)`.
+                // If unavailable in this deployment target, skip undistortion to keep the build green.
+                // Future: switch to CIFilter-based correction when available.
+
+                // Unproject: pixel (x,y) + depth -> 3D point (meters)
+                let xWorld = (Float(px) - cx) * depth / fx
+                let yWorld = (Float(py) - cy) * depth / fy
                 let zWorld = depth
 
                 points.append(SIMD3<Float>(xWorld, yWorld, zWorld))
+
+                // Extract color (BGRA -> RGB) using scaled coordinates into the color buffer
+                let colorX = min(colorWidth - 1, max(0, Int(round(Float(x) * colorScaleX))))
+                let colorY = min(colorHeight - 1, max(0, Int(round(Float(y) * colorScaleY))))
+                let rowColorPtr = colorBaseAddress.advanced(by: colorY * colorBytesPerRow).assumingMemoryBound(to: UInt8.self)
+                let pixelPtr = rowColorPtr.advanced(by: colorX * 4)
+                colors.append(pixelPtr[2]) // R
+                colors.append(pixelPtr[1]) // G
+                colors.append(pixelPtr[0]) // B
             }
         }
 
-        return PointCloudData(points: points, count: points.count)
+        return PointCloudData(points: points, colors: colors, count: points.count)
     }
 
     // MARK: - Image Conversion
@@ -596,7 +642,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
                         CVPixelBufferUnlockBaseAddress(localImageBuffer, .readOnly)
 
                         // Heavy computations off the capture queue
-                        let pointCloudData = self.depthDataToPointCloud(depthData: localDepthData)
+                        let pointCloudData = self.depthDataToPointCloud(depthData: localDepthData, imageBuffer: localImageBuffer)
                         let depthPixelData = self.depthDataToPixels(depthData: localDepthData)
                         let depthImage = self.depthDataToUIImage(depthData: localDepthData)
                         let camImage = self.sampleBufferToUIImage(sampleBuffer: localVideoBuffer)
@@ -608,15 +654,21 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
 
                         // Prepare points array for WASM
                         var pointsFloats: [Float32] = []
+                        var colorsBytes: [UInt8] = []
                         if let pointCloudData = pointCloudData {
                             let pointCount = min(pointCloudData.count, LidarCameraConstants.maxPointsPerScan)
                             pointsFloats.reserveCapacity(pointCount * LidarCameraConstants.floatsPerPoint)
+                            colorsBytes.reserveCapacity(pointCount * LidarCameraConstants.colorsPerPoint)
                             var i = 0
                             while i < pointCount {
                                 let p = pointCloudData.points[i]
                                 pointsFloats.append(p.x)
                                 pointsFloats.append(p.y)
                                 pointsFloats.append(p.z)
+                                let cIdx = i * LidarCameraConstants.colorsPerPoint
+                                colorsBytes.append(pointCloudData.colors[cIdx + 0])
+                                colorsBytes.append(pointCloudData.colors[cIdx + 1])
+                                colorsBytes.append(pointCloudData.colors[cIdx + 2])
                                 i += 1
                             }
                         }
@@ -635,6 +687,8 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
                             timestamp: localTimestamp,
                             points: pointsFloats,
                             points_size: Int32(pointsFloats.count),
+                            colors: colorsBytes,
+                            colors_size: Int32(colorsBytes.count),
                             image: imageBytesOut,
                             image_size: Int32(imageBytesOut.count)
                         )
@@ -718,7 +772,12 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
     let pointsByteCount = pointsMaxCount * MemoryLayout<Float32>.size
     let pointsSizeOffset = pointsOffset + pointsByteCount
 
-    let imageOffset = pointsSizeOffset + MemoryLayout<Int32>.size
+    let colorsOffset = pointsSizeOffset + MemoryLayout<Int32>.size
+    let colorsMaxCount = LidarCameraConstants.maxColorsSize
+    let colorsByteCount = colorsMaxCount * MemoryLayout<UInt8>.size
+    let colorsSizeOffset = colorsOffset + colorsByteCount
+
+    let imageOffset = colorsSizeOffset + MemoryLayout<Int32>.size
     let imageMaxCount = LidarCameraConstants.maxImageSize
     let imageByteCount = imageMaxCount * MemoryLayout<UInt8>.size
     let imageSizeOffset = imageOffset + imageByteCount
@@ -747,6 +806,19 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
     let pointsSizeValue = Int32(pointsCount)
     basePtr.advanced(by: pointsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
         rebounded.pointee = pointsSizeValue
+    }
+
+    let colorsCount = min(Int(data.colors_size), colorsMaxCount)
+    if colorsCount > 0 {
+        data.colors.withUnsafeBytes { src in
+            if let srcBase = src.baseAddress {
+                memcpy(basePtr.advanced(by: colorsOffset), srcBase, colorsCount * MemoryLayout<UInt8>.size)
+            }
+        }
+    }
+    let colorsSizeValue = Int32(colorsCount)
+    basePtr.advanced(by: colorsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = colorsSizeValue
     }
 
     let imageCount = min(Int(data.image_size), imageMaxCount)
