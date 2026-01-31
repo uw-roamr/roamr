@@ -116,7 +116,7 @@ class WasmManager {
             print("Error: Could not find \(fileName).wasm. Bundle currently has: \(present)")
             return
         }
-        runWasmFile(at: URL(fileURLWithPath: wasmPath))
+        runWasmFile(at: resolvedWasmURL)
     }
 
     func runWasmFile(at fileURL: URL) {
@@ -127,7 +127,7 @@ class WasmManager {
         lock.unlock()
 
         do {
-            let wasmBytes = try Data(contentsOf: resolvedWasmURL)
+            let wasmBytes = try Data(contentsOf: fileURL)
 
             wasmBytes.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
                 guard let baseAddress = buffer.baseAddress else { return }
