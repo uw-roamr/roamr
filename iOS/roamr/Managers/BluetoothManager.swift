@@ -10,6 +10,7 @@ import CoreBluetooth
 import Combine
 
 class BluetoothManager: NSObject, ObservableObject {
+    static let shared = BluetoothManager()
     @Published var discoveredDevices: [CBPeripheral] = []
     @Published var connectedDevice: CBPeripheral?
     @Published var isScanning = false
