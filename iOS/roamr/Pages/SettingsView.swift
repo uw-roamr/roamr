@@ -9,6 +9,8 @@ import Foundation
 import SwiftUI
 
 struct SettingsPage: View {
+	@State private var rerunURL: String = RerunWebSocketClient.shared.serverURLString
+
     @Environment(\.safeAreaInsets) private var safeAreaInsets
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -31,6 +33,7 @@ struct SettingsPage: View {
 
 			VStack(spacing: 24) {
 				Spacer()
+				rerunSection
 				appInfoSection
 
 				accountSection
@@ -40,7 +43,39 @@ struct SettingsPage: View {
         }
         .padding(.top, safeAreaInsets.top)
         .padding(.bottom, safeAreaInsets.bottom + AppConstants.shared.tabBarHeight)
+		.onAppear {
+			rerunURL = RerunWebSocketClient.shared.serverURLString
+		}
     }
+
+	@ViewBuilder
+	private var rerunSection: some View {
+		VStack(alignment: .leading, spacing: 12) {
+			Text("Rerun WebSocket")
+				.font(.headline)
+			TextField("ws://host:port", text: $rerunURL)
+				.textInputAutocapitalization(.never)
+				.autocorrectionDisabled(true)
+				.keyboardType(.URL)
+				.textFieldStyle(.roundedBorder)
+			Text("Default: \(RerunWebSocketClient.defaultServerURLString)")
+				.font(.caption)
+				.foregroundColor(.secondary)
+			Button("Apply") {
+				RerunWebSocketClient.shared.updateServerURL(rerunURL)
+			}
+			.buttonStyle(.borderedProminent)
+			Button("Reset to Default") {
+				rerunURL = RerunWebSocketClient.defaultServerURLString
+				RerunWebSocketClient.shared.updateServerURL(rerunURL)
+			}
+			.buttonStyle(.bordered)
+		}
+		.padding()
+		.background(Color(.systemGray6))
+		.cornerRadius(12)
+		.padding(.horizontal)
+	}
 
     @ViewBuilder
     private var accountSection: some View {
