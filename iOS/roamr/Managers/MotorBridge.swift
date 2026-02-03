@@ -33,13 +33,18 @@ func write_motors_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?
         // Bump token for each command; used to cancel stale watchdogs.
         lastCommandToken += 1
         let token = lastCommandToken
-        
+
         DispatchQueue.main.async {
             BluetoothManager.shared.sendMessage(message)
         }
-        
+
+        // Log to Rerun for visualization
+        let now = Date().timeIntervalSince1970
+        print("MotorBridge -> rerun: L=\(clampedLeft) R=\(clampedRight) hold_ms=\(holdMs)")
+        RerunWebSocketClient.shared.logMotors(timestamp: now, left: clampedLeft, right: clampedRight, holdMs: holdMs)
+
         guard holdMs > 0 else { return }
-        
+
         motorQueue.asyncAfter(deadline: .now() + .milliseconds(holdMs)) {
             // Only send stop if no newer command has been issued
             guard token == lastCommandToken else { return }

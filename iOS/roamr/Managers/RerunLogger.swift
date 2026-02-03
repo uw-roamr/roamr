@@ -20,6 +20,14 @@ private struct RerunPoseMessage: Codable {
     let quaternion: [Double]  // x, y, z, w
 }
 
+private struct RerunMotorMessage: Codable {
+    let type: String
+    let timestamp: Double
+    let left: Int
+    let right: Int
+    let hold_ms: Int
+}
+
 final class RerunWebSocketClient {
     static let shared = RerunWebSocketClient()
 
@@ -67,6 +75,26 @@ final class RerunWebSocketClient {
             self.connectIfNeeded()
 
             let message = RerunPoseMessage(type: "pose", timestamp: timestamp, quaternion: quaternion)
+            guard let payload = try? JSONEncoder().encode(message),
+                  let payloadString = String(data: payload, encoding: .utf8) else {
+                return
+            }
+
+            self.task?.send(.string(payloadString)) { error in
+                if let error = error {
+                    print("Rerun websocket send error: \(error)")
+                    self.isConnected = false
+                }
+            }
+        }
+    }
+
+    func logMotors(timestamp: Double, left: Int, right: Int, holdMs: Int) {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            self.connectIfNeeded()
+
+            let message = RerunMotorMessage(type: "motors", timestamp: timestamp, left: left, right: right, hold_ms: holdMs)
             guard let payload = try? JSONEncoder().encode(message),
                   let payloadString = String(data: payload, encoding: .utf8) else {
                 return

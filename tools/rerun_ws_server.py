@@ -107,6 +107,22 @@ async def handle_client(websocket, history):
                 )
             continue
 
+        if msg_type == "motors":
+            left = float(payload.get("left", 0))
+            right = float(payload.get("right", 0))
+            hold_ms = int(payload.get("hold_ms", 0))
+
+            print(f"[rerun] motors: L={left}% R={right}% hold={hold_ms}ms t={timestamp}")
+
+            rr.log(
+                "motors/percent",
+                rr.BarChart(
+                    values=[left, right],
+                ),
+            )
+            # rr.log("motors/hold_ms", rr.Scalars([hold_ms]))
+            continue
+
         if msg_type != "points3d":
             continue
 
