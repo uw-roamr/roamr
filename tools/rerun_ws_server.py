@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import base64
 import json
 from collections import deque
 from dataclasses import dataclass
@@ -102,6 +103,7 @@ class RerunBridge:
 
     def __init__(self, history_size: int = 1):
         self.history: deque[PointsMessage] = deque(maxlen=max(1, history_size))
+        self._video_warned = False
 
     async def handle_ws(self, websocket):
         peer = websocket.remote_address
@@ -129,6 +131,10 @@ class RerunBridge:
             points_msg = self._build_points_message(payload, timestamp)
             if points_msg:
                 self._log_points(points_msg)
+            return
+
+        if msg_type == "video_frame":
+            self._log_video_frame(payload, timestamp)
 
     def _log_pose(self, payload: dict) -> None:
         quat = payload.get("quaternion") or []
@@ -184,6 +190,51 @@ class RerunBridge:
         set_rerun_time(msg.timestamp)
         final_colors = merged_colors if merged_colors else colors_from_z(merged_points)
         rr.log("lidar/points", rr.Points3D(merged_points, colors=final_colors))
+
+    def _log_video_frame(self, payload: dict, timestamp: float) -> None:
+        jpeg_b64 = payload.get("jpeg_b64")
+        if not isinstance(jpeg_b64, str) or not jpeg_b64:
+            return
+
+        try:
+            jpeg_bytes = base64.b64decode(jpeg_b64, validate=True)
+        except Exception:
+            return
+
+        if not jpeg_bytes:
+            return
+
+        set_rerun_time(timestamp)
+        if self._log_encoded_image("camera/image", jpeg_bytes):
+            return
+
+        if not self._video_warned:
+            print(
+                "[rerun] failed to log video frame: rerun.EncodedImage API unavailable "
+                "or unsupported by the installed rerun version"
+            )
+            self._video_warned = True
+
+    def _log_encoded_image(self, path: str, jpeg_bytes: bytes) -> bool:
+        encoded_cls = getattr(rr, "EncodedImage", None)
+        if encoded_cls is None:
+            return False
+
+        # Handle constructor differences between rerun versions.
+        constructor_variants = (
+            lambda: encoded_cls(contents=jpeg_bytes, media_type="image/jpeg"),
+            lambda: encoded_cls(contents=jpeg_bytes),
+            lambda: encoded_cls(data=jpeg_bytes, media_type="image/jpeg"),
+            lambda: encoded_cls(data=jpeg_bytes),
+            lambda: encoded_cls(jpeg_bytes),
+        )
+        for build in constructor_variants:
+            try:
+                rr.log(path, build())
+                return True
+            except Exception:
+                continue
+        return False
 
 
 def main():
