@@ -3,12 +3,26 @@ import argparse
 import asyncio
 import json
 from collections import deque
+from dataclasses import dataclass
+from typing import Iterable, Optional
 
 import rerun as rr
 import websockets
 
 
-def decode_message(message):
+@dataclass
+class PointsMessage:
+    timestamp: float
+    points: list[list[float]]
+    colors: Optional[list[list[int]]]
+
+
+def decode_message(message) -> Optional[dict]:
+    """Parse JSON payloads from websocket messages.
+
+    Returns None on decode errors so callers can cheaply `continue`.
+    """
+
     if isinstance(message, bytes):
         try:
             message = message.decode("utf-8")
@@ -20,22 +34,23 @@ def decode_message(message):
         return None
 
 
-def points_from_flat(flat_points):
-    points = []
-    for i in range(0, len(flat_points) - 2, 3):
-        points.append([flat_points[i], flat_points[i + 1], flat_points[i + 2]])
-    return points
+def points_from_flat(flat_points: Iterable[float]) -> list[list[float]]:
+    """Convert [x0, y0, z0, x1, y1, z1, ...] into [[x, y, z], ...]."""
+    return [
+        [flat_points[i], flat_points[i + 1], flat_points[i + 2]]
+        for i in range(0, len(flat_points) - 2, 3)
+    ]
 
 
-def colors_from_z(points):
+def colors_from_z(points: list[list[float]]) -> Optional[list[list[int]]]:
     """Map z-coordinate to RGB colors (blue=low z, red=high z)."""
     if not points:
         return None
+
     z_vals = [p[2] for p in points]
     min_z, max_z = min(z_vals), max(z_vals)
-    span = max_z - min_z
-    if span == 0:
-        span = 1.0
+    span = max_z - min_z or 1.0
+
     colors = []
     for p in points:
         t = (p[2] - min_z) / span
@@ -67,89 +82,106 @@ def log_handshake(*args, **kwargs):
     return None
 
 
-def set_rerun_time(timestamp):
+def set_rerun_time(timestamp: float) -> None:
+    """Support multiple Rerun time APIs across versions."""
+
     if hasattr(rr, "set_time_seconds"):
         rr.set_time_seconds("timestamp", timestamp)
-        return
-    if hasattr(rr, "set_time_nanos"):
+    elif hasattr(rr, "set_time_nanos"):
         rr.set_time_nanos("timestamp", int(timestamp * 1e9))
-        return
-    if hasattr(rr, "set_time_sequence"):
+    elif hasattr(rr, "set_time_sequence"):
         rr.set_time_sequence("timestamp", int(timestamp * 1e6))
 
 
-async def handle_client(websocket, history):
-    peer = websocket.remote_address
-    print(f"[rerun] client connected: {peer}")
-    async for message in websocket:
-        if isinstance(message, bytes):
-            print(f"[rerun] received {len(message)} bytes")
-        else:
-            print(f"[rerun] received message: {message[:200]}")
-        payload = decode_message(message)
-        if not payload:
-            continue
+class RerunBridge:
+    """Routes incoming websocket payloads into Rerun logs.
 
+    The class holds the history buffer so new message types can be added without
+    threading state through the websocket handler.
+    """
+
+    def __init__(self, history_size: int = 1):
+        self.history: deque[PointsMessage] = deque(maxlen=max(1, history_size))
+
+    async def handle_ws(self, websocket):
+        peer = websocket.remote_address
+        print(f"[rerun] client connected: {peer}")
+        async for message in websocket:
+            payload = decode_message(message)
+            if not payload:
+                continue
+            await self.route(payload)
+
+    async def route(self, payload: dict):
         msg_type = payload.get("type")
-
         timestamp = float(payload.get("timestamp") or 0.0)
         set_rerun_time(timestamp)
 
         if msg_type == "pose":
-            quat = payload.get("quaternion") or []
-            if len(quat) == 4:
-                rr.log(
-                    "phone/pose",
-                    rr.Transform3D(
-                        translation=[0, 0, 0],
-                        rotation=rr.Quaternion(xyzw=quat),
-                    ),
-                )
-            continue
+            self._log_pose(payload)
+            return
 
         if msg_type == "motors":
-            left = float(payload.get("left", 0))
-            right = float(payload.get("right", 0))
-            hold_ms = int(payload.get("hold_ms", 0))
+            self._log_motors(payload, timestamp)
+            return
 
-            print(f"[rerun] motors: L={left}% R={right}% hold={hold_ms}ms t={timestamp}")
+        if msg_type == "points3d":
+            points_msg = self._build_points_message(payload, timestamp)
+            if points_msg:
+                self._log_points(points_msg)
 
-            rr.log(
-                "motors/percent",
-                rr.BarChart(
-                    values=[left, right],
-                ),
-            )
-            # rr.log("motors/hold_ms", rr.Scalars([hold_ms]))
-            continue
+    def _log_pose(self, payload: dict) -> None:
+        quat = payload.get("quaternion") or []
+        if len(quat) != 4:
+            return
+        rr.log(
+            "phone/pose",
+            rr.Transform3D(
+                translation=[0, 0, 0],
+                rotation=rr.Quaternion(xyzw=quat),
+            ),
+        )
 
-        if msg_type != "points3d":
-            continue
+    def _log_motors(self, payload: dict, timestamp: float) -> None:
+        left = float(payload.get("left", 0))
+        right = float(payload.get("right", 0))
+        hold_ms = int(payload.get("hold_ms", 0))
 
+        print(f"[rerun] motors: L={left}% R={right}% hold={hold_ms}ms t={timestamp}")
+
+        rr.log("motors/percent", rr.BarChart(values=[left, right]))
+
+    def _build_points_message(self, payload: dict, timestamp: float) -> Optional[PointsMessage]:
         flat_points = payload.get("points") or []
         if not flat_points:
-            continue
-        flat_colors = payload.get("colors") or []
+            return None
 
         points = points_from_flat(flat_points)
-        # Align colors to points if present (expect RGB triplets)
-        colors = None
-        if flat_colors:
-            colors = []
-            for i in range(0, min(len(flat_colors), len(points) * 3) - 2, 3):
-                colors.append([flat_colors[i], flat_colors[i + 1], flat_colors[i + 2]])
+        raw_colors = payload.get("colors") or []
 
-        history.append((timestamp, points, colors))
-        merged_points = []
-        merged_colors = [] if any(c is not None for _, _, c in history) else None
-        for _, pts, cols in history:
-            merged_points.extend(pts)
+        colors = None
+        if raw_colors:
+            colors = [
+                [raw_colors[i], raw_colors[i + 1], raw_colors[i + 2]]
+                for i in range(0, min(len(raw_colors), len(points) * 3) - 2, 3)
+            ]
+
+        return PointsMessage(timestamp=timestamp, points=points, colors=colors)
+
+    def _log_points(self, msg: PointsMessage) -> None:
+        self.history.append(msg)
+
+        merged_points: list[list[float]] = []
+        merged_colors: Optional[list[list[int]]] = [] if any(
+            m.colors is not None for m in self.history
+        ) else None
+
+        for item in self.history:
+            merged_points.extend(item.points)
             if merged_colors is not None:
-                if cols is not None:
-                    merged_colors.extend(cols)
-                else:
-                    merged_colors.extend(colors_from_z(pts))
-        set_rerun_time(timestamp)
+                merged_colors.extend(item.colors or colors_from_z(item.points) or [])
+
+        set_rerun_time(msg.timestamp)
         final_colors = merged_colors if merged_colors else colors_from_z(merged_points)
         rr.log("lidar/points", rr.Points3D(merged_points, colors=final_colors))
 
@@ -158,35 +190,42 @@ def main():
     parser = argparse.ArgumentParser(description="Rerun websocket bridge for roamr point clouds.")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=9877)
-    parser.add_argument("--spawn", action="store_true", help="Spawn the Rerun viewer.", default=True)
+    parser.add_argument(
+        "--spawn-viewer",
+        dest="spawn",
+        action="store_true",
+        help="Spawn the Rerun viewer (default).",
+    )
+    parser.add_argument(
+        "--no-spawn-viewer",
+        dest="spawn",
+        action="store_false",
+        help="Run headless without launching a viewer.",
+    )
+    parser.set_defaults(spawn=True)
     parser.add_argument(
         "--history",
         type=int,
-        default=5,
+        default=1,
         help="Number of recent scans to retain and replay each update. Set >1 only if points are pose-compensated.",
     )
 
     args = parser.parse_args()
 
     rr.init("roamr")
-    server_uri = None
     if args.spawn:
-        
         server_uri = rr.serve_grpc()
         if server_uri is not None:
             try:
                 rr.serve_web_viewer(connect_to=server_uri)
             except Exception as exc:
-                if args.spawn_if_possible and not args.spawn:
-                    print(f"[rerun] viewer spawn failed, continuing without viewer: {exc}")
-                else:
-                    raise
+                print(f"[rerun] viewer spawn failed, continuing headless: {exc}")
 
     async def runner():
-        history = deque(maxlen=max(1, args.history))
+        bridge = RerunBridge(history_size=args.history)
         print(f"[rerun] listening on {args.host}:{args.port}")
         async with websockets.serve(
-            lambda ws: handle_client(ws, history),
+            bridge.handle_ws,
             args.host,
             args.port,
             max_size=20 * 1024 * 1024,

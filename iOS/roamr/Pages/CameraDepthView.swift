@@ -10,7 +10,7 @@ import SwiftUI
 // MARK: - Constants
 
 struct PointCloudConfig {
-    static let maxPoints: Int = 3000  // Adjust density: higher = more points
+    static let maxPoints: Int = 12000  // Higher density while remaining real-time on recent iPhones
 }
 
 enum CameraViewMode: String, CaseIterable {

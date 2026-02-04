@@ -185,7 +185,27 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
                 device.activeFormat = format
 
                 // Find best matching depth format
+                func depthTypeRank(_ depthFormat: AVCaptureDevice.Format) -> Int {
+                    switch CMFormatDescriptionGetMediaSubType(depthFormat.formatDescription) {
+                    case kCVPixelFormatType_DepthFloat32:
+                        return 0
+                    case kCVPixelFormatType_DepthFloat16:
+                        return 1
+                    case kCVPixelFormatType_DisparityFloat32:
+                        return 2
+                    case kCVPixelFormatType_DisparityFloat16:
+                        return 3
+                    default:
+                        return 4
+                    }
+                }
+
                 let sortedDepthFormats = format.supportedDepthDataFormats.sorted { a, b in
+                    let rankA = depthTypeRank(a)
+                    let rankB = depthTypeRank(b)
+                    if rankA != rankB {
+                        return rankA < rankB
+                    }
                     let dimsA = CMVideoFormatDescriptionGetDimensions(a.formatDescription)
                     let dimsB = CMVideoFormatDescriptionGetDimensions(b.formatDescription)
                     if targetDepthWidth == 0 {
@@ -200,7 +220,8 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
                     device.activeDepthDataFormat = depthFormat
                     let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
                     let depthDims = CMVideoFormatDescriptionGetDimensions(depthFormat.formatDescription)
-                    print("Set format: video \(dims.width)x\(dims.height), depth \(depthDims.width)x\(depthDims.height)")
+                    let depthType = CMFormatDescriptionGetMediaSubType(depthFormat.formatDescription)
+                    print("Set format: video \(dims.width)x\(dims.height), depth \(depthDims.width)x\(depthDims.height), type=\(depthType)")
                 }
             } else {
                 print("No suitable format with depth found, using default")
@@ -228,7 +249,8 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         captureSession.addOutput(videoOutput)
 
         // Configure depth output
-        depthOutput.isFilteringEnabled = false
+        // Filtered depth is less holey/streaky than raw output for live visualization.
+        depthOutput.isFilteringEnabled = true
         depthOutput.alwaysDiscardsLateDepthData = true
 
         guard captureSession.canAddOutput(depthOutput) else {
@@ -345,15 +367,15 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
 
     // MARK: - Depth Data Conversion
 
-    func depthDataToPixels(depthData: AVDepthData) -> DepthPixelData? {
-        let convertedDepthData: AVDepthData
-        let pixelFormat = CVPixelBufferGetPixelFormatType(depthData.depthDataMap)
-
-        if pixelFormat == kCVPixelFormatType_DepthFloat16 || pixelFormat == kCVPixelFormatType_DisparityFloat16 {
-            convertedDepthData = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
-        } else {
-            convertedDepthData = depthData
+    private func convertedDepthDataInMeters(_ depthData: AVDepthData) -> AVDepthData {
+        if depthData.depthDataType == kCVPixelFormatType_DepthFloat32 {
+            return depthData
         }
+        return depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
+    }
+
+    func depthDataToPixels(depthData: AVDepthData) -> DepthPixelData? {
+        let convertedDepthData = convertedDepthDataInMeters(depthData)
 
         let depthMap = convertedDepthData.depthDataMap
         CVPixelBufferLockBaseAddress(depthMap, .readOnly)
@@ -361,6 +383,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
 
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
+        let depthStride = CVPixelBufferGetBytesPerRow(depthMap) / MemoryLayout<Float32>.size
 
         guard let baseAddress = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
         let depthPointer = baseAddress.assumingMemoryBound(to: Float32.self)
@@ -369,8 +392,9 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         pixels.reserveCapacity(width * height / 4)
 
         for y in 0..<height {
+            let rowPtr = depthPointer.advanced(by: y * depthStride)
             for x in 0..<width {
-                let depth = depthPointer[y * width + x]
+                let depth = rowPtr[x]
                 guard depth > 0 && depth.isFinite else { continue }
                 pixels.append((x: x, y: y, depth: depth))
             }
@@ -380,15 +404,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
     }
 
     func depthDataToPointCloud(depthData: AVDepthData, imageBuffer: CVPixelBuffer) -> PointCloudData? {
-        // Convert to Float32 if needed
-        let convertedDepthData: AVDepthData
-        let pixelFormat = CVPixelBufferGetPixelFormatType(depthData.depthDataMap)
-
-        if pixelFormat == kCVPixelFormatType_DepthFloat16 || pixelFormat == kCVPixelFormatType_DisparityFloat16 {
-            convertedDepthData = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
-        } else {
-            convertedDepthData = depthData
-        }
+        let convertedDepthData = convertedDepthDataInMeters(depthData)
 
         let depthMap = convertedDepthData.depthDataMap
         CVPixelBufferLockBaseAddress(depthMap, .readOnly)
@@ -396,6 +412,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
 
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
+        let depthStride = CVPixelBufferGetBytesPerRow(depthMap) / MemoryLayout<Float32>.size
 
         guard let depthBaseAddress = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
         let depthPointer = depthBaseAddress.assumingMemoryBound(to: Float32.self)
@@ -422,10 +439,6 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         let cx = intrinsics[2][0] * sx
         let cy = intrinsics[2][1] * sy
 
-        // Prepare optional lens undistortion mapping (distorted -> rectilinear)
-        let inverseLUT = calibration.inverseLensDistortionLookupTable
-        let distortionCenter = calibration.lensDistortionCenter
-
         // Color buffer sizing may differ from depth; scale sampling coords accordingly
         let colorWidth = CVPixelBufferGetWidth(imageBuffer)
         let colorHeight = CVPixelBufferGetHeight(imageBuffer)
@@ -438,8 +451,9 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         colors.reserveCapacity(width * height / 4 * LidarCameraConstants.colorsPerPoint)
 
         for y in 0..<height {
+            let rowPtr = depthPointer.advanced(by: y * depthStride)
             for x in 0..<width {
-                let depth = depthPointer[y * width + x]
+                let depth = rowPtr[x]
 
                 // Skip invalid depth values
                 guard depth > 0 && depth.isFinite else { continue }
@@ -475,15 +489,8 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
     // MARK: - Image Conversion
 
     private func depthDataToUIImage(depthData: AVDepthData) -> UIImage? {
-        // Convert to Float32 format if needed to ensure consistent processing
-        let convertedDepthData: AVDepthData
-        let pixelFormat = CVPixelBufferGetPixelFormatType(depthData.depthDataMap)
-
-        if pixelFormat == kCVPixelFormatType_DepthFloat16 || pixelFormat == kCVPixelFormatType_DisparityFloat16 {
-            convertedDepthData = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
-        } else {
-            convertedDepthData = depthData
-        }
+        // Convert to meters/Float32 format for consistent visualization.
+        let convertedDepthData = convertedDepthDataInMeters(depthData)
 
         let depthMap = convertedDepthData.depthDataMap
         CVPixelBufferLockBaseAddress(depthMap, .readOnly)
@@ -491,6 +498,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
 
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
+        let depthStride = CVPixelBufferGetBytesPerRow(depthMap) / MemoryLayout<Float32>.size
 
         guard let baseAddress = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
 
@@ -500,11 +508,14 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         var minDepth: Float = .infinity
         var maxDepth: Float = -.infinity
 
-        for i in 0..<(width * height) {
-            let depth = depthPointer[i]
-            if depth.isFinite {
-                minDepth = min(minDepth, depth)
-                maxDepth = max(maxDepth, depth)
+        for y in 0..<height {
+            let rowPtr = depthPointer.advanced(by: y * depthStride)
+            for x in 0..<width {
+                let depth = rowPtr[x]
+                if depth.isFinite {
+                    minDepth = min(minDepth, depth)
+                    maxDepth = max(maxDepth, depth)
+                }
             }
         }
 
@@ -513,11 +524,15 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.none.rawValue)
         var grayscaleData = [UInt8](repeating: 0, count: width * height)
 
-        for i in 0..<(width * height) {
-            let depth = depthPointer[i]
-            if depth.isFinite && maxDepth > minDepth {
-                let normalized = 1.0 - (depth - minDepth) / (maxDepth - minDepth)
-                grayscaleData[i] = UInt8(normalized * 255.0)
+        for y in 0..<height {
+            let rowPtr = depthPointer.advanced(by: y * depthStride)
+            for x in 0..<width {
+                let i = y * width + x
+                let depth = rowPtr[x]
+                if depth.isFinite && maxDepth > minDepth {
+                    let normalized = 1.0 - (depth - minDepth) / (maxDepth - minDepth)
+                    grayscaleData[i] = UInt8(normalized * 255.0)
+                }
             }
         }
 
@@ -631,9 +646,10 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
                                         x = imageWidth
                                         continue
                                     }
-                                    imageBytesOut[dstIndex] = pixelBase[0]
+                                    // BGRA input -> RGB output
+                                    imageBytesOut[dstIndex] = pixelBase[2]
                                     imageBytesOut[dstIndex + 1] = pixelBase[1]
-                                    imageBytesOut[dstIndex + 2] = pixelBase[2]
+                                    imageBytesOut[dstIndex + 2] = pixelBase[0]
                                     x += 1
                                 }
                                 y += 1
@@ -656,20 +672,26 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
                         var pointsFloats: [Float32] = []
                         var colorsBytes: [UInt8] = []
                         if let pointCloudData = pointCloudData {
-                            let pointCount = min(pointCloudData.count, LidarCameraConstants.maxPointsPerScan)
+                            let totalPoints = pointCloudData.count
+                            let pointCount = min(totalPoints, LidarCameraConstants.maxPointsPerScan)
+                            let sampleStride = max(1, totalPoints / max(1, pointCount))
                             pointsFloats.reserveCapacity(pointCount * LidarCameraConstants.floatsPerPoint)
                             colorsBytes.reserveCapacity(pointCount * LidarCameraConstants.colorsPerPoint)
                             var i = 0
-                            while i < pointCount {
+                            var written = 0
+                            while i < totalPoints && written < pointCount {
                                 let p = pointCloudData.points[i]
                                 pointsFloats.append(p.x)
                                 pointsFloats.append(p.y)
                                 pointsFloats.append(p.z)
                                 let cIdx = i * LidarCameraConstants.colorsPerPoint
-                                colorsBytes.append(pointCloudData.colors[cIdx + 0])
-                                colorsBytes.append(pointCloudData.colors[cIdx + 1])
-                                colorsBytes.append(pointCloudData.colors[cIdx + 2])
-                                i += 1
+                                if cIdx + 2 < pointCloudData.colors.count {
+                                    colorsBytes.append(pointCloudData.colors[cIdx + 0])
+                                    colorsBytes.append(pointCloudData.colors[cIdx + 1])
+                                    colorsBytes.append(pointCloudData.colors[cIdx + 2])
+                                }
+                                i += sampleStride
+                                written += 1
                             }
                         }
 

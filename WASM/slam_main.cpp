@@ -34,8 +34,6 @@ int main(){
     init_camera(&g_cam_config);
     log_config(g_cam_config);
 
-    drive_forward_demo();
-
     std::thread imu_thread([&m_imu](){
         while(true){
             std::this_thread::sleep_for(std::chrono::milliseconds(IMUIntervalMs));
@@ -52,6 +50,7 @@ int main(){
     });
     std::thread telemetry_thread(log_sensors, std::ref(m_imu), std::cref(g_imu_data), std::ref(m_lc), std::cref(g_lc_data));
 
+    drive_forward_demo();
     imu_thread.join();
     lidar_camera_thread.join();
     telemetry_thread.join();

@@ -1,31 +1,32 @@
-//
-//  RerunLogger.swift
-//  roamr
-//
-//  Created by Codex on 2025-11-23.
-//
-
 import Foundation
 
-private struct RerunPointsMessage: Codable {
-    let type: String
-    let timestamp: Double
-    let points: [Float]
-    let colors: [UInt8]?
-}
+private enum RerunMessage: Encodable {
+    case points(timestamp: Double, points: [Float], colors: [UInt8]?)
+    case pose(timestamp: Double, quaternion: [Double])
+    case motors(timestamp: Double, left: Int, right: Int, holdMs: Int)
 
-private struct RerunPoseMessage: Codable {
-    let type: String
-    let timestamp: Double
-    let quaternion: [Double]  // x, y, z, w
-}
+    enum CodingKeys: String, CodingKey { case type, timestamp, points, colors, quaternion, left, right, hold_ms }
 
-private struct RerunMotorMessage: Codable {
-    let type: String
-    let timestamp: Double
-    let left: Int
-    let right: Int
-    let hold_ms: Int
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .points(timestamp, points, colors):
+            try container.encode("points3d", forKey: .type)
+            try container.encode(timestamp, forKey: .timestamp)
+            try container.encode(points, forKey: .points)
+            try container.encodeIfPresent(colors, forKey: .colors)
+        case let .pose(timestamp, quaternion):
+            try container.encode("pose", forKey: .type)
+            try container.encode(timestamp, forKey: .timestamp)
+            try container.encode(quaternion, forKey: .quaternion)
+        case let .motors(timestamp, left, right, holdMs):
+            try container.encode("motors", forKey: .type)
+            try container.encode(timestamp, forKey: .timestamp)
+            try container.encode(left, forKey: .left)
+            try container.encode(right, forKey: .right)
+            try container.encode(holdMs, forKey: .hold_ms)
+        }
+    }
 }
 
 final class RerunWebSocketClient {
@@ -38,6 +39,8 @@ final class RerunWebSocketClient {
     private var task: URLSessionWebSocketTask?
     private var isConnected = false
 
+    private let encoder = JSONEncoder()
+
     var serverURLString = RerunWebSocketClient.defaultServerURLString
 
     private init() {
@@ -49,63 +52,23 @@ final class RerunWebSocketClient {
 
     func logPoints(timestamp: Double, points: [Float], colors: [UInt8]?) {
         guard !points.isEmpty else { return }
-        queue.async { [weak self] in
-            guard let self = self else { return }
-            self.connectIfNeeded()
-
-            let message = RerunPointsMessage(type: "points3d", timestamp: timestamp, points: points, colors: colors)
-            guard let payload = try? JSONEncoder().encode(message),
-                  let payloadString = String(data: payload, encoding: .utf8) else {
-                return
-            }
-
-            self.task?.send(.string(payloadString)) { error in
-                if let error = error {
-                    print("Rerun websocket send error: \(error)")
-                    self.isConnected = false
-                }
-            }
-        }
+        enqueue(.points(timestamp: timestamp, points: points, colors: colors))
     }
 
     func logPose(timestamp: Double, quaternion: [Double]) {
         guard quaternion.count == 4 else { return }
-        queue.async { [weak self] in
-            guard let self = self else { return }
-            self.connectIfNeeded()
-
-            let message = RerunPoseMessage(type: "pose", timestamp: timestamp, quaternion: quaternion)
-            guard let payload = try? JSONEncoder().encode(message),
-                  let payloadString = String(data: payload, encoding: .utf8) else {
-                return
-            }
-
-            self.task?.send(.string(payloadString)) { error in
-                if let error = error {
-                    print("Rerun websocket send error: \(error)")
-                    self.isConnected = false
-                }
-            }
-        }
+        enqueue(.pose(timestamp: timestamp, quaternion: quaternion))
     }
 
     func logMotors(timestamp: Double, left: Int, right: Int, holdMs: Int) {
+        enqueue(.motors(timestamp: timestamp, left: left, right: right, holdMs: holdMs))
+    }
+
+    private func enqueue(_ message: RerunMessage) {
         queue.async { [weak self] in
             guard let self = self else { return }
             self.connectIfNeeded()
-
-            let message = RerunMotorMessage(type: "motors", timestamp: timestamp, left: left, right: right, hold_ms: holdMs)
-            guard let payload = try? JSONEncoder().encode(message),
-                  let payloadString = String(data: payload, encoding: .utf8) else {
-                return
-            }
-
-            self.task?.send(.string(payloadString)) { error in
-                if let error = error {
-                    print("Rerun websocket send error: \(error)")
-                    self.isConnected = false
-                }
-            }
+            self.send(message)
         }
     }
 
@@ -126,6 +89,21 @@ final class RerunWebSocketClient {
         listen()
     }
 
+    private func send(_ message: RerunMessage) {
+        guard let task = task else { return }
+        guard let payload = try? encoder.encode(message),
+              let payloadString = String(data: payload, encoding: .utf8) else {
+            return
+        }
+
+        task.send(.string(payloadString)) { [weak self] error in
+            if let error = error {
+                print("Rerun websocket send error: \(error)")
+                self?.isConnected = false
+            }
+        }
+    }
+
     private func listen() {
         task?.receive { [weak self] result in
             guard let self = self else { return }
@@ -144,8 +122,11 @@ extension RerunWebSocketClient {
     func updateServerURL(_ url: String) {
         queue.async {
             let normalized = self.normalizeURLString(url)
+            guard normalized != self.serverURLString else { return }
+
             self.serverURLString = normalized
             UserDefaults.standard.set(normalized, forKey: Self.serverURLDefaultsKey)
+
             if self.isConnected {
                 self.task?.cancel(with: .goingAway, reason: nil)
                 self.task = nil
@@ -226,19 +207,22 @@ func rerun_log_points_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoin
     }
 
     let totalPoints = floatsCount / 3
-    let maxPointsToSend = 5000
-    let stride = max(1, totalPoints / maxPointsToSend)
+    let maxPointsToSend = 15000
+    let targetPoints = min(totalPoints, maxPointsToSend)
+    let stride = max(1, totalPoints / max(1, targetPoints))
     var sampled: [Float] = []
-    sampled.reserveCapacity(min(totalPoints, maxPointsToSend) * 3)
+    sampled.reserveCapacity(targetPoints * 3)
 
     let pointsPtr = basePtr.advanced(by: pointsOffset).withMemoryRebound(to: Float32.self, capacity: floatsCount) { $0 }
     var i = 0
-    while i < totalPoints {
+    var sampledPointCount = 0
+    while i < totalPoints && sampledPointCount < targetPoints {
         let idx = i * 3
         sampled.append(pointsPtr[idx])
         sampled.append(pointsPtr[idx + 1])
         sampled.append(pointsPtr[idx + 2])
         i += stride
+        sampledPointCount += 1
     }
 
     var sampledColors: [UInt8]? = nil
@@ -247,9 +231,10 @@ func rerun_log_points_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoin
         let colorsPtr = basePtr.advanced(by: colorsOffset)
         let strideColors = stride
         var tmp: [UInt8] = []
-        tmp.reserveCapacity(sampled.count) // 3 bytes per point
+        tmp.reserveCapacity(sampledPointCount * 3)
         var iPoint = 0
-        while iPoint < totalPoints {
+        var sampledColorCount = 0
+        while iPoint < totalPoints && sampledColorCount < sampledPointCount {
             let colorIdx = iPoint * LidarCameraConstants.colorsPerPoint
             if colorIdx + 2 < colorsCount {
                 tmp.append(colorsPtr[colorIdx + 0])
@@ -257,6 +242,7 @@ func rerun_log_points_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoin
                 tmp.append(colorsPtr[colorIdx + 2])
             }
             iPoint += strideColors
+            sampledColorCount += 1
         }
         sampledColors = tmp
     }
