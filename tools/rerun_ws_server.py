@@ -85,7 +85,6 @@ def log_handshake(*args, **kwargs):
 
 def set_rerun_time(timestamp: float) -> None:
     """Support multiple Rerun time APIs across versions."""
-
     if hasattr(rr, "set_time_seconds"):
         rr.set_time_seconds("timestamp", timestamp)
     elif hasattr(rr, "set_time_nanos"):
@@ -103,7 +102,6 @@ class RerunBridge:
 
     def __init__(self, history_size: int = 1):
         self.history: deque[PointsMessage] = deque(maxlen=max(1, history_size))
-        self._video_warned = False
 
     async def handle_ws(self, websocket):
         peer = websocket.remote_address
@@ -193,27 +191,10 @@ class RerunBridge:
 
     def _log_video_frame(self, payload: dict, timestamp: float) -> None:
         jpeg_b64 = payload.get("jpeg_b64")
-        if not isinstance(jpeg_b64, str) or not jpeg_b64:
-            return
-
-        try:
-            jpeg_bytes = base64.b64decode(jpeg_b64, validate=True)
-        except Exception:
-            return
-
-        if not jpeg_bytes:
-            return
-
+        jpeg_bytes = base64.b64decode(jpeg_b64, validate=True)
         set_rerun_time(timestamp)
         if self._log_encoded_image("camera/image", jpeg_bytes):
             return
-
-        if not self._video_warned:
-            print(
-                "[rerun] failed to log video frame: rerun.EncodedImage API unavailable "
-                "or unsupported by the installed rerun version"
-            )
-            self._video_warned = True
 
     def _log_encoded_image(self, path: str, jpeg_bytes: bytes) -> bool:
         encoded_cls = getattr(rr, "EncodedImage", None)
@@ -229,11 +210,8 @@ class RerunBridge:
             lambda: encoded_cls(jpeg_bytes),
         )
         for build in constructor_variants:
-            try:
-                rr.log(path, build())
-                return True
-            except Exception:
-                continue
+            rr.log(path, build())
+            return True
         return False
 
 
