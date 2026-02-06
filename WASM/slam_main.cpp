@@ -23,6 +23,10 @@ void drive_forward_demo() {
     motors.stop();
 }
 
+static CameraConfig g_cam_config;
+static LidarCameraData g_lc_data;
+static IMUData g_imu_data;
+
 int main(){
     std::mutex m_imu;
     

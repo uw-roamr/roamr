@@ -9,7 +9,6 @@ import {
   UploadPage,
   WasmDetailPage,
   LoginPage,
-  RegisterPage,
 } from './pages';
 import './index.css';
 

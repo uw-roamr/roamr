@@ -20,8 +20,10 @@ service cloud.firestore {
                     (request.auth != null && request.auth.uid == resource.data.uploaderId);
 
       // Only authenticated users can create files
+      // Limit: max 20 files per user (checked via user's uploadCount)
       allow create: if request.auth != null &&
-                      request.auth.uid == request.resource.data.uploaderId;
+                      request.auth.uid == request.resource.data.uploaderId &&
+                      get(/databases/$(database)/documents/users/$(request.auth.uid)).data.uploadCount < 20;
 
       // Only owner can update their files
       allow update: if request.auth != null &&

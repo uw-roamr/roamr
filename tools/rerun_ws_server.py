@@ -1,3 +1,11 @@
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "rerun-sdk",
+#     "websockets",
+# ]
+# ///
+
 #!/usr/bin/env python3
 import argparse
 import asyncio
@@ -267,3 +275,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
