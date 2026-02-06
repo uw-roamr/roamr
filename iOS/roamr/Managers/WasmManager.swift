@@ -7,7 +7,8 @@
 
 import Foundation
 
-typealias CFunction = @convention(c) (wasm_exec_env_t?, UnsafeMutableRawPointer?) -> Void
+typealias CFunction1 = @convention(c) (wasm_exec_env_t?, UnsafeMutableRawPointer?) -> Void
+typealias CFunction2 = @convention(c) (wasm_exec_env_t?, UnsafeMutableRawPointer?, UnsafeMutableRawPointer?) -> Void
 
 class WasmManager {
     static let shared = WasmManager()
@@ -45,15 +46,40 @@ class WasmManager {
         struct NativeFunction {
             let name: String
             let signature: String
-            let impl: CFunction
+            let impl: UnsafeMutableRawPointer
         }
 
         let nativeFunctions: [NativeFunction] = [
-            NativeFunction(name: "read_imu", signature: "(*)", impl: read_imu_impl),
-            NativeFunction(name: "init_camera", signature: "(*)", impl: init_camera_impl),
-            NativeFunction(name: "read_lidar_camera", signature: "(*)", impl: read_lidar_camera_impl),
-            NativeFunction(name: "rerun_log_lidar_frame", signature: "(*)", impl: rerun_log_lidar_frame_impl),
-            NativeFunction(name: "write_motors", signature: "(*)", impl: write_motors_impl)
+            NativeFunction(
+                name: "read_imu",
+                signature: "(*)",
+                impl: unsafeBitCast(read_imu_impl as CFunction1, to: UnsafeMutableRawPointer.self)
+            ),
+            NativeFunction(
+                name: "init_camera",
+                signature: "(*)",
+                impl: unsafeBitCast(init_camera_impl as CFunction1, to: UnsafeMutableRawPointer.self)
+            ),
+            NativeFunction(
+                name: "read_lidar_camera",
+                signature: "(*)",
+                impl: unsafeBitCast(read_lidar_camera_impl as CFunction1, to: UnsafeMutableRawPointer.self)
+            ),
+            NativeFunction(
+                name: "rerun_log_lidar_frame",
+                signature: "(*)",
+                impl: unsafeBitCast(rerun_log_lidar_frame_impl as CFunction1, to: UnsafeMutableRawPointer.self)
+            ),
+            NativeFunction(
+                name: "rerun_log_camera_keypoints",
+                signature: "(**)",
+                impl: unsafeBitCast(rerun_log_camera_keypoints_impl as CFunction2, to: UnsafeMutableRawPointer.self)
+            ),
+            NativeFunction(
+                name: "write_motors",
+                signature: "(*)",
+                impl: unsafeBitCast(write_motors_impl as CFunction1, to: UnsafeMutableRawPointer.self)
+            )
         ]
 
         let nativeSymbolPtr = UnsafeMutablePointer<NativeSymbol>.allocate(capacity: nativeFunctions.count)
@@ -68,11 +94,9 @@ class WasmManager {
                 symbolPtrs.append(namePtr)
                 symbolPtrs.append(sigPtr)
 
-                let funcPtr = unsafeBitCast(function.impl, to: UnsafeMutableRawPointer.self)
-
                 nativeSymbolPtr[index] = NativeSymbol(
                     symbol: UnsafePointer(namePtr),
-                    func_ptr: funcPtr,
+                    func_ptr: function.impl,
                     signature: UnsafePointer(sigPtr),
                     attachment: nil
                 )

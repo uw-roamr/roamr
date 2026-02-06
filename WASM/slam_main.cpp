@@ -14,7 +14,7 @@ static CameraConfig g_cam_config;
 static LidarCameraData g_lc_data;
 static IMUData g_imu_data;
 
-std::array<uint8_t, max_image_size / > grayscale_image;
+static grayscale_img grayscale;
 static std::vector<Keypoint2d> g_keypoints2d;
 
 // Quick demo: drive both wheels forward briefly.
@@ -53,7 +53,7 @@ int main(){
             std::lock_guard<std::mutex> lk(m_lc);
             read_lidar_camera(&g_lc_data);
 
-            detect_corners(g_lc_data, g_keypoints2d);
+            detect_corners(g_cam_config, grayscale, g_keypoints2d);
         }
     });
     std::thread telemetry_thread(log_sensors, 

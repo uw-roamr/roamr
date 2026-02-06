@@ -110,6 +110,7 @@ class RerunBridge:
 
     def __init__(self, history_size: int = 1):
         self.history: deque[PointsMessage] = deque(maxlen=max(1, history_size))
+        self._pinhole_dims: Optional[tuple[int, int]] = None
 
     async def handle_ws(self, websocket):
         peer = websocket.remote_address
@@ -141,6 +142,11 @@ class RerunBridge:
 
         if msg_type == "video_frame":
             self._log_video_frame(payload, timestamp)
+            return
+
+        if msg_type == "camera_keypoints":
+            self._log_camera_keypoints(payload, timestamp)
+            return
 
     def _log_pose(self, payload: dict) -> None:
         quat = payload.get("quaternion") or []
@@ -201,8 +207,44 @@ class RerunBridge:
         jpeg_b64 = payload.get("jpeg_b64")
         jpeg_bytes = base64.b64decode(jpeg_b64, validate=True)
         set_rerun_time(timestamp)
+        self._log_camera_pinhole(payload)
         if self._log_encoded_image("camera/image", jpeg_bytes):
             return
+
+    def _log_camera_pinhole(self, payload: dict) -> None:
+        width = int(payload.get("image_width") or 0)
+        height = int(payload.get("image_height") or 0)
+        if width <= 0 or height <= 0:
+            return
+        dims = (width, height)
+        if self._pinhole_dims == dims:
+            return
+
+        focal_length = 0.5 * min(width, height)
+        rr.log(
+            "camera",
+            rr.Pinhole(focal_length=focal_length, width=width, height=height),
+        )
+        self._pinhole_dims = dims
+
+    def _log_camera_keypoints(self, payload: dict, timestamp: float) -> None:
+        keypoints = payload.get("keypoints") or payload.get("keypoints2d") or []
+        if not keypoints:
+            print("[rerun] camera_keypoints: empty payload")
+            return
+
+        # Accept either [[x, y], ...] or flat [x0, y0, x1, y1, ...].
+        if keypoints and isinstance(keypoints[0], (int, float)):
+            points2d = [
+                [keypoints[i], keypoints[i + 1]]
+                for i in range(0, len(keypoints) - 1, 2)
+            ]
+        else:
+            points2d = keypoints
+
+        print(f"[rerun] camera_keypoints: {len(points2d)} points")
+        set_rerun_time(timestamp)
+        rr.log("camera/keypoints", rr.Points2D(points2d))
 
     def _log_encoded_image(self, path: str, jpeg_bytes: bytes) -> bool:
         encoded_cls = getattr(rr, "EncodedImage", None)
@@ -275,4 +317,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

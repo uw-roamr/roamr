@@ -113,7 +113,7 @@ private final class WasmRerunTelemetryBridge {
         processingLock.lock()
         defer { processingLock.unlock() }
 
-        guard let frame = decodeFrame(execEnv: execEnv, payloadPointer: payloadPointer) else {
+        guard let frame = decodeFrame(execEnv: execEnv, payloadPointer: payloadPointer, minPoints: 3) else {
             return
         }
         logPointCloud(frame)
@@ -121,9 +121,40 @@ private final class WasmRerunTelemetryBridge {
         logCameraImage(frame)
     }
 
+    func handleWasmCameraKeypoints(
+        execEnv: wasm_exec_env_t?,
+        payloadPointer: UnsafeMutableRawPointer?,
+        keypointsPointer: UnsafeMutableRawPointer?
+    ) {
+        processingLock.lock()
+        defer { processingLock.unlock() }
+
+        guard let frame = decodeFrame(execEnv: execEnv, payloadPointer: payloadPointer, minPoints: 0) else {
+            return
+        }
+
+        // Avoid duplicate image logs when the lidar frame logger already handles it.
+        if frame.pointsCount == 0 {
+            logCameraImage(frame)
+        }
+
+        guard let keypoints = decodeKeypoints(execEnv: execEnv, keypointsPointer: keypointsPointer),
+              !keypoints.isEmpty else {
+            return
+        }
+        let previewCount = min(4, keypoints.count)
+        let preview = keypoints.prefix(previewCount)
+        print("rerun_log_camera_keypoints_impl: decoded \(keypoints.count / 2) keypoints, preview=\(Array(preview))")
+        RerunWebSocketClient.shared.logCameraKeypoints(
+            timestamp: frame.timestamp,
+            keypoints: keypoints
+        )
+    }
+
     private func decodeFrame(
         execEnv: wasm_exec_env_t?,
-        payloadPointer: UnsafeMutableRawPointer?
+        payloadPointer: UnsafeMutableRawPointer?,
+        minPoints: Int
     ) -> WasmLidarFrameView? {
         guard let execEnv = execEnv, let payloadPointer = payloadPointer else { return nil }
 
@@ -152,7 +183,7 @@ private final class WasmRerunTelemetryBridge {
             offset: WasmLidarLayout.pointsSizeOffset,
             maxCount: WasmLidarLayout.pointsMaxCount
         )
-        if pointsCount < 3 { return nil }
+        if pointsCount < minPoints { return nil }
 
         let colorsCount = readClampedCount(
             basePointer: basePointer,
@@ -290,7 +321,9 @@ private final class WasmRerunTelemetryBridge {
 
         RerunWebSocketClient.shared.logVideoFrame(
             timestamp: frame.timestamp,
-            jpegData: jpegData
+            jpegData: jpegData,
+            width: dimensions.width,
+            height: dimensions.height
         )
     }
 
@@ -319,16 +352,74 @@ private final class WasmRerunTelemetryBridge {
         warnedImageSizeZero = true
         print("rerun_log_lidar_frame_impl: image_size is 0 in WASM payload; skipping camera/image logging")
     }
+
+    private func decodeKeypoints(
+        execEnv: wasm_exec_env_t?,
+        keypointsPointer: UnsafeMutableRawPointer?
+    ) -> [Double]? {
+        guard let execEnv = execEnv, let keypointsPointer = keypointsPointer else {
+            return nil
+        }
+        guard let moduleInstance = wasm_runtime_get_module_inst(execEnv) else {
+            return nil
+        }
+
+        let header = keypointsPointer.withMemoryRebound(to: UInt32.self, capacity: 3) { ptr -> (UInt32, UInt32, UInt32) in
+            (ptr[0], ptr[1], ptr[2])
+        }
+        let beginOffset = header.0
+        let endOffset = header.1
+
+        if endOffset < beginOffset { return nil }
+        let byteCount = Int(endOffset - beginOffset)
+        if byteCount == 0 { return [] }
+        print("rerun_log_camera_keypoints_impl: header begin=\(beginOffset) end=\(endOffset) bytes=\(byteCount)")
+
+        let elementStride = MemoryLayout<Double>.size * 2
+        if byteCount % elementStride != 0 { return nil }
+        let elementCount = byteCount / elementStride
+        if elementCount <= 0 { return [] }
+
+        guard let beginNative = wasm_runtime_addr_app_to_native(moduleInstance, UInt64(beginOffset)) else {
+            return nil
+        }
+
+        var nativeStart: UnsafeMutablePointer<UInt8>?
+        var nativeEnd: UnsafeMutablePointer<UInt8>?
+        let beginPtr = beginNative.assumingMemoryBound(to: UInt8.self)
+        if !wasm_runtime_get_native_addr_range(moduleInstance, beginPtr, &nativeStart, &nativeEnd) {
+            return nil
+        }
+        if let nativeEnd = nativeEnd {
+            let baseAddr = UInt(bitPattern: beginPtr)
+            let endAddr = UInt(bitPattern: nativeEnd)
+            if baseAddr + UInt(byteCount) > endAddr {
+                return nil
+            }
+        }
+
+        let keypointPtr = beginPtr.withMemoryRebound(to: Double.self, capacity: elementCount * 2) { $0 }
+        var output: [Double] = []
+        output.reserveCapacity(elementCount * 2)
+        for i in 0..<elementCount {
+            let idx = i * 2
+            output.append(keypointPtr[idx])
+            output.append(keypointPtr[idx + 1])
+        }
+        return output
+    }
 }
 
 private enum RerunMessage: Encodable {
     case points(timestamp: Double, points: [Float], colors: [UInt8]?)
     case pose(timestamp: Double, quaternion: [Double])
     case motors(timestamp: Double, left: Int, right: Int, holdMs: Int)
-    case videoFrame(timestamp: Double, jpegBase64: String)
+    case videoFrame(timestamp: Double, jpegBase64: String, width: Int, height: Int)
+    case cameraKeypoints(timestamp: Double, keypoints: [Double])
 
     enum CodingKeys: String, CodingKey {
-        case type, timestamp, points, colors, quaternion, left, right, hold_ms, jpeg_b64
+        case type, timestamp, points, colors, quaternion, left, right, hold_ms, jpeg_b64, keypoints
+        case image_width, image_height
     }
 
     func encode(to encoder: Encoder) throws {
@@ -349,10 +440,16 @@ private enum RerunMessage: Encodable {
             try container.encode(left, forKey: .left)
             try container.encode(right, forKey: .right)
             try container.encode(holdMs, forKey: .hold_ms)
-        case let .videoFrame(timestamp, jpegBase64):
+        case let .videoFrame(timestamp, jpegBase64, width, height):
             try container.encode("video_frame", forKey: .type)
             try container.encode(timestamp, forKey: .timestamp)
             try container.encode(jpegBase64, forKey: .jpeg_b64)
+            try container.encode(width, forKey: .image_width)
+            try container.encode(height, forKey: .image_height)
+        case let .cameraKeypoints(timestamp, keypoints):
+            try container.encode("camera_keypoints", forKey: .type)
+            try container.encode(timestamp, forKey: .timestamp)
+            try container.encode(keypoints, forKey: .keypoints)
         }
     }
 }
@@ -392,9 +489,19 @@ final class RerunWebSocketClient {
         enqueue(.motors(timestamp: timestamp, left: left, right: right, holdMs: holdMs))
     }
 
-    func logVideoFrame(timestamp: Double, jpegData: Data) {
+    func logVideoFrame(timestamp: Double, jpegData: Data, width: Int, height: Int) {
         guard !jpegData.isEmpty else { return }
-        enqueue(.videoFrame(timestamp: timestamp, jpegBase64: jpegData.base64EncodedString()))
+        enqueue(.videoFrame(
+            timestamp: timestamp,
+            jpegBase64: jpegData.base64EncodedString(),
+            width: width,
+            height: height
+        ))
+    }
+
+    func logCameraKeypoints(timestamp: Double, keypoints: [Double]) {
+        guard !keypoints.isEmpty else { return }
+        enqueue(.cameraKeypoints(timestamp: timestamp, keypoints: keypoints))
     }
 
     private func enqueue(_ message: RerunMessage) {
@@ -488,4 +595,16 @@ private extension RerunWebSocketClient {
 
 func rerun_log_lidar_frame_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     WasmRerunTelemetryBridge.shared.handleWasmFrame(execEnv: exec_env, payloadPointer: ptr)
+}
+
+func rerun_log_camera_keypoints_impl(
+    exec_env: wasm_exec_env_t?,
+    ptr: UnsafeMutableRawPointer?,
+    keypointsPtr: UnsafeMutableRawPointer?
+) {
+    WasmRerunTelemetryBridge.shared.handleWasmCameraKeypoints(
+        execEnv: exec_env,
+        payloadPointer: ptr,
+        keypointsPointer: keypointsPtr
+    )
 }
