@@ -34,7 +34,7 @@ void log_sensors(std::mutex& m_imu, const IMUData& imu_data, std::mutex& m_lc, c
         last_lc_timestamp = lc_timestamp;
         has_new_lc = true;
         if (points_size > 0) {
-          rerun_log_points(&lc_data);
+          rerun_log_lidar_frame(&lc_data);
         }
       }
     }

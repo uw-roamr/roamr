@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct ContentView: View {
-	@StateObject private var bluetoothManager = BluetoothManager()
+	@StateObject private var bluetoothManager = BluetoothManager.shared
 	@State var currentPage: AppPage = .wasm
 
 	var body: some View {

@@ -5,6 +5,23 @@
 #include "imu.h"
 #include "lidar_camera.h"
 #include "telemetry.h"
+#include "motors.h"
+
+static CameraConfig g_cam_config;
+static LidarCameraData g_lc_data;
+static IMUData g_imu_data;
+
+// Quick demo: drive both wheels forward briefly.
+void drive_forward_demo() {
+    MotorController motors;
+    
+    // Ramp from reverse to forward with a dwell at each step.
+    for (int i = -2; i <= 3; i++){
+        const int pct = i * 10;
+        motors.drive_for(-pct, pct, 3000, true);
+    }
+    motors.stop();
+}
 
 static CameraConfig g_cam_config;
 static LidarCameraData g_lc_data;
@@ -14,6 +31,9 @@ int main(){
     std::mutex m_imu;
     
     std::mutex m_lc;
+
+    MotorController motors;
+    motors.stop(); // ensure motors start from a safe state
 
     init_camera(&g_cam_config);
     log_config(g_cam_config);
@@ -34,6 +54,7 @@ int main(){
     });
     std::thread telemetry_thread(log_sensors, std::ref(m_imu), std::cref(g_imu_data), std::ref(m_lc), std::cref(g_lc_data));
 
+    drive_forward_demo();
     imu_thread.join();
     lidar_camera_thread.join();
     telemetry_thread.join();

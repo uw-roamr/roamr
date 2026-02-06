@@ -10,7 +10,7 @@
 
 constexpr int log_interval_ms = 33;
 
-WASM_IMPORT("host", "rerun_log_points") void rerun_log_points(const LidarCameraData *data);
+WASM_IMPORT("host", "rerun_log_lidar_frame") void rerun_log_lidar_frame(const LidarCameraData *data);
 
 
 void log_config(const CameraConfig& cam_config);
