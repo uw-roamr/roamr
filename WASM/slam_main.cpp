@@ -5,11 +5,17 @@
 #include "sensors/imu.h"
 #include "sensors/lidar_camera.h"
 #include "controls/motors.h"
+
+#include "frontend/corner_detection.h"
+
 #include "utils/telemetry.h"
 
 static CameraConfig g_cam_config;
 static LidarCameraData g_lc_data;
 static IMUData g_imu_data;
+
+std::array<uint8_t, max_image_size / > grayscale_image;
+static std::vector<Keypoint2d> g_keypoints2d;
 
 // Quick demo: drive both wheels forward briefly.
 void drive_forward_demo() {
@@ -46,9 +52,13 @@ int main(){
             std::this_thread::sleep_for(std::chrono::milliseconds(LidarCameraIntervalMs));
             std::lock_guard<std::mutex> lk(m_lc);
             read_lidar_camera(&g_lc_data);
+
+            detect_corners(g_lc_data, g_keypoints2d);
         }
     });
-    std::thread telemetry_thread(log_sensors, std::ref(m_imu), std::cref(g_imu_data), std::ref(m_lc), std::cref(g_lc_data));
+    std::thread telemetry_thread(log_sensors, 
+        std::ref(m_imu), std::cref(g_imu_data), 
+        std::ref(m_lc), std::cref(g_lc_data), std::cref(g_keypoints2d));
 
     drive_forward_demo();
     imu_thread.join();

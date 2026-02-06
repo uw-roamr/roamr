@@ -8,7 +8,10 @@ void log_config(const CameraConfig& cam_config){
 }
 
 // log sensors without significant delays in processing
-void log_sensors(std::mutex& m_imu, const IMUData& imu_data, std::mutex& m_lc, const LidarCameraData& lc_data){
+void log_sensors(
+  std::mutex& m_imu, const IMUData& imu_data, 
+  std::mutex& m_lc, const LidarCameraData& lc_data, const std::vector<Keypoint2d>& keypoints2d
+){
   std::cout << std::fixed << std::setprecision(5);
   double last_lc_timestamp = -1.0;
   while (true) {
@@ -35,6 +38,9 @@ void log_sensors(std::mutex& m_imu, const IMUData& imu_data, std::mutex& m_lc, c
         has_new_lc = true;
         if (points_size > 0) {
           rerun_log_lidar_frame(&lc_data);
+        }
+        if (image_size > 0) {
+          rerun_log_camera_keypoints(&lc_data, &keypoints2d);
         }
       }
     }

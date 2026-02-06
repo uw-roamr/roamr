@@ -23,7 +23,11 @@ constexpr size_t max_colors_size = static_cast<size_t>(max_points_per_scan * col
 constexpr int max_image_height = 1440;
 constexpr int max_image_width = 1920;
 constexpr int max_image_channels = 3;
-constexpr size_t max_image_size = static_cast<size_t> (max_image_width * max_image_height * max_image_channels);
+constexpr size_t max_grayscale_image_size = static_cast<size_t> (max_image_width * max_image_height);
+constexpr size_t max_image_size = static_cast<size_t> (max_grayscale_image_size * max_image_channels);
+
+typedef std::array<float, max_grayscale_image_size> grayscale_img;
+typedef std::array<uint8_t, max_image_size> src_img;
 
 struct LidarCameraData {
   double timestamp;
@@ -34,7 +38,7 @@ struct LidarCameraData {
   std::array<uint8_t, max_colors_size> colors; // RGB per point
   size_t colors_size;
 
-  std::array<uint8_t, max_image_size> image;
+  src_img image;
   size_t image_size;
 };
 
@@ -43,3 +47,5 @@ WASM_IMPORT("host", "read_lidar_camera") void read_lidar_camera(LidarCameraData 
 
 constexpr double LidarCameraRefreshHz = 30.0;
 constexpr int LidarCameraIntervalMs = static_cast<int>(1000.0 / LidarCameraRefreshHz);
+
+void img_to_grayscale(const CameraConfig& config, const src_img& src, grayscale_img& grayscale);
