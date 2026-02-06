@@ -141,6 +141,11 @@ class RerunBridge:
 
         if msg_type == "video_frame":
             self._log_video_frame(payload, timestamp)
+            return
+
+        if msg_type == "map_frame":
+            self._log_map_frame(payload, timestamp)
+            return
 
     def _log_pose(self, payload: dict) -> None:
         quat = payload.get("quaternion") or []
@@ -203,6 +208,17 @@ class RerunBridge:
         set_rerun_time(timestamp)
         if self._log_encoded_image("camera/image", jpeg_bytes):
             return
+
+    def _log_map_frame(self, payload: dict, timestamp: float) -> None:
+        jpeg_b64 = payload.get("jpeg_b64")
+        if not jpeg_b64:
+            return
+        try:
+            jpeg_bytes = base64.b64decode(jpeg_b64, validate=True)
+        except Exception:
+            return
+        set_rerun_time(timestamp)
+        self._log_encoded_image("map/image", jpeg_bytes)
 
     def _log_encoded_image(self, path: str, jpeg_bytes: bytes) -> bool:
         encoded_cls = getattr(rr, "EncodedImage", None)
@@ -275,4 +291,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

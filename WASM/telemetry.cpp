@@ -1,6 +1,60 @@
 #include "telemetry.h"
 #include "lidar_camera.h"
+#include "map_api.h"
+#include <algorithm>
 #include <mutex>
+#include <stdint.h>
+
+namespace {
+constexpr int kMapWidth = 256;
+constexpr int kMapHeight = 256;
+constexpr int kMapMaxPoints = 20000; // keep in sync with map.cpp
+constexpr double kMapMinInterval = 0.2; // seconds
+
+static bool g_map_initialized = false;
+static double g_last_map_timestamp = -1.0;
+static MapFrame g_map_frame;
+
+void update_map_from_lidar(const LidarCameraData& lc_data) {
+  const int total_points = static_cast<int>(lc_data.points_size / 3);
+  if (total_points <= 0) return;
+
+  if (!g_map_initialized) {
+    reset_map();
+    reset_points();
+    reset_poses();
+    set_points_world(0);
+    set_pose(0, 0.0f, 0.0f, 0.0f);
+    g_map_initialized = true;
+  }
+
+  int stride = 1;
+  if (total_points > kMapMaxPoints) {
+    stride = std::max(1, total_points / kMapMaxPoints);
+  }
+
+  int used_points = 0;
+  for (int i = 0; i < total_points && used_points < kMapMaxPoints; i += stride) {
+    const int base = i * 3;
+    set_point(used_points, lc_data.points[base + 0], lc_data.points[base + 1]);
+    used_points += 1;
+  }
+
+  if (used_points <= 0) return;
+
+  draw_map(1, used_points, kMapWidth, kMapHeight);
+
+  g_map_frame.timestamp = lc_data.timestamp;
+  g_map_frame.width = get_image_width();
+  g_map_frame.height = get_image_height();
+  g_map_frame.channels = 4;
+  g_map_frame.data_ptr = static_cast<uint32_t>(
+      reinterpret_cast<uintptr_t>(get_image_rgba_ptr()));
+  g_map_frame.data_size = get_image_rgba_size();
+
+  rerun_log_map_frame(&g_map_frame);
+}
+} // namespace
 
 void log_config(const CameraConfig& cam_config){
   std::cout << "Sensor config" << std::endl;
@@ -35,6 +89,10 @@ void log_sensors(std::mutex& m_imu, const IMUData& imu_data, std::mutex& m_lc, c
         has_new_lc = true;
         if (points_size > 0) {
           rerun_log_lidar_frame(&lc_data);
+          if (lc_timestamp - g_last_map_timestamp >= kMapMinInterval) {
+            g_last_map_timestamp = lc_timestamp;
+            update_map_from_lidar(lc_data);
+          }
         }
       }
     }

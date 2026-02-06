@@ -156,13 +156,13 @@ struct PointCloudCanvasView: View {
             for i in Swift.stride(from: 0, to: points.count, by: stride) {
                 let point = points[i]
 
-                // Project camera-space X/Y into screen space for a quick visualization.
-                let screenX = centerX - CGFloat(point.y) * scale
-                let screenY = centerY + CGFloat(point.x) * scale
+            // Project FLU (forward/left) into a top-down view.
+            let screenX = centerX - CGFloat(point.y) * scale
+            let screenY = centerY - CGFloat(point.x) * scale
 
-                // Z (depth) as color gradient: close = warm (red/yellow), far = cool (blue)
-                let depth = point.z
-                let normalizedDepth = min(max(Double(depth) / 5.0, 0), 1) // 0-5m range
+            // Forward (X) as color gradient: close = warm (red/yellow), far = cool (blue)
+            let forward = point.x
+            let normalizedDepth = min(max(Double(forward) / 5.0, 0), 1) // 0-5m range
 
                 // Gradient from red (close) -> yellow -> green -> cyan -> blue (far)
                 let hue = normalizedDepth * 0.7 // 0 = red, 0.7 = blue

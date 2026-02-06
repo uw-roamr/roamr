@@ -8,7 +8,40 @@
 import Foundation
 import CoreMotion
 import QuartzCore
+import simd
 
+enum CoordinateFrames {
+    // Camera depth unprojection yields RDF: +X right, +Y down, +Z forward.
+    // Convert to FLU: +X forward, +Y left, +Z up.
+    static func cameraRdfToFlu(_ p: SIMD3<Float>) -> SIMD3<Float> {
+        SIMD3<Float>(p.z, -p.x, -p.y)
+    }
+
+    static func cameraRdfToFlu(_ p: SIMD3<Double>) -> SIMD3<Double> {
+        SIMD3<Double>(p.z, -p.x, -p.y)
+    }
+
+    // Device axes (portrait): +X right, +Y up, +Z out of screen (toward user).
+    // Back-camera forward is -Z. Map device vectors into FLU.
+    static func deviceToFlu(_ v: SIMD3<Double>) -> SIMD3<Double> {
+        SIMD3<Double>(-v.z, -v.x, v.y)
+    }
+
+    static let deviceToFluRotation: simd_quatd = {
+        // Columns are device basis vectors expressed in FLU.
+        let c0 = SIMD3<Double>(0.0, -1.0, 0.0) // device +X -> FLU
+        let c1 = SIMD3<Double>(0.0, 0.0, 1.0)  // device +Y -> FLU
+        let c2 = SIMD3<Double>(-1.0, 0.0, 0.0) // device +Z -> FLU
+        let m = simd_double3x3(columns: (c0, c1, c2))
+        return simd_quatd(m)
+    }()
+
+    static func deviceAttitudeToFlu(_ qDeviceFromRef: simd_quatd) -> simd_quatd {
+        deviceToFluRotation * qDeviceFromRef
+    }
+}
+
+// IMU samples in FLU coordinates: +X forward, +Y left, +Z up.
 struct IMUData {
     var acc_timestamp: Double
     var acc_x: Double
@@ -20,6 +53,7 @@ struct IMUData {
     var gyro_z: Double
 }
 
+// Attitude quaternion in FLU coordinates (xyzw).
 struct AttitudeData {
     var timestamp: Double
     var quat_x: Double
@@ -52,11 +86,17 @@ class IMUManager {
             motionManager.accelerometerUpdateInterval = motionUpdateInterval
             motionManager.startAccelerometerUpdates(to: .main) { [weak self] (data, _) in
                 guard let self = self, let data = data else { return }
+                let accDevice = SIMD3<Double>(
+                    data.acceleration.x * gravityToMetersPerSecondSquared,
+                    data.acceleration.y * gravityToMetersPerSecondSquared,
+                    data.acceleration.z * gravityToMetersPerSecondSquared
+                )
+                let accFlu = CoordinateFrames.deviceToFlu(accDevice)
                 self.lock.lock()
                 self.currentData.acc_timestamp = data.timestamp
-                self.currentData.acc_x = data.acceleration.x * gravityToMetersPerSecondSquared
-                self.currentData.acc_y = data.acceleration.y * gravityToMetersPerSecondSquared
-                self.currentData.acc_z = data.acceleration.z * gravityToMetersPerSecondSquared
+                self.currentData.acc_x = accFlu.x
+                self.currentData.acc_y = accFlu.y
+                self.currentData.acc_z = accFlu.z
                 self.lock.unlock()
             }
         }
@@ -65,11 +105,17 @@ class IMUManager {
             motionManager.gyroUpdateInterval = motionUpdateInterval
             motionManager.startGyroUpdates(to: .main) { [weak self] (data, _) in
                 guard let self = self, let data = data else { return }
+                let gyroDevice = SIMD3<Double>(
+                    data.rotationRate.x,
+                    data.rotationRate.y,
+                    data.rotationRate.z
+                )
+                let gyroFlu = CoordinateFrames.deviceToFlu(gyroDevice)
                 self.lock.lock()
                 self.currentData.gyro_timestamp = data.timestamp
-                self.currentData.gyro_x = data.rotationRate.x
-                self.currentData.gyro_y = data.rotationRate.y
-                self.currentData.gyro_z = data.rotationRate.z
+                self.currentData.gyro_x = gyroFlu.x
+                self.currentData.gyro_y = gyroFlu.y
+                self.currentData.gyro_z = gyroFlu.z
                 self.lock.unlock()
             }
         }
@@ -79,10 +125,15 @@ class IMUManager {
             motionManager.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] (motion, _) in
                 guard let self = self, let motion = motion else { return }
                 let q = motion.attitude.quaternion
+                let qDeviceFromRef = simd_quatd(ix: q.x, iy: q.y, iz: q.z, r: q.w)
+                let qFluFromRef = CoordinateFrames.deviceAttitudeToFlu(qDeviceFromRef)
                 self.lock.lock()
                 self.currentAttitude = AttitudeData(
                     timestamp: motion.timestamp,
-                    quat_x: q.x, quat_y: q.y, quat_z: q.z, quat_w: q.w
+                    quat_x: qFluFromRef.imag.x,
+                    quat_y: qFluFromRef.imag.y,
+                    quat_z: qFluFromRef.imag.z,
+                    quat_w: qFluFromRef.real
                 )
                 self.lock.unlock()
 
@@ -92,7 +143,12 @@ class IMUManager {
                     self.lastPoseSendTime = now
                     RerunWebSocketClient.shared.logPose(
                         timestamp: motion.timestamp,
-                        quaternion: [q.x, q.y, q.z, q.w]
+                        quaternion: [
+                            qFluFromRef.imag.x,
+                            qFluFromRef.imag.y,
+                            qFluFromRef.imag.z,
+                            qFluFromRef.real
+                        ]
                     )
                 }
             }

@@ -32,7 +32,7 @@ struct LidarCameraData {
 }
 
 struct PointCloudData {
-    var points: [SIMD3<Float>]  // 3D world coordinates (meters)
+    var points: [SIMD3<Float>]  // 3D camera-frame points in FLU (meters)
     var colors: [UInt8]         // RGB per point (len = points.count * 3)
     var count: Int
 }
@@ -565,12 +565,14 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
                 // If unavailable in this deployment target, skip undistortion to keep the build green.
                 // Future: switch to CIFilter-based correction when available.
 
-                // Unproject: pixel (x,y) + depth -> 3D point (meters)
-                let xWorld = (Float(px) - cx) * depth / fx
-                let yWorld = (Float(py) - cy) * depth / fy
-                let zWorld = depth
+                // Unproject: pixel (x,y) + depth -> 3D point in camera RDF (meters)
+                let xCam = (Float(px) - cx) * depth / fx
+                let yCam = (Float(py) - cy) * depth / fy
+                let zCam = depth
 
-                points.append(SIMD3<Float>(xWorld, yWorld, zWorld))
+                let pointRdf = SIMD3<Float>(xCam, yCam, zCam)
+                let pointFlu = CoordinateFrames.cameraRdfToFlu(pointRdf)
+                points.append(pointFlu)
 
                 // Extract color (BGRA -> RGB) using scaled coordinates into the color buffer
                 let colorX = min(colorWidth - 1, max(0, Int(round(Float(x) * colorScaleX))))
