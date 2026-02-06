@@ -1,5 +1,5 @@
 #pragma once
-#include "wasm_utils.h"
+#include "utils/wasm_utils.h"
 #include <stddef.h> // size_t
 #include <stdint.h> // uint8_t
 #include <array>

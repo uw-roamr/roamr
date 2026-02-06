@@ -5,8 +5,8 @@
 #include <iomanip>
 #include <iostream>
 
-#include "imu.h"
-#include "lidar_camera.h"
+#include "sensors/imu.h"
+#include "sensors/lidar_camera.h"
 
 constexpr int log_interval_ms = 33;
 

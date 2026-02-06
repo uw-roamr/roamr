@@ -1,5 +1,5 @@
 #pragma once
-#include "wasm_utils.h"
+#include "utils/wasm_utils.h"
 
 struct IMUData {
     double acc_timestamp;

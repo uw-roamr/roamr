@@ -5,7 +5,7 @@
 #include <thread>
 #include <chrono>
 
-#include "wasm_utils.h"
+#include "utils/wasm_utils.h"
 
 // Desired motor output in percentage of full scale (-100 to 100)
 // hold_ms lets the host decide how long to keep this command alive.

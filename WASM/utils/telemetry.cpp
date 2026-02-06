@@ -1,5 +1,5 @@
-#include "telemetry.h"
-#include "lidar_camera.h"
+#include "utils/telemetry.h"
+#include "sensors/lidar_camera.h"
 #include <mutex>
 
 void log_config(const CameraConfig& cam_config){

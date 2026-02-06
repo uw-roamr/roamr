@@ -2,10 +2,10 @@
 #include <thread>
 #include <chrono>
 
-#include "imu.h"
-#include "lidar_camera.h"
-#include "telemetry.h"
-#include "motors.h"
+#include "sensors/imu.h"
+#include "sensors/lidar_camera.h"
+#include "controls/motors.h"
+#include "utils/telemetry.h"
 
 static CameraConfig g_cam_config;
 static LidarCameraData g_lc_data;
@@ -22,10 +22,6 @@ void drive_forward_demo() {
     }
     motors.stop();
 }
-
-static CameraConfig g_cam_config;
-static LidarCameraData g_lc_data;
-static IMUData g_imu_data;
 
 int main(){
     std::mutex m_imu;
