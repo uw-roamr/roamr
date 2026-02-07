@@ -21,13 +21,13 @@ enum CoordinateFrames {
         SIMD3<Double>(p.z, -p.x, -p.y)
     }
 
-    // Device axes (portrait): +X right, +Y up, +Z back (toward user).
+    // Device axes (portrait): +X right, +Y up, +Z out of screen (toward user).
     // Map device vectors into FLU (+X forward, +Y left, +Z up).
     static let deviceToFluMatrix: simd_double3x3 = {
         // Columns are device basis vectors expressed in FLU.
-        let c0 = SIMD3<Double>(0.0, -1.0, 0.0) // device +X -> FLU +Y left
-        let c1 = SIMD3<Double>(0.0, 0.0, 1.0)  // device +Y -> FLU +Z up
-        let c2 = SIMD3<Double>(-1.0, 0.0, 0.0) // device +Z -> FLU -X forward
+        let c0 = SIMD3<Double>(0.0, -1.0, 0.0) // device +X (right) -> FLU -Y (right)
+        let c1 = SIMD3<Double>(0.0, 0.0, 1.0)  // device +Y (up) -> FLU +Z (up)
+        let c2 = SIMD3<Double>(-1.0, 0.0, 0.0) // device +Z (toward user) -> FLU -X (forward)
         return simd_double3x3(columns: (c0, c1, c2))
     }()
 
@@ -43,13 +43,12 @@ enum CoordinateFrames {
 
     // Convert CoreMotion rotation matrix into FLU (ref -> flu).
     static func refToFlu(fromDeviceRotation r: CMRotationMatrix) -> simd_quatd {
-        // CMRotationMatrix is documented as a matrix that rotates from the reference
-        // frame into the device frame. To be robust, build R_ref_from_dev and transpose.
+        // CMRotationMatrix rotates vectors from the reference frame into the device frame.
+        // Build R_dev_from_ref in column-major form, then map device -> FLU.
         let c0 = SIMD3<Double>(r.m11, r.m21, r.m31)
         let c1 = SIMD3<Double>(r.m12, r.m22, r.m32)
         let c2 = SIMD3<Double>(r.m13, r.m23, r.m33)
-        let rRefFromDev = simd_double3x3(columns: (c0, c1, c2))
-        let rDevFromRef = rRefFromDev.transpose
+        let rDevFromRef = simd_double3x3(columns: (c0, c1, c2))
         let rFluFromRef = deviceToFluMatrix * rDevFromRef
         return simd_quatd(rFluFromRef)
     }
