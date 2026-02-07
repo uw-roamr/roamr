@@ -10,6 +10,9 @@ constexpr int kMapWidth = 256;
 constexpr int kMapHeight = 256;
 constexpr int kMapMaxPoints = 20000; // keep in sync with map.cpp
 constexpr double kMapMinInterval = 0.2; // seconds
+constexpr float kMapMaxRangeMeters = 1.8f; //
+constexpr float kMapMinZ = 0.0f; // drop ground (FLU: Z up)
+constexpr float kMapMaxZ = 0.05f; // drop ceiling/background
 
 static bool g_map_initialized = false;
 static double g_last_map_timestamp = -1.0;
@@ -33,10 +36,17 @@ void update_map_from_lidar(const LidarCameraData& lc_data) {
     stride = std::max(1, total_points / kMapMaxPoints);
   }
 
+  const float max_range2 = kMapMaxRangeMeters * kMapMaxRangeMeters;
   int used_points = 0;
   for (int i = 0; i < total_points && used_points < kMapMaxPoints; i += stride) {
     const int base = i * 3;
-    set_point(used_points, lc_data.points[base + 0], lc_data.points[base + 1]);
+    const float x = lc_data.points[base + 0];
+    const float y = lc_data.points[base + 1];
+    const float z = lc_data.points[base + 2];
+    if (z < kMapMinZ || z > kMapMaxZ) continue;
+    const float r2 = x * x + y * y;
+    if (r2 > max_range2) continue;
+    set_point(used_points, x, y);
     used_points += 1;
   }
 
