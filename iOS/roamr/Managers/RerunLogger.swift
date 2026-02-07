@@ -578,7 +578,7 @@ final class RerunWebSocketClient {
         task.send(.string(payloadString)) { [weak self] error in
             if let error = error {
                 print("Rerun websocket send error: \(error)")
-                self?.isConnected = false
+                self?.markDisconnected()
             }
         }
     }
@@ -591,9 +591,14 @@ final class RerunWebSocketClient {
                 self.listen()
             case .failure(let error):
                 print("Rerun websocket receive error: \(error)")
-                self.isConnected = false
+                self.markDisconnected()
             }
         }
+    }
+
+    private func markDisconnected() {
+        isConnected = false
+        task = nil
     }
 }
 

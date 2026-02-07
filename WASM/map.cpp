@@ -218,6 +218,30 @@ static inline void set_pixel(int32_t x, int32_t y, uint8_t r, uint8_t g, uint8_t
 	IMAGE[o + 3] = a;
 }
 
+static void draw_line_pixel(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+	int dx = (x1 > x0) ? (x1 - x0) : (x0 - x1);
+	int sx = (x0 < x1) ? 1 : -1;
+	int dy = (y1 > y0) ? (y0 - y1) : (y1 - y0); // negative
+	int sy = (y0 < y1) ? 1 : -1;
+	int err = dx + dy;
+
+	int x = x0;
+	int y = y0;
+	while (1) {
+		set_pixel(x, y, r, g, b, a);
+		if (x == x1 && y == y1) break;
+		int e2 = 2 * err;
+		if (e2 >= dy) { // e2 >= dy
+			err += dy;
+			x += sx;
+		}
+		if (e2 <= dx) { // e2 <= dx
+			err += dx;
+			y += sy;
+		}
+	}
+}
+
 static inline int32_t grid_to_pixel(
 	int32_t gx,
 	int32_t gy,
@@ -368,6 +392,27 @@ void draw_map(int32_t poseCount, int32_t pointCount, int32_t width, int32_t heig
 				IMAGE[o + 1] = 255;
 				IMAGE[o + 2] = 255;
 				IMAGE[o + 3] = 255;
+			}
+		}
+	}
+
+	// Heading indicator for the most recent pose (green line).
+	if (poseCount > 0) {
+		const float heading_len_m = 0.5f;
+		const int32_t base = (poseCount - 1) * 3;
+		const float px_world = POSES[base + 0];
+		const float py_world = POSES[base + 1];
+		const float theta = POSES[base + 2];
+		const float hx_world = px_world + cosf(theta) * heading_len_m;
+		const float hy_world = py_world + sinf(theta) * heading_len_m;
+
+		int32_t gx0 = 0, gy0 = 0, gx1 = 0, gy1 = 0;
+		if (world_to_grid(px_world, py_world, &gx0, &gy0) &&
+			world_to_grid(hx_world, hy_world, &gx1, &gy1)) {
+			int32_t px0 = 0, py0 = 0, px1 = 0, py1 = 0;
+			if (grid_to_pixel(gx0, gy0, scale, off_x, off_y, &px0, &py0) &&
+				grid_to_pixel(gx1, gy1, scale, off_x, off_y, &px1, &py1)) {
+				draw_line_pixel(px0, py0, px1, py1, 0, 255, 0, 255);
 			}
 		}
 	}

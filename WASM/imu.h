@@ -6,6 +6,8 @@ struct IMUData {
     double acc_x, acc_y, acc_z;
     double gyro_timestamp;
     double gyro_x, gyro_y, gyro_z;
+    double att_timestamp;
+    double quat_x, quat_y, quat_z, quat_w;
     // double mag_x, mag_y, mag_z; // unused, currently targeting indoor environments and simple fusion
 };
 

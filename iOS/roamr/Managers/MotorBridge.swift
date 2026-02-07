@@ -40,7 +40,7 @@ func write_motors_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?
 
         // Log to Rerun for visualization
         let now = Date().timeIntervalSince1970
-        print("MotorBridge -> rerun: L=\(clampedLeft) R=\(clampedRight) hold_ms=\(holdMs)")
+        // print("MotorBridge -> rerun: L=\(clampedLeft) R=\(clampedRight) hold_ms=\(holdMs)")
         RerunWebSocketClient.shared.logMotors(timestamp: now, left: clampedLeft, right: clampedRight, holdMs: holdMs)
 
         guard holdMs > 0 else { return }

@@ -21,23 +21,37 @@ enum CoordinateFrames {
         SIMD3<Double>(p.z, -p.x, -p.y)
     }
 
-    // Device axes (portrait): +X right, +Y up, +Z out of screen (toward user).
-    // Back-camera forward is -Z. Map device vectors into FLU.
-    static func deviceToFlu(_ v: SIMD3<Double>) -> SIMD3<Double> {
-        SIMD3<Double>(-v.z, -v.x, v.y)
-    }
-
-    static let deviceToFluRotation: simd_quatd = {
+    // Device axes (portrait): +X right, +Y up, +Z back (toward user).
+    // Map device vectors into FLU (+X forward, +Y left, +Z up).
+    static let deviceToFluMatrix: simd_double3x3 = {
         // Columns are device basis vectors expressed in FLU.
-        let c0 = SIMD3<Double>(0.0, -1.0, 0.0) // device +X -> FLU
-        let c1 = SIMD3<Double>(0.0, 0.0, 1.0)  // device +Y -> FLU
-        let c2 = SIMD3<Double>(-1.0, 0.0, 0.0) // device +Z -> FLU
-        let m = simd_double3x3(columns: (c0, c1, c2))
-        return simd_quatd(m)
+        let c0 = SIMD3<Double>(0.0, -1.0, 0.0) // device +X -> FLU +Y left
+        let c1 = SIMD3<Double>(0.0, 0.0, 1.0)  // device +Y -> FLU +Z up
+        let c2 = SIMD3<Double>(-1.0, 0.0, 0.0) // device +Z -> FLU -X forward
+        return simd_double3x3(columns: (c0, c1, c2))
     }()
 
-    static func deviceAttitudeToFlu(_ qDeviceFromRef: simd_quatd) -> simd_quatd {
-        deviceToFluRotation * qDeviceFromRef
+    static func deviceToFlu(_ v: SIMD3<Double>) -> SIMD3<Double> {
+        deviceToFluMatrix * v
+    }
+
+    static func deviceToFlu(_ v: SIMD3<Float>) -> SIMD3<Float> {
+        let dv = SIMD3<Double>(Double(v.x), Double(v.y), Double(v.z))
+        let out = deviceToFluMatrix * dv
+        return SIMD3<Float>(Float(out.x), Float(out.y), Float(out.z))
+    }
+
+    // Convert CoreMotion rotation matrix into FLU (ref -> flu).
+    static func refToFlu(fromDeviceRotation r: CMRotationMatrix) -> simd_quatd {
+        // CMRotationMatrix is documented as a matrix that rotates from the reference
+        // frame into the device frame. To be robust, build R_ref_from_dev and transpose.
+        let c0 = SIMD3<Double>(r.m11, r.m21, r.m31)
+        let c1 = SIMD3<Double>(r.m12, r.m22, r.m32)
+        let c2 = SIMD3<Double>(r.m13, r.m23, r.m33)
+        let rRefFromDev = simd_double3x3(columns: (c0, c1, c2))
+        let rDevFromRef = rRefFromDev.transpose
+        let rFluFromRef = deviceToFluMatrix * rDevFromRef
+        return simd_quatd(rFluFromRef)
     }
 }
 
@@ -51,6 +65,11 @@ struct IMUData {
     var gyro_x: Double
     var gyro_y: Double
     var gyro_z: Double
+    var att_timestamp: Double
+    var quat_x: Double
+    var quat_y: Double
+    var quat_z: Double
+    var quat_w: Double
 }
 
 // Attitude quaternion in FLU coordinates (xyzw).
@@ -70,7 +89,10 @@ class IMUManager {
     private let poseSendInterval: CFTimeInterval = 1.0 / 30.0  // throttle to ~30 Hz
 
     let lock = NSLock()
-    var currentData = IMUData(acc_timestamp: 0, acc_x: 0, acc_y: 0, acc_z: 0, gyro_timestamp: 0, gyro_x: 0, gyro_y: 0, gyro_z: 0
+    var currentData = IMUData(
+        acc_timestamp: 0, acc_x: 0, acc_y: 0, acc_z: 0,
+        gyro_timestamp: 0, gyro_x: 0, gyro_y: 0, gyro_z: 0,
+        att_timestamp: 0, quat_x: 0, quat_y: 0, quat_z: 0, quat_w: 1
     )
     var currentAttitude = AttitudeData(timestamp: 0, quat_x: 0, quat_y: 0, quat_z: 0, quat_w: 1)
 
@@ -124,9 +146,7 @@ class IMUManager {
             motionManager.deviceMotionUpdateInterval = 1.0 / 60.0 // 60 Hz for pose
             motionManager.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] (motion, _) in
                 guard let self = self, let motion = motion else { return }
-                let q = motion.attitude.quaternion
-                let qDeviceFromRef = simd_quatd(ix: q.x, iy: q.y, iz: q.z, r: q.w)
-                let qFluFromRef = CoordinateFrames.deviceAttitudeToFlu(qDeviceFromRef)
+                let qFluFromRef = CoordinateFrames.refToFlu(fromDeviceRotation: motion.attitude.rotationMatrix)
                 self.lock.lock()
                 self.currentAttitude = AttitudeData(
                     timestamp: motion.timestamp,
@@ -135,6 +155,11 @@ class IMUManager {
                     quat_z: qFluFromRef.imag.z,
                     quat_w: qFluFromRef.real
                 )
+                self.currentData.att_timestamp = motion.timestamp
+                self.currentData.quat_x = qFluFromRef.imag.x
+                self.currentData.quat_y = qFluFromRef.imag.y
+                self.currentData.quat_z = qFluFromRef.imag.z
+                self.currentData.quat_w = qFluFromRef.real
                 self.lock.unlock()
 
                 // Stream pose to Rerun (throttled)
@@ -166,13 +191,25 @@ class IMUManager {
 func read_imu_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     guard let ptr = ptr else { return }
 
-    // Bind memory to IMUData struct
-    let imuDataPtr = ptr.bindMemory(to: IMUData.self, capacity: 1)
-
     let manager = IMUManager.shared
     manager.lock.lock()
     let data = manager.currentData
     manager.lock.unlock()
 
-    imuDataPtr.pointee = data
+    // Write field-by-field to match the WASM IMUData layout (Double packed).
+    let fieldCount = 13
+    let base = ptr.bindMemory(to: Double.self, capacity: fieldCount)
+    base[0] = data.acc_timestamp
+    base[1] = data.acc_x
+    base[2] = data.acc_y
+    base[3] = data.acc_z
+    base[4] = data.gyro_timestamp
+    base[5] = data.gyro_x
+    base[6] = data.gyro_y
+    base[7] = data.gyro_z
+    base[8] = data.att_timestamp
+    base[9] = data.quat_x
+    base[10] = data.quat_y
+    base[11] = data.quat_z
+    base[12] = data.quat_w
 }
