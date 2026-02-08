@@ -8,4 +8,5 @@ struct Keypoint2d{
     Keypoint2d(double px, double py): px_(px), py_(py) {}
 };
 
+// FAST
 void detect_corners(const CameraConfig& config, grayscale_img& grayscale, std::vector<Keypoint2d>& keypoints2d);
