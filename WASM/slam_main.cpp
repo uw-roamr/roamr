@@ -36,22 +36,25 @@ int main(){
 
     std::thread imu_thread([&m_imu](){
         while(true){
-            std::this_thread::sleep_for(std::chrono::milliseconds(IMUIntervalMs));
+            // std::this_thread::sleep_for(std::chrono::milliseconds(IMUIntervalMs));
             std::lock_guard<std::mutex> lk(m_imu);
             read_imu(&g_imu_data);
         }
     });
     std::thread lidar_camera_thread([&m_lc](){
         while(true){
-            std::this_thread::sleep_for(std::chrono::milliseconds(LidarCameraIntervalMs));
+            // std::this_thread::sleep_for(std::chrono::milliseconds(LidarCameraIntervalMs));
             std::lock_guard<std::mutex> lk(m_lc);
             read_lidar_camera(&g_lc_data);
         }
     });
-    std::thread telemetry_thread(log_sensors, std::ref(m_imu), std::cref(g_imu_data), std::ref(m_lc), std::cref(g_lc_data));
+
+    std::thread imu_telemetry_thread(log_imu, std::ref(m_imu), std::cref(g_imu_data));
+    std::thread lc_telemetry_thread(log_lc, std::ref(m_lc), std::cref(g_lc_data));
 
     drive_forward_demo();
     imu_thread.join();
     lidar_camera_thread.join();
-    telemetry_thread.join();
+    imu_telemetry_thread.join();
+    lc_telemetry_thread.join();
 }

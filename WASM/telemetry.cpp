@@ -109,7 +109,7 @@ void rotate_with_quat(const Quatf& q, float vx, float vy, float vz, float* ox, f
   *oz = vz + qw * tz + (qx * ty - qy * tx);
 }
 
-void update_map_from_lidar(const LidarCameraData& lc_data, const IMUData& imu_data, LidarCameraData* rerun_out, bool update_map) {
+void update_map_from_lidar(const LidarCameraData& lc_data, LidarCameraData* rerun_out, bool update_map) {
   const int total_points = static_cast<int>(lc_data.points_size / 3);
   if (total_points <= 0) return;
 
@@ -255,51 +255,57 @@ void log_config(const CameraConfig& cam_config){
   std::cout << "T: " << cam_config.timestamp << ", height: " << cam_config.image_height << ", width: " << cam_config.image_width << ", channels: " << cam_config.image_channels << std::endl;
 }
 
-// log sensors without significant delays in processing
-void log_sensors(std::mutex& m_imu, const IMUData& imu_data, std::mutex& m_lc, const LidarCameraData& lc_data){
-  std::cout << std::fixed << std::setprecision(5);
-  double last_lc_timestamp = -1.0;
-  while (true) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(log_interval_ms));
 
+void log_imu(std::mutex& m_imu, const IMUData& imu_data){
+  double last_imu_timestamp = -1.0;
+  std::cout << std::fixed << std::setprecision(5);
+  while(true){
     IMUData imu_copy;
     {
       std::lock_guard<std::mutex> lk(m_imu);
       imu_copy = imu_data;
     }
+    
+    if (imu_copy.timestamp <= last_imu_timestamp) continue;
+    last_imu_timestamp = imu_copy.timestamp;
     rerun_log_imu(&imu_copy);
+    std::cout << "T:" << imu_copy.timestamp << " acc:" << imu_copy.acc_x << "," << imu_copy.acc_y << "," << imu_copy.acc_z << std::endl
+    << "T:" << imu_copy.timestamp << " gyro:" << imu_copy.gyro_x << "," << imu_copy.gyro_y << "," << imu_copy.gyro_z <<
+    std::endl;
+    // std::this_thread::sleep_for(std::chrono::milliseconds(IMUIntervalMs));
 
+  }
+
+}
+// log sensors without significant delays in processing
+void log_lc(std::mutex& m_lc, const LidarCameraData& lc_data){
+  std::cout << std::fixed << std::setprecision(5);
+  double last_lc_timestamp = -1.0;
+  while (true) {
+    
     // very expensive to copy everything!
     double lc_timestamp;
-    size_t image_size, points_size;
-    bool has_new_lc = false;
-    
+    size_t image_size, points_size; 
     {
       std::lock_guard<std::mutex> lk(m_lc);
-      lc_timestamp = lc_data.timestamp;
       points_size = lc_data.points_size;
       image_size = lc_data.image_size; 
-      if (lc_timestamp != last_lc_timestamp) {
-        last_lc_timestamp = lc_timestamp;
-        has_new_lc = true;
-        if (points_size > 0) {
-          const bool do_map_update = (lc_timestamp - g_last_map_timestamp >= mapMinInterval);
-          if (do_map_update) {
-            g_last_map_timestamp = lc_timestamp;
-          }
-          update_map_from_lidar(lc_data, imu_copy, &g_rerun_lc, do_map_update);
-          if (g_rerun_lc.points_size > 0) {
-            rerun_log_lidar_frame(&g_rerun_lc);
-          }
+      if (lc_data.timestamp <= last_lc_timestamp) continue;
+      
+      last_lc_timestamp = lc_timestamp;
+      if (points_size > 0) {
+        const bool do_map_update = (lc_timestamp - g_last_map_timestamp >= mapMinInterval);
+        if (do_map_update) {
+          g_last_map_timestamp = lc_timestamp;
+        }
+        update_map_from_lidar(lc_data, &g_rerun_lc, do_map_update);
+        if (g_rerun_lc.points_size > 0) {
+          rerun_log_lidar_frame(&g_rerun_lc);
         }
       }
+      std::this_thread::sleep_for(std::chrono::milliseconds(LidarCameraIntervalMs));
     }
+    
 
-        // std::cout << "T:" << imu_copy.acc_timestamp << " acc:" << imu_copy.acc_x << "," << imu_copy.acc_y << "," << imu_copy.acc_z << std::endl
-        //             << "T:" << imu_copy.gyro_timestamp << " gyro:" << imu_copy.gyro_x << "," << imu_copy.gyro_y << "," << imu_copy.gyro_z <<
-        //             std::endl;
-        // if (has_new_lc) {
-          // std::cout << "T:" << lc_timestamp << " points size: " << points_size << ", image size: " << image_size << std::endl;
-        // }
   }
 };
