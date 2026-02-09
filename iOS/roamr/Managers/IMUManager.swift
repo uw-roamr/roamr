@@ -55,6 +55,12 @@ class IMUManager {
     static let shared = IMUManager()
 
     private let motionManager = CMMotionManager()
+    private let imuQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.roamr.imu"
+        queue.qualityOfService = .userInitiated
+        return queue
+    }()
 
     let lock = NSLock()
     var currentData = IMUData(
@@ -73,7 +79,7 @@ class IMUManager {
 
         if motionManager.isDeviceMotionAvailable {
             motionManager.deviceMotionUpdateInterval = motionUpdateInterval
-            motionManager.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: .main) { [weak self] (motion, _) in
+            motionManager.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: imuQueue) { [weak self] (motion, _) in
                 guard let self = self, let motion = motion else { return }
                 let accDevice = SIMD3<Double>(
                     (motion.userAcceleration.x + motion.gravity.x) * gravityToMetersPerSecondSquared,

@@ -137,7 +137,7 @@ private final class WasmRerunTelemetryBridge {
     static let shared = WasmRerunTelemetryBridge()
 
     private let maxPointsToSend = 15_000
-    private let videoMinInterval = 1.0 / 20.0
+    private let videoMinInterval = 1.0 / 10.0
     private let processingLock = NSLock()
     private let stateLock = NSLock()
     private let jpegEncoder = RGBJpegEncoder(quality: 0.55)
@@ -531,6 +531,8 @@ final class RerunWebSocketClient {
     private let session = URLSession(configuration: .default)
     private var task: URLSessionWebSocketTask?
     private var isConnected = false
+    private var pendingCount = 0
+    private let maxPending = 2
 
     private let encoder = JSONEncoder()
 
@@ -575,6 +577,10 @@ final class RerunWebSocketClient {
     private func enqueue(_ message: RerunMessage) {
         queue.async { [weak self] in
             guard let self = self else { return }
+            if self.shouldDrop(message) {
+                return
+            }
+            self.pendingCount += 1
             self.connectIfNeeded()
             self.send(message)
         }
@@ -601,10 +607,16 @@ final class RerunWebSocketClient {
         guard let task = task else { return }
         guard let payload = try? encoder.encode(message),
               let payloadString = String(data: payload, encoding: .utf8) else {
+            queue.async { [weak self] in
+                self?.decrementPending()
+            }
             return
         }
 
         task.send(.string(payloadString)) { [weak self] error in
+            self?.queue.async { [weak self] in
+                self?.decrementPending()
+            }
             if let error = error {
                 print("Rerun websocket send error: \(error)")
                 self?.markDisconnected()
@@ -628,6 +640,24 @@ final class RerunWebSocketClient {
     private func markDisconnected() {
         isConnected = false
         task = nil
+    }
+
+    private func decrementPending() {
+        if pendingCount > 0 {
+            pendingCount -= 1
+        }
+    }
+
+    private func shouldDrop(_ message: RerunMessage) -> Bool {
+        if pendingCount < maxPending {
+            return false
+        }
+        switch message {
+        case .motors, .imu:
+            return pendingCount > maxPending * 2
+        default:
+            return true
+        }
     }
 }
 

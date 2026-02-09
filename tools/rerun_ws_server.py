@@ -248,6 +248,7 @@ class RerunBridge:
         if self._extrinsics_logged:
             return
         self._extrinsics_logged = True
+        # rr.log("base_link", rr.ViewCoordinates.FLU())
         rr.log(
             "base_link/imu/accel",
             rr.SeriesLines(names=["imu_acc_x", "imu_acc_y", "imu_acc_z"]),
