@@ -1,0 +1,61 @@
+#pragma once
+#include "core/math_utils.h"
+#include "core/ring_buffer.h"
+#include "sensors/imu.h"
+
+
+namespace sensors::calibration{
+    constexpr double expected_gravity = 9.80665;
+    constexpr double acc_still = 0.6; // m/s^2
+    constexpr double acc_epsilon = 1e-6;
+    constexpr double kIMU_acc_still_low = expected_gravity - acc_still;
+    constexpr double kIMU_acc_still_high = expected_gravity + acc_still;
+
+
+    constexpr double kIMU_gyro_still_thresh_mag = 0.05; // rad/s
+
+    constexpr int kIMU_calib_samples = 100;
+
+    using IMUHistoryBuffer = core::RingBuffer<IMUData, kIMU_calib_samples>;
+
+
+    class IMUCalibration {
+    public:
+        IMUCalibration() = delete;
+        explicit IMUCalibration(IMUHistoryBuffer& history) noexcept
+            : history_(history) {}
+
+        bool calibrated = false;
+        double window_start = -1.0;
+        int sample_count = 0;
+        double sum_acc[3] = {0.0, 0.0, 0.0};
+        double sum_gyro[3] = {0.0, 0.0, 0.0};
+        double gyro_bias[3] = {0.0, 0.0, 0.0};
+        double acc_bias[3] = {0.0, 0.0, 0.0};
+        double gravity[3] = {0.0, 0.0, 0.0};
+        double last_calibrated = 0.0;
+        double last_imu_timestamp = -1.0;
+
+        IMUData& curr_slot() noexcept{
+            return history_.back();
+        }
+        
+        IMUData& new_write_slot() noexcept{
+            return history_.push_slot();
+        }
+        void update();
+        void recalibrate();
+        void init_biases();
+        
+    private:
+        void increment_sums(IMUData& imu_data) noexcept;
+        void reset_sums() noexcept;
+        int still_timestamps_ = 0;
+        IMUHistoryBuffer& history_;
+
+    };
+
+
+
+
+} // namespace

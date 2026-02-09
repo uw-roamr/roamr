@@ -9,6 +9,7 @@
 #include "sensors/lidar_camera.h"
 
 constexpr int log_interval_ms = 33;
+constexpr double kLidarLogIntervalSec = 0.1;
 
 WASM_IMPORT("host", "rerun_log_lidar_frame") void rerun_log_lidar_frame(const sensors::LidarCameraData *data);
 WASM_IMPORT("host", "rerun_log_imu") void rerun_log_imu(const sensors::IMUData* data);

@@ -24,7 +24,7 @@ docker run -v `pwd`:/src -w /src ghcr.io/webassembly/wasi-sdk /opt/wasi-sdk/bin/
 -Wl,--shared-memory \
 -Wl,--max-memory=67108864 \
 -I. -Icore -Icontrols -Imapping -Isensors -Iutils \
--o slam_main.wasm slam_main.cpp core/telemetry.cpp mapping/map.cpp mapping/map_update.cpp
+-o slam_main.wasm slam_main.cpp core/telemetry.cpp mapping/map.cpp mapping/map_update.cpp sensors/imu_calibration.cpp
 ```
 
 1. Run the file using [Wasmtime](https://docs.wasmtime.dev/) or another runtime

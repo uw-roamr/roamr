@@ -7,6 +7,7 @@
 #include <iostream>
 
 namespace mapping {
+  constexpr float kPi = 3.14159265358979323846f;
   constexpr int mapWidth = 256;
   constexpr int mapHeight = 256;
   constexpr int mapMaxPoints = 20000; // keep in sync with map.cpp
@@ -23,7 +24,7 @@ namespace mapping {
   // Point cloud frame correction (camera FLU -> device FLU).
   // For portrait, back-camera-forward mounting, yaw showing up as pitch indicates
   // the camera frame is rolled +90 deg relative to device. Compensate here.
-  constexpr float pointRoll = -0.5f * static_cast<float>(M_PI);
+  constexpr float pointRoll = -0.5f * kPi;
   constexpr float pointPitch = 0.0f;
   constexpr float pointYaw = 0.0f;
   // Rerun logging: include camera image in the filtered lidar frame (expensive copy).

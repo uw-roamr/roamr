@@ -4,6 +4,7 @@
 
 #include "controls/motors.h"
 #include "core/telemetry.h"
+#include "sensors/calibration.h"
 #include "sensors/imu.h"
 #include "sensors/lidar_camera.h"
 #include "mapping/map_api.h"
@@ -14,9 +15,10 @@ static mapping::MapFrame g_map_frame;
 
 static sensors::CameraConfig g_cam_config;
 static sensors::LidarCameraData g_lc_data;
-
 static sensors::LidarCameraData g_rerun_lc;
-static sensors::IMUData g_imu_data;
+
+static sensors::calibration::IMUHistoryBuffer g_imu_history;
+static sensors::calibration::IMUCalibration g_imu_calib(g_imu_history);
 
 // Quick demo: drive both wheels forward briefly.
 void drive_forward_demo() {
@@ -42,13 +44,19 @@ int main(){
 
     std::thread imu_thread([&m_imu](){
         double g_last_logged_imu_timestamp = -1.0;
+
+        g_imu_calib.init_biases();
+        static sensors::IMUData imu_copy;
         while(true){
             std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(sensors::IMUIntervalMs / 2.0)));
             {
                 std::lock_guard<std::mutex> lk(m_imu);
-                read_imu(&g_imu_data);
+                read_imu(&g_imu_calib.new_write_slot());
+                g_imu_calib.update();
+                g_imu_calib.recalibrate(); // if possible, update biases
+                imu_copy = g_imu_calib.curr_slot();
             }
-            log_imu(m_imu, g_imu_data, g_last_logged_imu_timestamp);
+            log_imu(m_imu, imu_copy, g_last_logged_imu_timestamp);
         }
     });
     std::thread lidar_camera_thread([&m_lc](){
