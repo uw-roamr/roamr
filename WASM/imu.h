@@ -1,13 +1,15 @@
 #pragma once
+#include "coordinate_frames.h"
 #include "wasm_utils.h"
 
 struct IMUData {
-    double acc_timestamp;
+    double timestamp;
     double acc_x, acc_y, acc_z;
-    double gyro_timestamp;
+    // double gyro_timestamp;
     double gyro_x, gyro_y, gyro_z;
-    double att_timestamp;
-    double quat_x, quat_y, quat_z, quat_w;
+    // double att_timestamp;
+    // double quat_x, quat_y, quat_z, quat_w;
+    FrameId frame_id; // CoordinateFrameId: 0=RDF, 1=FLU
     // double mag_x, mag_y, mag_z; // unused, currently targeting indoor environments and simple fusion
 };
 

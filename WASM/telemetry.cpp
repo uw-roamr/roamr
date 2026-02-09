@@ -43,9 +43,6 @@ struct Quatf {
   float x, y, z, w;
 };
 
-static bool g_imu_calibrated = false;
-// Initial ref->body orientation used to define world frame.
-static Quatf g_ref_to_body0 = {0.0f, 0.0f, 0.0f, 1.0f};
 static double g_last_yaw_log_ts = -1.0;
 
 void rotate_with_quat(const Quatf& q, float vx, float vy, float vz, float* ox, float* oy, float* oz);
@@ -96,32 +93,6 @@ Quatf mount_quat() {
   return q;
 }
 
-Quatf imu_ref_to_device(const IMUData& imu_data) {
-  const Quatf q{
-      static_cast<float>(imu_data.quat_x),
-      static_cast<float>(imu_data.quat_y),
-      static_cast<float>(imu_data.quat_z),
-      static_cast<float>(imu_data.quat_w),
-  };
-  return quat_normalize(q);
-}
-
-Quatf imu_body_to_world(const IMUData& imu_data) {
-  if (imu_data.att_timestamp <= 0.0) {
-    return {0.0f, 0.0f, 0.0f, 1.0f};
-  }
-  const Quatf q_ref_to_device = imu_ref_to_device(imu_data);
-  const Quatf q_mount = mount_quat();
-  const Quatf q_ref_to_body = quat_mul(q_mount, q_ref_to_device);
-  if (!g_imu_calibrated) {
-    g_ref_to_body0 = q_ref_to_body;
-    std::cout << "IMU calibration: world frame locked to initial pose" << std::endl;
-    g_imu_calibrated = true;
-  }
-  // body->world = body->ref * ref->body0
-  return quat_mul(quat_conj(q_ref_to_body), g_ref_to_body0);
-}
-
 void rotate_with_quat(const Quatf& q, float vx, float vy, float vz, float* ox, float* oy, float* oz) {
   // v' = v + 2*cross(q_vec, cross(q_vec, v) + w*v)
   const float qx = q.x;
@@ -151,7 +122,7 @@ void update_map_from_lidar(const LidarCameraData& lc_data, const IMUData& imu_da
     g_map_initialized = true;
   }
 
-  const Quatf q_body_to_world = imu_body_to_world(imu_data);
+  const Quatf q_body_to_world = {0.0f, 0.0f, 0.0f, 1.0f};
   float ax = 1.0f, ay = 0.0f, az = 0.0f;
   float bx = 0.0f, by = 1.0f, bz = 0.0f;
   float cx = 0.0f, cy = 0.0f, cz = 1.0f;
@@ -296,6 +267,7 @@ void log_sensors(std::mutex& m_imu, const IMUData& imu_data, std::mutex& m_lc, c
       std::lock_guard<std::mutex> lk(m_imu);
       imu_copy = imu_data;
     }
+    rerun_log_imu(&imu_copy);
 
     // very expensive to copy everything!
     double lc_timestamp;

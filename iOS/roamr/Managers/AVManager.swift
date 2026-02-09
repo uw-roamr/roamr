@@ -29,6 +29,9 @@ struct LidarCameraData {
 
     var image: [UInt8]
     var image_size: Int32
+
+    var points_frame_id: FrameId
+    var image_frame_id: FrameId
 }
 
 struct PointCloudData {
@@ -104,7 +107,9 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
 		colors: [UInt8](),
 		colors_size: 0,
 		image: [UInt8](),
-		image_size: 0)
+		image_size: 0,
+        points_frame_id: CoordinateFrameId.FLU.rawValue,
+        image_frame_id: CoordinateFrameId.RDF.rawValue)
 
     private func portraitLayout(width: Int, height: Int) -> (width: Int, height: Int, rotate: Bool) {
         let rotate = width > height
@@ -835,7 +840,9 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
                             colors: colorsBytes,
                             colors_size: Int32(colorsBytes.count),
                             image: imageBytesOut,
-                            image_size: Int32(imageBytesOut.count)
+                            image_size: Int32(imageBytesOut.count),
+                            points_frame_id: CoordinateFrameId.FLU.rawValue,
+                            image_frame_id: CoordinateFrameId.RDF.rawValue
                         )
                         self.isDataDirty = true
 
@@ -926,7 +933,10 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
     let imageMaxCount = LidarCameraConstants.maxImageSize
     let imageByteCount = imageMaxCount * MemoryLayout<UInt8>.size
     let imageSizeOffset = imageOffset + imageByteCount
-    let totalBytes = imageSizeOffset + MemoryLayout<Int32>.size
+    let imageSizeBytes = MemoryLayout<Int32>.size
+    let pointsFrameIdOffset = imageSizeOffset + imageSizeBytes
+    let imageFrameIdOffset = pointsFrameIdOffset + MemoryLayout<Int32>.size
+    let totalBytes = imageFrameIdOffset + MemoryLayout<Int32>.size
 
     if let nativeEnd = nativeEnd {
         let baseAddr = UInt(bitPattern: basePtr)
@@ -977,5 +987,12 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
     let imageSizeValue = Int32(imageCount)
     basePtr.advanced(by: imageSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
         rebounded.pointee = imageSizeValue
+    }
+
+    basePtr.advanced(by: pointsFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = data.points_frame_id
+    }
+    basePtr.advanced(by: imageFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = data.image_frame_id
     }
 }

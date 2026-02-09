@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "rerun-sdk",
+#     "rerun-sdk==0.29.1",
 #     "websockets",
 # ]
 # ///
@@ -101,6 +101,11 @@ def set_rerun_time(timestamp: float) -> None:
         rr.set_time_sequence("timestamp", int(timestamp * 1e6))
 
 
+def log_scalar(path: str, value: float) -> None:
+    """Log a single scalar using the current Rerun SDK API."""
+    rr.log(path, rr.Scalars([value]))
+
+
 class RerunBridge:
     """Routes incoming websocket payloads into Rerun logs.
 
@@ -110,6 +115,7 @@ class RerunBridge:
 
     def __init__(self, history_size: int = 1):
         self.history: deque[PointsMessage] = deque(maxlen=max(1, history_size))
+        self._extrinsics_logged = False
 
     async def handle_ws(self, websocket):
         peer = websocket.remote_address
@@ -124,6 +130,12 @@ class RerunBridge:
         msg_type = payload.get("type")
         timestamp = float(payload.get("timestamp") or 0.0)
         set_rerun_time(timestamp)
+
+        self._log_extrinsics_once()
+
+        if msg_type == "imu":
+            self._log_imu(payload, timestamp)
+            return
 
         if msg_type == "pose":
             self._log_pose(payload)
@@ -152,12 +164,24 @@ class RerunBridge:
         if len(quat) != 4:
             return
         rr.log(
-            "phone/pose",
+            "base_link",
             rr.Transform3D(
                 translation=[0, 0, 0],
                 rotation=rr.Quaternion(xyzw=quat),
             ),
         )
+
+    def _log_imu(self, payload: dict, timestamp: float) -> None:
+        accel = payload.get("accel") or []
+        gyro = payload.get("gyro") or []
+        frame_id = payload.get("frame_id")
+        if len(accel) != 3 or len(gyro) != 3:
+            return
+
+        rr.log("base_link/imu/accel", rr.Scalars(accel))
+        rr.log("base_link/imu/gyro", rr.Scalars(gyro))
+        if frame_id is not None:
+            log_scalar("base_link/imu/frame_id", float(frame_id))
 
     def _log_motors(self, payload: dict, timestamp: float) -> None:
         left = float(payload.get("left", 0))
@@ -200,13 +224,13 @@ class RerunBridge:
 
         set_rerun_time(msg.timestamp)
         final_colors = merged_colors if merged_colors else colors_from_z(merged_points)
-        rr.log("lidar/points", rr.Points3D(merged_points, colors=final_colors))
+        rr.log("base_link/lidar/points", rr.Points3D(merged_points, colors=final_colors))
 
     def _log_video_frame(self, payload: dict, timestamp: float) -> None:
         jpeg_b64 = payload.get("jpeg_b64")
         jpeg_bytes = base64.b64decode(jpeg_b64, validate=True)
         set_rerun_time(timestamp)
-        if self._log_encoded_image("camera/image", jpeg_bytes):
+        if self._log_encoded_image("base_link/camera/image", jpeg_bytes):
             return
 
     def _log_map_frame(self, payload: dict, timestamp: float) -> None:
@@ -219,6 +243,27 @@ class RerunBridge:
             return
         set_rerun_time(timestamp)
         self._log_encoded_image("map/image", jpeg_bytes)
+
+    def _log_extrinsics_once(self) -> None:
+        if self._extrinsics_logged:
+            return
+        self._extrinsics_logged = True
+        rr.log(
+            "base_link/imu/accel",
+            rr.SeriesLines(names=["imu_acc_x", "imu_acc_y", "imu_acc_z"]),
+            static=True,
+        )
+        rr.log(
+            "base_link/imu/gyro",
+            rr.SeriesLines(names=["imu_gyro_x", "imu_gyro_y", "imu_gyro_z"]),
+            static=True,
+        )
+        identity = rr.Transform3D(
+            translation=[0, 0, 0],
+            rotation=rr.Quaternion(xyzw=[0, 0, 0, 1]),
+        )
+        rr.log("base_link/lidar", identity)
+        rr.log("base_link/camera", identity)
 
     def _log_encoded_image(self, path: str, jpeg_bytes: bytes) -> bool:
         encoded_cls = getattr(rr, "EncodedImage", None)

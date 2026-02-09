@@ -22,7 +22,9 @@ private enum WasmLidarLayout {
     static let imageSizeOffset = imageOffset + imageByteCount
     static let imageSizeBytes = MemoryLayout<Int32>.size
 
-    static let totalByteCount = imageSizeOffset + imageSizeBytes
+    static let pointsFrameIdOffset = imageSizeOffset + imageSizeBytes
+    static let imageFrameIdOffset = pointsFrameIdOffset + MemoryLayout<Int32>.size
+    static let totalByteCount = imageFrameIdOffset + MemoryLayout<Int32>.size
 }
 
 private struct WasmLidarFrameView {
@@ -33,6 +35,8 @@ private struct WasmLidarFrameView {
     let colorsCount: Int
     let imagePointer: UnsafeMutablePointer<UInt8>
     let imageCount: Int
+    let pointsFrameId: Int32
+    let imageFrameId: Int32
 }
 
 private enum WasmMapLayout {
@@ -45,6 +49,16 @@ private enum WasmMapLayout {
     static let totalByteCount = dataSizeOffset + MemoryLayout<Int32>.size
 }
 
+private enum WasmImuLayout {
+    static let timestampOffset = 0
+    static let accelOffset = timestampOffset + MemoryLayout<Double>.size
+    static let accelCount = 3
+    static let gyroOffset = accelOffset + accelCount * MemoryLayout<Double>.size
+    static let gyroCount = 3
+    static let frameIdOffset = gyroOffset + gyroCount * MemoryLayout<Double>.size
+    static let totalByteCount = frameIdOffset + MemoryLayout<Int32>.size
+}
+
 private struct WasmMapFrameView {
     let timestamp: Double
     let width: Int
@@ -52,6 +66,13 @@ private struct WasmMapFrameView {
     let channels: Int
     let dataPointer: UnsafeMutablePointer<UInt8>
     let dataCount: Int
+}
+
+private struct WasmImuView {
+    let timestamp: Double
+    let accel: SIMD3<Double>
+    let gyro: SIMD3<Double>
+    let frameId: Int32
 }
 
 private final class RGBJpegEncoder {
@@ -136,7 +157,6 @@ private final class WasmRerunTelemetryBridge {
             return
         }
         logPointCloud(frame)
-        logPose(timestamp: frame.timestamp)
         logCameraImage(frame)
     }
 
@@ -184,6 +204,13 @@ private final class WasmRerunTelemetryBridge {
             maxCount: WasmLidarLayout.imageMaxCount
         )
 
+        let pointsFrameId = basePointer
+            .advanced(by: WasmLidarLayout.pointsFrameIdOffset)
+            .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+        let imageFrameId = basePointer
+            .advanced(by: WasmLidarLayout.imageFrameIdOffset)
+            .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+
         if let nativeEnd = nativeEnd {
             let baseAddress = UInt(bitPattern: basePointer)
             let endAddress = UInt(bitPattern: nativeEnd)
@@ -213,7 +240,9 @@ private final class WasmRerunTelemetryBridge {
             colorsPointer: colorsPointer,
             colorsCount: colorsCount,
             imagePointer: imagePointer,
-            imageCount: imageCount
+            imageCount: imageCount,
+            pointsFrameId: pointsFrameId,
+            imageFrameId: imageFrameId
         )
     }
 
@@ -275,18 +304,6 @@ private final class WasmRerunTelemetryBridge {
             timestamp: frame.timestamp,
             points: sampledPoints,
             colors: outputColors
-        )
-    }
-
-    private func logPose(timestamp: Double) {
-        let attitude: AttitudeData
-        IMUManager.shared.lock.lock()
-        attitude = IMUManager.shared.currentAttitude
-        IMUManager.shared.lock.unlock()
-
-        RerunWebSocketClient.shared.logPose(
-            timestamp: timestamp,
-            quaternion: [attitude.quat_x, attitude.quat_y, attitude.quat_z, attitude.quat_w]
         )
     }
 
@@ -460,12 +477,13 @@ private final class WasmRerunMapBridge {
 private enum RerunMessage: Encodable {
     case points(timestamp: Double, points: [Float], colors: [UInt8]?)
     case pose(timestamp: Double, quaternion: [Double])
+    case imu(timestamp: Double, accel: [Double], gyro: [Double], frameId: Int32)
     case motors(timestamp: Double, left: Int, right: Int, holdMs: Int)
     case videoFrame(timestamp: Double, jpegBase64: String)
     case mapFrame(timestamp: Double, jpegBase64: String)
 
     enum CodingKeys: String, CodingKey {
-        case type, timestamp, points, colors, quaternion, left, right, hold_ms, jpeg_b64
+        case type, timestamp, points, colors, quaternion, accel, gyro, frame_id, left, right, hold_ms, jpeg_b64
     }
 
     func encode(to encoder: Encoder) throws {
@@ -480,6 +498,12 @@ private enum RerunMessage: Encodable {
             try container.encode("pose", forKey: .type)
             try container.encode(timestamp, forKey: .timestamp)
             try container.encode(quaternion, forKey: .quaternion)
+        case let .imu(timestamp, accel, gyro, frameId):
+            try container.encode("imu", forKey: .type)
+            try container.encode(timestamp, forKey: .timestamp)
+            try container.encode(accel, forKey: .accel)
+            try container.encode(gyro, forKey: .gyro)
+            try container.encode(frameId, forKey: .frame_id)
         case let .motors(timestamp, left, right, holdMs):
             try container.encode("motors", forKey: .type)
             try container.encode(timestamp, forKey: .timestamp)
@@ -527,6 +551,11 @@ final class RerunWebSocketClient {
     func logPose(timestamp: Double, quaternion: [Double]) {
         guard quaternion.count == 4 else { return }
         enqueue(.pose(timestamp: timestamp, quaternion: quaternion))
+    }
+
+    func logImu(timestamp: Double, accel: [Double], gyro: [Double], frameId: Int32) {
+        guard accel.count == 3, gyro.count == 3 else { return }
+        enqueue(.imu(timestamp: timestamp, accel: accel, gyro: gyro, frameId: frameId))
     }
 
     func logMotors(timestamp: Double, left: Int, right: Int, holdMs: Int) {
@@ -643,4 +672,45 @@ func rerun_log_lidar_frame_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRa
 
 func rerun_log_map_frame_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     WasmRerunMapBridge.shared.handleWasmMapFrame(execEnv: exec_env, payloadPointer: ptr)
+}
+
+func rerun_log_imu_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+    guard let exec_env = exec_env, let ptr = ptr else { return }
+
+    let basePointer = ptr.assumingMemoryBound(to: UInt8.self)
+    guard let moduleInstance = wasm_runtime_get_module_inst(exec_env) else {
+        return
+    }
+    var nativeStart: UnsafeMutablePointer<UInt8>?
+    var nativeEnd: UnsafeMutablePointer<UInt8>?
+    guard wasm_runtime_get_native_addr_range(moduleInstance, basePointer, &nativeStart, &nativeEnd) else {
+        return
+    }
+
+    if let nativeEnd = nativeEnd {
+        let baseAddress = UInt(bitPattern: basePointer)
+        let endAddress = UInt(bitPattern: nativeEnd)
+        if baseAddress + UInt(WasmImuLayout.totalByteCount) > endAddress {
+            return
+        }
+    }
+
+    let timestamp = basePointer.withMemoryRebound(to: Double.self, capacity: 1) { $0.pointee }
+    let accPtr = basePointer.advanced(by: WasmImuLayout.accelOffset)
+    let gyroPtr = basePointer.advanced(by: WasmImuLayout.gyroOffset)
+    let accel = accPtr.withMemoryRebound(to: Double.self, capacity: WasmImuLayout.accelCount) {
+        SIMD3<Double>($0[0], $0[1], $0[2])
+    }
+    let gyro = gyroPtr.withMemoryRebound(to: Double.self, capacity: WasmImuLayout.gyroCount) {
+        SIMD3<Double>($0[0], $0[1], $0[2])
+    }
+    let frameId = basePointer.advanced(by: WasmImuLayout.frameIdOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+
+    RerunWebSocketClient.shared.logImu(
+        timestamp: timestamp,
+        accel: [accel.x, accel.y, accel.z],
+        gyro: [gyro.x, gyro.y, gyro.z],
+        frameId: frameId
+    )
 }

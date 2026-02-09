@@ -1,4 +1,5 @@
 #pragma once
+#include "coordinate_frames.h"
 #include "wasm_utils.h"
 #include <stddef.h> // size_t
 #include <stdint.h> // uint8_t
@@ -36,6 +37,9 @@ struct LidarCameraData {
 
   std::array<uint8_t, max_image_size> image;
   size_t image_size;
+
+  FrameId points_frame_id; // CoordinateFrameId
+  FrameId image_frame_id;  // CoordinateFrameId
 };
 
 WASM_IMPORT("host", "init_camera") void init_camera(CameraConfig *config);
