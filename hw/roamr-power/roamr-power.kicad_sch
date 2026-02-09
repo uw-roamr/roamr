@@ -1677,7 +1677,7 @@
 	)
 	(wire
 		(pts
-			(xy 185.42 68.58) (xy 193.04 68.58)
+			(xy 185.42 68.58) (xy 189.23 68.58)
 		)
 		(stroke
 			(width 0)
@@ -1707,7 +1707,7 @@
 	)
 	(wire
 		(pts
-			(xy 185.42 102.87) (xy 193.04 102.87)
+			(xy 185.42 102.87) (xy 189.23 102.87)
 		)
 		(stroke
 			(width 0)
@@ -1717,7 +1717,7 @@
 	)
 	(wire
 		(pts
-			(xy 200.66 102.87) (xy 207.01 102.87)
+			(xy 196.85 102.87) (xy 207.01 102.87)
 		)
 		(stroke
 			(width 0)
@@ -1727,7 +1727,7 @@
 	)
 	(wire
 		(pts
-			(xy 200.66 68.58) (xy 207.01 68.58)
+			(xy 196.85 68.58) (xy 207.01 68.58)
 		)
 		(stroke
 			(width 0)
@@ -1857,7 +1857,7 @@
 	)
 	(wire
 		(pts
-			(xy 185.42 45.72) (xy 193.04 45.72)
+			(xy 185.42 45.72) (xy 189.23 45.72)
 		)
 		(stroke
 			(width 0)
@@ -1887,7 +1887,7 @@
 	)
 	(wire
 		(pts
-			(xy 200.66 45.72) (xy 207.01 45.72)
+			(xy 196.85 45.72) (xy 207.01 45.72)
 		)
 		(stroke
 			(width 0)
@@ -1924,6 +1924,36 @@
 			(type default)
 		)
 		(uuid "f6d91fec-2432-4dd3-ae77-f726a6a256e5")
+	)
+	(label "12V_OUT"
+		(at 198.12 45.72 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "198963f2-fdc2-4a22-b5dd-91efb69feb10")
+	)
+	(label "5V_OUT"
+		(at 198.12 68.58 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "3cfe468a-eafe-450e-bd3a-7266190c53f3")
+	)
+	(label "USB_OUT"
+		(at 198.12 102.87 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "75e2cb13-be2d-4f05-9c9f-0e7d2f2e05e9")
 	)
 	(symbol
 		(lib_id "Device:D_TVS")
@@ -2757,7 +2787,7 @@
 				)
 			)
 		)
-		(property "Footprint" "USB4125-GF-A:CONN6_USB4125_GCT"
+		(property "Footprint" "USB4125-GF-A:USB4125GFA"
 			(at 218.44 118.11 0)
 			(effects
 				(font
@@ -3034,7 +3064,7 @@
 	)
 	(symbol
 		(lib_id "Diode:1N5819")
-		(at 196.85 102.87 180)
+		(at 193.04 102.87 180)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -3043,7 +3073,7 @@
 		(fields_autoplaced yes)
 		(uuid "ba9248c8-f252-478a-a15b-8840067dadaf")
 		(property "Reference" "D1"
-			(at 197.1675 96.52 0)
+			(at 193.3575 96.52 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3051,7 +3081,7 @@
 			)
 		)
 		(property "Value" "1N5819"
-			(at 197.1675 99.06 0)
+			(at 193.3575 99.06 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3059,7 +3089,7 @@
 			)
 		)
 		(property "Footprint" "Diode_THT:D_DO-41_SOD81_P10.16mm_Horizontal"
-			(at 196.85 98.425 0)
+			(at 193.04 98.425 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3068,7 +3098,7 @@
 			)
 		)
 		(property "Datasheet" "http://www.vishay.com/docs/88525/1n5817.pdf"
-			(at 196.85 102.87 0)
+			(at 193.04 102.87 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3077,7 +3107,7 @@
 			)
 		)
 		(property "Description" "40V 1A Schottky Barrier Rectifier Diode, DO-41"
-			(at 196.85 102.87 0)
+			(at 193.04 102.87 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3499,7 +3529,7 @@
 	)
 	(symbol
 		(lib_id "Diode:1N5819")
-		(at 196.85 68.58 180)
+		(at 193.04 68.58 180)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -3508,7 +3538,7 @@
 		(fields_autoplaced yes)
 		(uuid "f083c5c7-64ab-4707-a02e-cfc3addba369")
 		(property "Reference" "D5"
-			(at 197.1675 62.23 0)
+			(at 193.3575 62.23 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3516,7 +3546,7 @@
 			)
 		)
 		(property "Value" "1N5819"
-			(at 197.1675 64.77 0)
+			(at 193.3575 64.77 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3524,7 +3554,7 @@
 			)
 		)
 		(property "Footprint" "Diode_THT:D_DO-41_SOD81_P10.16mm_Horizontal"
-			(at 196.85 64.135 0)
+			(at 193.04 64.135 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3533,7 +3563,7 @@
 			)
 		)
 		(property "Datasheet" "http://www.vishay.com/docs/88525/1n5817.pdf"
-			(at 196.85 68.58 0)
+			(at 193.04 68.58 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3542,7 +3572,7 @@
 			)
 		)
 		(property "Description" "40V 1A Schottky Barrier Rectifier Diode, DO-41"
-			(at 196.85 68.58 0)
+			(at 193.04 68.58 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3699,7 +3729,7 @@
 	)
 	(symbol
 		(lib_id "Diode:1N5819")
-		(at 196.85 45.72 180)
+		(at 193.04 45.72 180)
 		(unit 1)
 		(exclude_from_sim no)
 		(in_bom yes)
@@ -3708,7 +3738,7 @@
 		(fields_autoplaced yes)
 		(uuid "fe63084f-7e4f-44e3-aeab-068e71afa8fd")
 		(property "Reference" "D4"
-			(at 197.1675 39.37 0)
+			(at 193.3575 39.37 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3716,7 +3746,7 @@
 			)
 		)
 		(property "Value" "1N5819"
-			(at 197.1675 41.91 0)
+			(at 193.3575 41.91 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3724,7 +3754,7 @@
 			)
 		)
 		(property "Footprint" "Diode_THT:D_DO-41_SOD81_P10.16mm_Horizontal"
-			(at 196.85 41.275 0)
+			(at 193.04 41.275 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3733,7 +3763,7 @@
 			)
 		)
 		(property "Datasheet" "http://www.vishay.com/docs/88525/1n5817.pdf"
-			(at 196.85 45.72 0)
+			(at 193.04 45.72 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3742,7 +3772,7 @@
 			)
 		)
 		(property "Description" "40V 1A Schottky Barrier Rectifier Diode, DO-41"
-			(at 196.85 45.72 0)
+			(at 193.04 45.72 0)
 			(effects
 				(font
 					(size 1.27 1.27)

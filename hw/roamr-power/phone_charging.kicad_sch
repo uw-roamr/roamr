@@ -2145,7 +2145,7 @@
 				)
 			)
 		)
-		(property "Footprint" "TPS2553DDBVR:DRV6_1P6X1_TEX"
+		(property "Footprint" "TPS2553DDBVR:SOT95P280X145-6N"
 			(at 160.02 60.96 0)
 			(effects
 				(font
@@ -2488,10 +2488,9 @@
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "2cc1372c-ce89-4520-9ecc-d17ecd201675")
 		(property "Reference" "Q1"
-			(at 175.26 128.2699 0)
+			(at 175.26 129.54 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2506,6 +2505,7 @@
 					(size 1.27 1.27)
 				)
 				(justify left)
+				(hide yes)
 			)
 		)
 		(property "Footprint" "BSS84PH6327XTSA2:SOT95P240X110-3N"

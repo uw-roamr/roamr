@@ -1,4 +1,11 @@
-27248260951947306
+27273048167299274
+35SVPF39M
+16SVF270M
+E7
+Capacitor Polarised
+0
+2
+2
 Audio_Module
 Reverb_BTDR-1H
 Digital Reverberation Unit, http://www.belton.co.kr/inc/downfile.php?seq=17&file=pdf (footprint from http://www.uk-electronic.de/PDF/BTDR-1.pdf)
@@ -13,6 +20,13 @@ audio belton reverb
 0
 7
 7
+BSS84PH6327XTSA2
+SOT95P240X110-3N
+SOT23-3
+MOSFET (P-Channel)
+0
+3
+3
 Battery
 BatteryClip_Keystone_54_D16-19mm
 Battery clip for batteries with a diameter between 16-19 mm: https://www.keyelco.com/product.cfm/product_id/826
@@ -62194,6 +62208,27 @@ One digit LED 7 segment SA39-11 SC39-11 SA39-12 SC39-12
 0
 10
 10
+ETQ-P4M3R3YFN
+IND_PCC-M0645M_PAN
+
+ETQP4M3R3YFN 
+0
+2
+2
+ETQ-P4M3R3YFN
+IND_PCC-M0645M_PAN-L
+
+ETQP4M3R3YFN 
+0
+2
+2
+ETQ-P4M3R3YFN
+IND_PCC-M0645M_PAN-M
+
+ETQP4M3R3YFN 
+0
+2
+2
 Ferrite_THT
 LairdTech_28C0236-0JW-10
 Ferrite, vertical, LairdTech 28C0236-0JW-10, https://assets.lairdtech.com/home/brandworld/files/28C0236-0JW-10.pdf, JW Miller core https://www.bourns.com/products/magnetic-products/j.w.-miller-through-hole-ferrite-beads-emi-filters
@@ -63272,6 +63307,13 @@ GDT 3R-6
 0
 3
 3
+GYG1E121MCQ1GS
+CAPAE660X610N
+6.3 × 5.8
+Capacitor Polarised
+0
+2
+2
 Heatsink
 Heatsink_35x26mm_1xFixation3mm_Fischer-SK486-35
 Heatsink, 35mm x 26mm, 1x Fixation 3mm, Fischer SK486-35
@@ -70552,6 +70594,20 @@ solder jumper open
 0
 3
 3
+KR_DELPS1.22-VGVI-23-H3Q4
+KRDELPS122VGVI23H3Q4
+2-SMD_2025-1
+LED
+0
+2
+2
+KT_EELP41.12-S2U1-25-2X4X-5-R18
+KTEELP4112S2U1252X4X5R18
+0603 (1608 metric)_2024-5
+LED
+0
+2
+2
 LED_SMD
 LED-APA102-2020
 http://www.led-color.com/upload/201604/APA102-2020%20SMD%20LED.pdf
@@ -98664,6 +98720,13 @@ rotary encoder illuminated switch vertical
 0
 9
 8
+SMLJ12A-R
+DIOM7959X262N
+SMC (DO-214AB)
+TVS Diode (Uni-directional)
+0
+2
+2
 Sensor
 ASAIR_AM2302_P2.54mm_Lead2.75mm_TabDown
 Temperature and humidity module, http://akizukidenshi.com/download/ds/aosong/AM2302.pdf
@@ -100771,20 +100834,27 @@ Logo WEEE
 0
 0
 0
+TB002-500-02BE
+TB00250002BE
+TB002-500-02BE-1
+Connector
+0
+2
+2
 TPS56A37RPAR
 RPA0010A-MFG
 
 TPS56A37RPAR 
 0
-10
+13
 10
 TPS2553DDBVR
-DRV6_1P6X1_TEX
-
-TPS2553DDBVR 
+SOT95P280X145-6N
+DBV0006A
+Integrated Circuit
 0
-7
-7
+6
+6
 TerminalBlock
 TerminalBlock_MaiXu_MX126-5.0-02P_1x02_P5.00mm
 terminal block MaiXu MX126-5.0-02P, 2 pins, pitch 5mm, size 10.5x7.8mm, drill diameter 1.3mm, pad diameter 2.8mm, https://www.lcsc.com/datasheet/lcsc_datasheet_2309150913_MAX-MX126-5-0-03P-GN01-Cu-S-A_C5188435.pdf, script-generated using https://gitlab.com/kicad/libraries/kicad-footprint-generator/-/tree/master/scripts/TerminalBlock_MaiXu
@@ -107141,6 +107211,34 @@ igbt diode module
 0
 25
 25
+USB4125-GF-A
+USB4125GFA
+USB4125-GF-A-6
+Connector
+0
+10
+10
+VLS6045EX_4R7M
+IND_VLS6045EX-4R7M_TDK
+
+VLS6045EX-4R7M 
+0
+2
+2
+VLS6045EX_4R7M
+IND_VLS6045EX-4R7M_TDK-L
+
+VLS6045EX-4R7M 
+0
+2
+2
+VLS6045EX_4R7M
+IND_VLS6045EX-4R7M_TDK-M
+
+VLS6045EX-4R7M 
+0
+2
+2
 Valve
 Valve_ECC-83-1
 Valve ECC-83-1 round pins
