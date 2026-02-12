@@ -24,7 +24,7 @@ namespace mapping {
   // Point cloud frame correction (camera FLU -> device FLU).
   // For portrait, back-camera-forward mounting, yaw showing up as pitch indicates
   // the camera frame is rolled +90 deg relative to device. Compensate here.
-  constexpr float pointRoll = -0.5f * kPi;
+  constexpr float pointRoll = 0.0f;
   constexpr float pointPitch = 0.0f;
   constexpr float pointYaw = 0.0f;
   // Rerun logging: include camera image in the filtered lidar frame (expensive copy).
