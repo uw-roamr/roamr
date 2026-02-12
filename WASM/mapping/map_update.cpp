@@ -133,14 +133,18 @@ namespace mapping {
     rotate_with_quat(q_body_to_world, 0.0f, 1.0f, 0.0f, &bx, &by, &bz);
     rotate_with_quat(q_body_to_world, 0.0f, 0.0f, 1.0f, &cx, &cy, &cz);
 
-    const float fwx = ax;
-    const float fwy = ay;
-    const float yaw = atan2f(fwy, fwx);
-    const float horiz = sqrtf(fwx * fwx + fwy * fwy);
-    const Quatf q_body_to_world_yaw = quat_from_euler(0.0f, 0.0f, yaw);
     const Quatf q_mount = mount_quat();
     const Quatf q_point_to_device = quat_from_euler(pointRoll, pointPitch, pointYaw);
     const Quatf q_point_to_body = quat_mul(q_mount, q_point_to_device);
+    // Use the phone-facing axis (camera forward) as +X for mapping.
+    float fbx = 1.0f, fby = 0.0f, fbz = 0.0f;
+    rotate_with_quat(q_point_to_body, 1.0f, 0.0f, 0.0f, &fbx, &fby, &fbz);
+    float fwx = 0.0f, fwy = 0.0f, fwz = 0.0f;
+    rotate_with_quat(q_body_to_world, fbx, fby, fbz, &fwx, &fwy, &fwz);
+
+    const float yaw = atan2f(fwy, fwx);
+    const float horiz = sqrtf(fwx * fwx + fwy * fwy);
+    const Quatf q_body_to_world_yaw = quat_from_euler(0.0f, 0.0f, yaw);
     const Quatf q_point_to_world = quat_mul(q_body_to_world, q_point_to_body);
     const Quatf q_point_to_world_yaw = quat_mul(q_body_to_world_yaw, q_point_to_body);
     set_pose(0, 0.0f, 0.0f, yaw);
@@ -253,7 +257,7 @@ namespace mapping {
       const float yaw_z = atan2f(cy, cx) * deg;
       std::cout << "IMU yaw deg: " << (yaw * deg)
                 << " | yaw_x/y/z=" << yaw_x << "/" << yaw_y << "/" << yaw_z
-                << " | fwd=[" << ax << "," << ay << "," << az << "]"
+                << " | fwd=[" << fwx << "," << fwy << "," << fwz << "]"
                 << " | horiz=" << horiz
                 << " | up=[" << cx << "," << cy << "," << cz << "]"
                 << std::endl;
