@@ -354,14 +354,22 @@ def main():
     rr.init("roamr")
     try:
         blueprint = rrb.Blueprint(
-            rrb.Spatial3DView(
-                origin="world",
-                name="3D",
-                contents="world/**",
-                spatial_information=rrb.SpatialInformation(
-                    target_frame="tf#/world",
-                    show_axes=True,
+            rrb.Horizontal(
+                rrb.Spatial3DView(
+                    origin="world",
+                    name="3D",
+                    contents="world/**",
+                    spatial_information=rrb.SpatialInformation(
+                        target_frame="tf#/world",
+                        show_axes=True,
+                    ),
                 ),
+                rrb.Spatial2DView(
+                    origin="map",
+                    name="Map",
+                    contents="map/**",
+                ),
+                column_shares=[2.0, 1.0],
             ),
             collapse_panels=True,
         )
