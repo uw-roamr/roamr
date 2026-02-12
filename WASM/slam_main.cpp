@@ -63,8 +63,9 @@ int main(){
                 imu_copy = g_imu_calib.curr_slot();
             }
             g_imu_preintegrator.integrate(imu_copy);
-            log_imu(m_imu, imu_copy, g_last_logged_imu_timestamp);
+            g_imu_preintegrator.get_pose_log(&g_pose);
             rerun_log_pose(&g_pose);
+            // log_imu(m_imu, imu_copy, g_last_logged_imu_timestamp);
         }
     });
     std::thread lidar_camera_thread([&m_lc](){
