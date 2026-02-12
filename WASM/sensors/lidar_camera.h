@@ -44,6 +44,26 @@ namespace sensors{
     core::CoordinateFrameId_t image_frame_id;  // CoordinateFrameId
   };
 
+  // assumes RDF -> FLU
+  inline void ensure_points_flu(LidarCameraData& data) noexcept {
+    const auto flu = static_cast<core::CoordinateFrameId_t>(core::CoordinateFrameId::kFLU);
+    if (data.points_frame_id == flu) {
+      return;
+    }
+    const int total_points = static_cast<int>(data.points_size / 3);
+    for (int i = 0; i < total_points; ++i) {
+      const int base = i * 3;
+      float x = data.points[base + 0];
+      float y = data.points[base + 1];
+      float z = data.points[base + 2];
+      core::rdf_to_flu(x, y, z, &x, &y, &z);
+      data.points[base + 0] = x;
+      data.points[base + 1] = y;
+      data.points[base + 2] = z;
+    }
+    data.points_frame_id = static_cast<core::CoordinateFrameId_t>(core::CoordinateFrameId::kFLU);
+  }
+
   WASM_IMPORT("host", "init_camera") void init_camera(CameraConfig *config);
   WASM_IMPORT("host", "read_lidar_camera") void read_lidar_camera(LidarCameraData *data);
 

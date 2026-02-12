@@ -100,7 +100,12 @@ namespace mapping {
     *oz = vz + qw * tz + (qx * ty - qy * tx);
   }
 
-  void update_map_from_lidar(const sensors::LidarCameraData& lc_data, MapFrame& map_frame, sensors::LidarCameraData* rerun_out, bool update_map, bool& map_initialized) {
+  void update_map_from_lidar(const sensors::LidarCameraData& lc_data,
+                             MapFrame& map_frame,
+                             sensors::LidarCameraData* rerun_out,
+                             bool update_map,
+                             bool& map_initialized,
+                             const core::Vector4d& q_body_to_world_in) {
     const int total_points = static_cast<int>(lc_data.points_size / 3);
     if (total_points <= 0) return;
 
@@ -113,7 +118,14 @@ namespace mapping {
       map_initialized = true;
     }
 
-    const Quatf q_body_to_world = {0.0f, 0.0f, 0.0f, 1.0f};
+    const Quatf q_body_to_world = {
+        static_cast<float>(q_body_to_world_in[0]),
+        static_cast<float>(q_body_to_world_in[1]),
+        static_cast<float>(q_body_to_world_in[2]),
+        static_cast<float>(q_body_to_world_in[3]),
+    };
+    const bool points_rdf =
+        lc_data.points_frame_id == static_cast<core::CoordinateFrameId_t>(core::CoordinateFrameId::kRDF);
     float ax = 1.0f, ay = 0.0f, az = 0.0f;
     float bx = 0.0f, by = 1.0f, bz = 0.0f;
     float cx = 0.0f, cy = 0.0f, cz = 1.0f;
@@ -155,9 +167,12 @@ namespace mapping {
 
     for (int i = 0; i < total_points; i += 1) {
       const int base = i * 3;
-      const float x = lc_data.points[base + 0];
-      const float y = lc_data.points[base + 1];
-      const float z = lc_data.points[base + 2];
+    float x = lc_data.points[base + 0];
+    float y = lc_data.points[base + 1];
+    float z = lc_data.points[base + 2];
+    if (points_rdf) {
+      core::rdf_to_flu(x, y, z, &x, &y, &z);
+    }
 
       float wx = 0.0f, wy = 0.0f, wz = 0.0f;
       rotate_with_quat(q_point_to_world_yaw, x, y, z, &wx, &wy, &wz);

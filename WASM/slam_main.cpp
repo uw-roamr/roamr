@@ -23,6 +23,7 @@ static sensors::calibration::IMUCalibration g_imu_calib(g_imu_history);
 static sensors::IMUPreintegrator g_imu_preintegrator(g_imu_calib);
 
 static sensors::PoseLog g_pose;
+static core::Vector4d g_latest_quat = {0.0, 0.0, 0.0, 1.0};
 
 // Quick demo: drive both wheels forward briefly.
 void drive_forward_demo() {
@@ -39,6 +40,7 @@ void drive_forward_demo() {
 int main(){
     std::mutex m_imu;
     std::mutex m_lc;
+    std::mutex m_pose;
 
     controls::MotorController motors;
     motors.stop(); // ensure motors start from a safe state
@@ -46,7 +48,7 @@ int main(){
     init_camera(&g_cam_config);
     log_config(g_cam_config);
 
-    std::thread imu_thread([&m_imu](){
+    std::thread imu_thread([&m_imu, &m_pose](){
         double g_last_logged_imu_timestamp = -1.0;
         double g_last_calib_timestamp = -1.0;
 
@@ -69,6 +71,10 @@ int main(){
                 imu_copy = g_imu_calib.curr_slot();
             }
             g_imu_preintegrator.integrate(imu_copy);
+            {
+                std::lock_guard<std::mutex> lk(m_pose);
+                g_latest_quat = g_imu_preintegrator.pose().quaternion;
+            }
             g_imu_preintegrator.get_pose_log(&g_pose);
             rerun_log_pose(&g_pose);
             // log_imu(m_imu, imu_copy, g_last_logged_imu_timestamp);
@@ -81,33 +87,38 @@ int main(){
             {
                 std::lock_guard<std::mutex> lk(m_lc);
                 read_lidar_camera(&g_lc_data);
+                sensors::ensure_points_flu(g_lc_data);
             }
             // log_lc(m_lc, g_lc_data, g_last_logged_lc_timestamp);
         }
     });
 
 
-    std::thread mapping_thread([&m_lc](){
+    std::thread mapping_thread([&m_lc, &m_pose](){
       double g_last_map_timestamp = -1.0;
       double map_timestamp = -1;
       while(true){
+        core::Vector4d q_body_to_world = {0.0, 0.0, 0.0, 1.0};
         {
-            {
-                std::lock_guard<std::mutex> lk(m_lc);
-                if (g_lc_data.points_size <= 0) continue;
-                map_timestamp = g_lc_data.timestamp;
-            
-                const bool do_map_update = (map_timestamp - g_last_map_timestamp >= mapping::mapMinInterval);
-                if (!do_map_update) continue;
-                g_last_map_timestamp = map_timestamp;
-                // mapping::update_map_from_lidar(g_lc_data, g_map_frame, &g_rerun_lc, do_map_update, g_map_initialized);
-            }
-
-            // if (g_rerun_lc.points_size > 0) {
-            //     rerun_log_lidar_frame(&g_rerun_lc);
-            // }
-        
+            std::lock_guard<std::mutex> lk(m_pose);
+            q_body_to_world = g_latest_quat;
         }
+        
+        {
+            std::lock_guard<std::mutex> lk(m_lc);
+            if (g_lc_data.points_size <= 0) continue;
+            map_timestamp = g_lc_data.timestamp;
+        
+            const bool do_map_update = (map_timestamp - g_last_map_timestamp >= mapping::mapMinInterval);
+            if (!do_map_update) continue;
+            g_last_map_timestamp = map_timestamp;
+            mapping::update_map_from_lidar(g_lc_data, g_map_frame, &g_rerun_lc, do_map_update, g_map_initialized, q_body_to_world);
+        }
+
+        if (g_rerun_lc.points_size > 0) {
+            rerun_log_lidar_frame(&g_rerun_lc);
+        }
+        
       }
     });
 
