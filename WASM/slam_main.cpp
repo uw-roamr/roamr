@@ -1,3 +1,4 @@
+#include <atomic>
 #include <mutex>
 #include <thread>
 #include <chrono>
@@ -24,6 +25,7 @@ static sensors::IMUPreintegrator g_imu_preintegrator(g_imu_calib);
 
 static sensors::PoseLog g_pose;
 static core::Vector4d g_latest_quat = {0.0, 0.0, 0.0, 1.0};
+static std::atomic<bool> g_imu_ready{false};
 
 // Quick demo: drive both wheels forward briefly.
 void drive_forward_demo() {
@@ -56,6 +58,7 @@ int main(){
         g_imu_preintegrator.reset();
         g_imu_preintegrator.init_from_calibration();
         g_last_calib_timestamp = g_imu_calib.last_calibrated;
+        g_imu_ready.store(true, std::memory_order_release);
         static sensors::IMUData imu_copy;
         while(true){
             std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(sensors::IMUIntervalMs / 2.0)));
@@ -97,7 +100,11 @@ int main(){
     std::thread mapping_thread([&m_lc, &m_pose](){
       double g_last_map_timestamp = -1.0;
       double map_timestamp = -1;
+      while (!g_imu_ready.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
       while(true){
+        
         core::Vector4d q_body_to_world = {0.0, 0.0, 0.0, 1.0};
         {
             std::lock_guard<std::mutex> lk(m_pose);
