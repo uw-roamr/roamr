@@ -59,6 +59,15 @@ private enum WasmImuLayout {
     static let totalByteCount = frameIdOffset + MemoryLayout<Int32>.size
 }
 
+private enum WasmPoseLayout {
+    static let timestampOffset = 0
+    static let translationOffset = timestampOffset + MemoryLayout<Double>.size
+    static let translationCount = 3
+    static let quaternionOffset = translationOffset + translationCount * MemoryLayout<Double>.size
+    static let quaternionCount = 4
+    static let totalByteCount = quaternionOffset + quaternionCount * MemoryLayout<Double>.size
+}
+
 private struct WasmMapFrameView {
     let timestamp: Double
     let width: Int
@@ -73,6 +82,12 @@ private struct WasmImuView {
     let accel: SIMD3<Double>
     let gyro: SIMD3<Double>
     let frameId: Int32
+}
+
+private struct WasmPoseView {
+    let timestamp: Double
+    let translation: SIMD3<Double>
+    let quaternion: SIMD4<Double>
 }
 
 private final class RGBJpegEncoder {
@@ -476,14 +491,14 @@ private final class WasmRerunMapBridge {
 
 private enum RerunMessage: Encodable {
     case points(timestamp: Double, points: [Float], colors: [UInt8]?)
-    case pose(timestamp: Double, quaternion: [Double])
+    case pose(timestamp: Double, translation: [Double], quaternion: [Double])
     case imu(timestamp: Double, accel: [Double], gyro: [Double], frameId: Int32)
     case motors(timestamp: Double, left: Int, right: Int, holdMs: Int)
     case videoFrame(timestamp: Double, jpegBase64: String)
     case mapFrame(timestamp: Double, jpegBase64: String)
 
     enum CodingKeys: String, CodingKey {
-        case type, timestamp, points, colors, quaternion, accel, gyro, frame_id, left, right, hold_ms, jpeg_b64
+        case type, timestamp, points, colors, translation, quaternion, accel, gyro, frame_id, left, right, hold_ms, jpeg_b64
     }
 
     func encode(to encoder: Encoder) throws {
@@ -494,9 +509,10 @@ private enum RerunMessage: Encodable {
             try container.encode(timestamp, forKey: .timestamp)
             try container.encode(points, forKey: .points)
             try container.encodeIfPresent(colors, forKey: .colors)
-        case let .pose(timestamp, quaternion):
+        case let .pose(timestamp, translation, quaternion):
             try container.encode("pose", forKey: .type)
             try container.encode(timestamp, forKey: .timestamp)
+            try container.encode(translation, forKey: .translation)
             try container.encode(quaternion, forKey: .quaternion)
         case let .imu(timestamp, accel, gyro, frameId):
             try container.encode("imu", forKey: .type)
@@ -552,7 +568,12 @@ final class RerunWebSocketClient {
 
     func logPose(timestamp: Double, quaternion: [Double]) {
         guard quaternion.count == 4 else { return }
-        enqueue(.pose(timestamp: timestamp, quaternion: quaternion))
+        enqueue(.pose(timestamp: timestamp, translation: [0.0, 0.0, 0.0], quaternion: quaternion))
+    }
+
+    func logPose(timestamp: Double, translation: [Double], quaternion: [Double]) {
+        guard translation.count == 3, quaternion.count == 4 else { return }
+        enqueue(.pose(timestamp: timestamp, translation: translation, quaternion: quaternion))
     }
 
     func logImu(timestamp: Double, accel: [Double], gyro: [Double], frameId: Int32) {
@@ -742,5 +763,43 @@ func rerun_log_imu_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer
         accel: [accel.x, accel.y, accel.z],
         gyro: [gyro.x, gyro.y, gyro.z],
         frameId: frameId
+    )
+}
+
+func rerun_log_pose_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+    guard let exec_env = exec_env, let ptr = ptr else { return }
+
+    let basePointer = ptr.assumingMemoryBound(to: UInt8.self)
+    guard let moduleInstance = wasm_runtime_get_module_inst(exec_env) else {
+        return
+    }
+    var nativeStart: UnsafeMutablePointer<UInt8>?
+    var nativeEnd: UnsafeMutablePointer<UInt8>?
+    guard wasm_runtime_get_native_addr_range(moduleInstance, basePointer, &nativeStart, &nativeEnd) else {
+        return
+    }
+
+    if let nativeEnd = nativeEnd {
+        let baseAddress = UInt(bitPattern: basePointer)
+        let endAddress = UInt(bitPattern: nativeEnd)
+        if baseAddress + UInt(WasmPoseLayout.totalByteCount) > endAddress {
+            return
+        }
+    }
+
+    let timestamp = basePointer.withMemoryRebound(to: Double.self, capacity: 1) { $0.pointee }
+    let translationPtr = basePointer.advanced(by: WasmPoseLayout.translationOffset)
+    let quatPtr = basePointer.advanced(by: WasmPoseLayout.quaternionOffset)
+    let translation = translationPtr.withMemoryRebound(to: Double.self, capacity: WasmPoseLayout.translationCount) {
+        SIMD3<Double>($0[0], $0[1], $0[2])
+    }
+    let quaternion = quatPtr.withMemoryRebound(to: Double.self, capacity: WasmPoseLayout.quaternionCount) {
+        SIMD4<Double>($0[0], $0[1], $0[2], $0[3])
+    }
+
+    RerunWebSocketClient.shared.logPose(
+        timestamp: timestamp,
+        translation: [translation.x, translation.y, translation.z],
+        quaternion: [quaternion.x, quaternion.y, quaternion.z, quaternion.w]
     )
 }

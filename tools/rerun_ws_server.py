@@ -161,15 +161,27 @@ class RerunBridge:
 
     def _log_pose(self, payload: dict) -> None:
         quat = payload.get("quaternion") or []
+        translation = payload.get("translation") or payload.get("position") or []
         if len(quat) != 4:
             return
-        rr.log(
-            "base_link",
-            rr.Transform3D(
-                translation=[0, 0, 0],
-                rotation=rr.Quaternion(xyzw=quat),
-            ),
-        )
+        if len(translation) != 3:
+            translation = [0, 0, 0]
+        try:
+            rr.log(
+                "base_link",
+                rr.Transform3D(
+                    translation=translation,
+                    rotation=rr.Quaternion(xyzw=quat),
+                ),
+            )
+        except Exception:
+            rr.log(
+                "base_link",
+                rr.Transform3D(
+                    translation=[0, 0, 0],
+                    rotation=rr.Quaternion(xyzw=quat),
+                ),
+            )
 
     def _log_imu(self, payload: dict, timestamp: float) -> None:
         accel = payload.get("accel") or []
@@ -248,7 +260,10 @@ class RerunBridge:
         if self._extrinsics_logged:
             return
         self._extrinsics_logged = True
-        # rr.log("base_link", rr.ViewCoordinates.FLU())
+        coord_frame = getattr(rr, "CoordinateFrame", None)
+        if coord_frame is not None:
+            rr.log("/", coord_frame("world"), static=True)
+            rr.log("base_link", coord_frame("base_link"), static=True)
         rr.log(
             "base_link/imu/accel",
             rr.SeriesLines(names=["imu_acc_x", "imu_acc_y", "imu_acc_z"]),

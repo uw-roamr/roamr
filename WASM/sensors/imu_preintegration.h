@@ -1,1 +1,61 @@
 #pragma once
+
+#include <array>
+
+#include "core/coordinate_frames.h"
+#include "sensors/calibration.h"
+#include "sensors/imu.h"
+
+namespace sensors {
+
+struct PoseLog {
+  double timestamp;
+  core::Vector3d translation;
+  core::Vector4d quaternion;
+};
+
+class IMUPreintegrator {
+ public:
+  explicit IMUPreintegrator(calibration::IMUCalibration& imu_calib) noexcept
+      : imu_calib_(imu_calib) {
+    reset();
+  }
+
+  void reset() noexcept {
+    pose_ = core::PoseSE3d();
+    R_ = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    position_.fill(0.0);
+    velocity_.fill(0.0);
+    last_ts_ = -1.0;
+  }
+
+  void init_from_calibration() noexcept {
+    bias_gyro_[0] = imu_calib_.gyro_bias[0];
+    bias_gyro_[1] = imu_calib_.gyro_bias[1];
+    bias_gyro_[2] = imu_calib_.gyro_bias[2];
+    bias_acc_[0] = imu_calib_.acc_bias[0];
+    bias_acc_[1] = imu_calib_.acc_bias[1];
+    bias_acc_[2] = imu_calib_.acc_bias[2];
+    gravity_[0] = imu_calib_.gravity[0];
+    gravity_[1] = imu_calib_.gravity[1];
+    gravity_[2] = imu_calib_.gravity[2];
+  }
+
+  void integrate(const IMUData& imu) noexcept;
+  void get_pose_log(PoseLog* out) const noexcept;
+
+  const core::PoseSE3d& pose() const noexcept { return pose_; }
+
+ private:
+  calibration::IMUCalibration& imu_calib_;
+  core::PoseSE3d pose_;
+  std::array<double, 9> R_{1, 0, 0, 0, 1, 0, 0, 0, 1};
+  core::Vector3d position_;
+  core::Vector3d velocity_;
+  core::Vector3d bias_gyro_;
+  core::Vector3d bias_acc_;
+  core::Vector3d gravity_;
+  double last_ts_ = -1.0;
+};
+
+}  // namespace sensors

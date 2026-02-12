@@ -1,4 +1,5 @@
 #pragma once
+#include "core/coordinate_frames.h"
 #include "core/math_utils.h"
 #include "core/ring_buffer.h"
 #include "sensors/imu.h"
@@ -28,11 +29,11 @@ namespace sensors::calibration{
         bool calibrated = false;
         double window_start = -1.0;
         int sample_count = 0;
-        double sum_acc[3] = {0.0, 0.0, 0.0};
-        double sum_gyro[3] = {0.0, 0.0, 0.0};
-        double gyro_bias[3] = {0.0, 0.0, 0.0};
-        double acc_bias[3] = {0.0, 0.0, 0.0};
-        double gravity[3] = {0.0, 0.0, 0.0};
+        core::Vector3d sum_acc{};
+        core::Vector3d sum_gyro{};
+        core::Vector3d gyro_bias{};
+        core::Vector3d acc_bias{};
+        core::Vector3d gravity{};
         double last_calibrated = 0.0;
         double last_imu_timestamp = -1.0;
 

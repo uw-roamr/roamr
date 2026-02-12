@@ -6,6 +6,7 @@
 #include "core/telemetry.h"
 #include "sensors/calibration.h"
 #include "sensors/imu.h"
+#include "sensors/imu_preintegration.h"
 #include "sensors/lidar_camera.h"
 #include "mapping/map_api.h"
 #include "mapping/map_update.h"
@@ -19,6 +20,7 @@ static sensors::LidarCameraData g_rerun_lc;
 
 static sensors::calibration::IMUHistoryBuffer g_imu_history;
 static sensors::calibration::IMUCalibration g_imu_calib(g_imu_history);
+static sensors::IMUPreintegrator g_imu_preintegrator(g_imu_calib);
 
 // Quick demo: drive both wheels forward briefly.
 void drive_forward_demo() {
