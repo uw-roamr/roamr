@@ -7,8 +7,8 @@ namespace sensors::calibration{
         IMUData& curr = curr_slot();
         if (curr.timestamp <= last_imu_timestamp) return;
         last_imu_timestamp = curr.timestamp;
-        const double acc = norm(curr.acc_x, curr.acc_y, curr.acc_z);
-        const double gyro = norm(curr.gyro_x, curr.gyro_y, curr.gyro_z);
+        const double acc = core::norm(curr.acc_x, curr.acc_y, curr.acc_z);
+        const double gyro = core::norm(curr.gyro_x, curr.gyro_y, curr.gyro_z);
         if (acc < kIMU_acc_still_low || acc > kIMU_acc_still_high || gyro > kIMU_gyro_still_thresh_mag){
             still_timestamps_ = 0;
             reset_sums();
@@ -68,7 +68,7 @@ namespace sensors::calibration{
             const double acc_mean_y = sum_acc[1]/ still_timestamps_;
             const double acc_mean_z = sum_acc[2]/ still_timestamps_;
 
-            const double acc_mean = norm(acc_mean_x, acc_mean_y, acc_mean_z);
+            const double acc_mean = core::norm(acc_mean_x, acc_mean_y, acc_mean_z);
             if (acc_mean < acc_epsilon) continue;
 
             // initialize gravity (z down)

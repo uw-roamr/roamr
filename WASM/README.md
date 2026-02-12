@@ -16,21 +16,7 @@ The `--target=wasm32-wasi` flag adds support for I/O functionality. Alternativel
 
 Examples:
 ```sh
-docker run -v `pwd`:/src -w /src ghcr.io/webassembly/wasi-sdk /opt/wasi-sdk/bin/clang++ \
---target=wasm32-wasip1-threads \
--pthread \
--Wl,--import-memory \
--Wl,--export-memory \
--Wl,--shared-memory \
--Wl,--max-memory=67108864 \
--I. -Icore -Icontrols -Imapping -Isensors -Iutils \
--o slam_main.wasm slam_main.cpp core/telemetry.cpp mapping/map.cpp mapping/map_update.cpp sensors/imu_calibration.cpp
-```
-
-1. Run the file using [Wasmtime](https://docs.wasmtime.dev/) or another runtime
-
-```sh
-wasmtime --wasi threads slam_main.wasm
+./build_wasm.sh
 ```
 
 ## Motor control

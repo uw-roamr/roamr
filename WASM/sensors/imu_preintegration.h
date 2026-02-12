@@ -49,7 +49,7 @@ class IMUPreintegrator {
  private:
   calibration::IMUCalibration& imu_calib_;
   core::PoseSE3d pose_;
-  std::array<double, 9> R_{1, 0, 0, 0, 1, 0, 0, 0, 1};
+  core::Mat3d R_{1, 0, 0, 0, 1, 0, 0, 0, 1};
   core::Vector3d position_;
   core::Vector3d velocity_;
   core::Vector3d bias_gyro_;
