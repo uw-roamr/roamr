@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Iterable, Optional
 
 import rerun as rr
+import rerun.blueprint as rrb
 import websockets
 
 
@@ -166,17 +167,31 @@ class RerunBridge:
             return
         if len(translation) != 3:
             translation = [0, 0, 0]
+        # Draw explicit axes as arrows (RGB = XYZ) so orientation is always visible.
+        axis_len = 0.1
+        axes = [
+            [axis_len, 0.0, 0.0],
+            [0.0, axis_len, 0.0],
+            [0.0, 0.0, axis_len],
+        ]
+        origins = [[0.0, 0.0, 0.0]] * 3
+        colors = [[255, 0, 0], [0, 255, 0], [0, 0, 255]]
+
         try:
             rr.log(
-                "base_link",
+                "world/base_link",
                 rr.Transform3D(
                     translation=translation,
                     rotation=rr.Quaternion(xyzw=quat),
                 ),
             )
+            rr.log(
+                "world/base_link/axes",
+                rr.Arrows3D(origins=origins, vectors=axes, colors=colors),
+            )
         except Exception:
             rr.log(
-                "base_link",
+                "world/base_link",
                 rr.Transform3D(
                     translation=[0, 0, 0],
                     rotation=rr.Quaternion(xyzw=quat),
@@ -190,10 +205,10 @@ class RerunBridge:
         if len(accel) != 3 or len(gyro) != 3:
             return
 
-        rr.log("base_link/imu/accel", rr.Scalars(accel))
-        rr.log("base_link/imu/gyro", rr.Scalars(gyro))
+        rr.log("world/base_link/imu/accel", rr.Scalars(accel))
+        rr.log("world/base_link/imu/gyro", rr.Scalars(gyro))
         if frame_id is not None:
-            log_scalar("base_link/imu/frame_id", float(frame_id))
+            log_scalar("world/base_link/imu/frame_id", float(frame_id))
 
     def _log_motors(self, payload: dict, timestamp: float) -> None:
         left = float(payload.get("left", 0))
@@ -236,13 +251,13 @@ class RerunBridge:
 
         set_rerun_time(msg.timestamp)
         final_colors = merged_colors if merged_colors else colors_from_z(merged_points)
-        rr.log("base_link/lidar/points", rr.Points3D(merged_points, colors=final_colors))
+        rr.log("world/base_link/lidar/points", rr.Points3D(merged_points, colors=final_colors))
 
     def _log_video_frame(self, payload: dict, timestamp: float) -> None:
         jpeg_b64 = payload.get("jpeg_b64")
         jpeg_bytes = base64.b64decode(jpeg_b64, validate=True)
         set_rerun_time(timestamp)
-        if self._log_encoded_image("base_link/camera/image", jpeg_bytes):
+        if self._log_encoded_image("world/base_link/camera/image", jpeg_bytes):
             return
 
     def _log_map_frame(self, payload: dict, timestamp: float) -> None:
@@ -260,17 +275,27 @@ class RerunBridge:
         if self._extrinsics_logged:
             return
         self._extrinsics_logged = True
+        rr.log("world", rr.ViewCoordinates.FLU, static=True)
+        rr.log(
+            "world",
+            rr.Transform3D(
+                translation=[0, 0, 0],
+                rotation=rr.Quaternion(xyzw=[0, 0, 0, 1]),
+            ),
+            static=True,
+        )
         coord_frame = getattr(rr, "CoordinateFrame", None)
         if coord_frame is not None:
-            rr.log("/", coord_frame("world"), static=True)
-            rr.log("base_link", coord_frame("base_link"), static=True)
+            rr.log("world", coord_frame("world"), static=True)
+            rr.log("world/base_link", coord_frame("base_link"), static=True)
+        rr.log("world/base_link", rr.ViewCoordinates.FLU, static=True)
         rr.log(
-            "base_link/imu/accel",
+            "world/base_link/imu/accel",
             rr.SeriesLines(names=["imu_acc_x", "imu_acc_y", "imu_acc_z"]),
             static=True,
         )
         rr.log(
-            "base_link/imu/gyro",
+            "world/base_link/imu/gyro",
             rr.SeriesLines(names=["imu_gyro_x", "imu_gyro_y", "imu_gyro_z"]),
             static=True,
         )
@@ -278,8 +303,8 @@ class RerunBridge:
             translation=[0, 0, 0],
             rotation=rr.Quaternion(xyzw=[0, 0, 0, 1]),
         )
-        rr.log("base_link/lidar", identity)
-        rr.log("base_link/camera", identity)
+        rr.log("world/base_link/lidar", identity)
+        rr.log("world/base_link/camera", identity)
 
     def _log_encoded_image(self, path: str, jpeg_bytes: bytes) -> bool:
         encoded_cls = getattr(rr, "EncodedImage", None)
@@ -327,6 +352,22 @@ def main():
     args = parser.parse_args()
 
     rr.init("roamr")
+    try:
+        blueprint = rrb.Blueprint(
+            rrb.Spatial3DView(
+                origin="world",
+                name="3D",
+                contents="world/**",
+                spatial_information=rrb.SpatialInformation(
+                    target_frame="tf#/world",
+                    show_axes=True,
+                ),
+            ),
+            collapse_panels=True,
+        )
+        rr.send_blueprint(blueprint)
+    except Exception as exc:
+        print(f"[rerun] blueprint setup failed: {exc}")
     if args.spawn:
         server_uri = rr.serve_grpc()
         if server_uri is not None:
