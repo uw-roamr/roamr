@@ -32,7 +32,7 @@ void IMUPreintegrator::integrate(const IMUData& imu) noexcept {
   a_world -= gravity_;
 
   const core::Vector3d dp = velocity_ * dt + a_world * (0.5 * dt * dt);
-  pose_.translation += dp;
+//   pose_.translation += dp;
   velocity_ += a_world * dt;
 
   last_ts_ = imu.timestamp;
