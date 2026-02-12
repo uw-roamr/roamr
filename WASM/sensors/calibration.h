@@ -12,6 +12,7 @@ namespace sensors::calibration{
     constexpr double kIMU_acc_still_low = expected_gravity - acc_still;
     constexpr double kIMU_acc_still_high = expected_gravity + acc_still;
 
+    constexpr double kIMU_recalibrate_interval_s = 1.0;
 
     constexpr double kIMU_gyro_still_thresh_mag = 0.05; // rad/s
 

@@ -23,8 +23,6 @@ class IMUPreintegrator {
 
   void reset() noexcept {
     pose_ = core::PoseSE3d();
-    R_ = {1, 0, 0, 0, 1, 0, 0, 0, 1};
-    position_.fill(0.0);
     velocity_.fill(0.0);
     last_ts_ = -1.0;
   }
@@ -49,8 +47,6 @@ class IMUPreintegrator {
  private:
   calibration::IMUCalibration& imu_calib_;
   core::PoseSE3d pose_;
-  core::Mat3d R_{1, 0, 0, 0, 1, 0, 0, 0, 1};
-  core::Vector3d position_;
   core::Vector3d velocity_;
   core::Vector3d bias_gyro_;
   core::Vector3d bias_acc_;

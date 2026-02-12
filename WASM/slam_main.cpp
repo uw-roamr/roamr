@@ -22,6 +22,8 @@ static sensors::calibration::IMUHistoryBuffer g_imu_history;
 static sensors::calibration::IMUCalibration g_imu_calib(g_imu_history);
 static sensors::IMUPreintegrator g_imu_preintegrator(g_imu_calib);
 
+static sensors::PoseLog g_pose;
+
 // Quick demo: drive both wheels forward briefly.
 void drive_forward_demo() {
     controls::MotorController motors;
@@ -48,6 +50,8 @@ int main(){
         double g_last_logged_imu_timestamp = -1.0;
 
         g_imu_calib.init_biases();
+        g_imu_preintegrator.reset();
+        g_imu_preintegrator.init_from_calibration();
         static sensors::IMUData imu_copy;
         while(true){
             std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(sensors::IMUIntervalMs / 2.0)));
@@ -58,7 +62,9 @@ int main(){
                 g_imu_calib.recalibrate(); // if possible, update biases
                 imu_copy = g_imu_calib.curr_slot();
             }
+            g_imu_preintegrator.integrate(imu_copy);
             log_imu(m_imu, imu_copy, g_last_logged_imu_timestamp);
+            rerun_log_pose(&g_pose);
         }
     });
     std::thread lidar_camera_thread([&m_lc](){

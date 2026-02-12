@@ -39,7 +39,7 @@ namespace core{
 
     PoseSE3d(){
       translation.fill(0.0);
-      quaternion.fill(0.0);
+      quaternion = quat_identity();
       frame_id = static_cast<CoordinateFrameId_t>(CoordinateFrameId::kFLU);
     }
   };

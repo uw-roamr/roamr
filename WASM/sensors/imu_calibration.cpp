@@ -38,6 +38,10 @@ namespace sensors::calibration{
 
     void IMUCalibration::recalibrate(){
         if (still_timestamps_ < kIMU_calib_samples) return;
+        if (last_calibrated > 0.0 && last_imu_timestamp > 0.0 &&
+            (last_imu_timestamp - last_calibrated) < kIMU_recalibrate_interval_s) {
+            return;
+        }
 
         for(size_t i = 0; i < 3; ++i){
             gyro_bias[i] = sum_gyro[i] / still_timestamps_;
@@ -45,6 +49,7 @@ namespace sensors::calibration{
             acc_bias[i] = acc_mean - gravity[i];
         }
 
+        last_calibrated = last_imu_timestamp;
         std::cout << "calibrated IMU" << std::endl;
     }
 
