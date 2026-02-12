@@ -16,7 +16,9 @@ static bool g_map_initialized = false;
 static mapping::MapFrame g_map_frame;
 
 static sensors::CameraConfig g_cam_config;
-static sensors::LidarCameraData g_lc_data;
+static sensors::LidarCameraData g_lc_buffers[2];
+static std::atomic<int> g_lc_ready_idx{-1};
+static std::atomic<int> g_lc_in_use_idx{-1};
 static sensors::LidarCameraData g_rerun_lc;
 
 static sensors::calibration::IMUHistoryBuffer g_imu_history;
@@ -85,12 +87,22 @@ int main(){
     });
     std::thread lidar_camera_thread([&m_lc](){
         double g_last_logged_lc_timestamp = -1.0;
+        int write_idx = 0;
         while(true){
             std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(sensors::LidarCameraIntervalMs)));
             {
-                std::lock_guard<std::mutex> lk(m_lc);
-                read_lidar_camera(&g_lc_data);
-                sensors::ensure_points_flu(g_lc_data);
+                const int in_use = g_lc_in_use_idx.load(std::memory_order_acquire);
+                if (write_idx == in_use) {
+                    write_idx = 1 - write_idx;
+                }
+                if (write_idx == in_use) {
+                    std::this_thread::yield();
+                    continue;
+                }
+                read_lidar_camera(&g_lc_buffers[write_idx]);
+                sensors::ensure_points_flu(g_lc_buffers[write_idx]);
+                g_lc_ready_idx.store(write_idx, std::memory_order_release);
+                write_idx = 1 - write_idx;
             }
             // log_lc(m_lc, g_lc_data, g_last_logged_lc_timestamp);
         }
@@ -111,16 +123,26 @@ int main(){
             q_body_to_world = g_latest_quat;
         }
         
-        {
-            std::lock_guard<std::mutex> lk(m_lc);
-            if (g_lc_data.points_size <= 0) continue;
-            map_timestamp = g_lc_data.timestamp;
-        
-            const bool do_map_update = (map_timestamp - g_last_map_timestamp >= mapping::mapMinInterval);
-            if (!do_map_update) continue;
-            g_last_map_timestamp = map_timestamp;
-            mapping::update_map_from_lidar(g_lc_data, g_map_frame, &g_rerun_lc, do_map_update, g_map_initialized, q_body_to_world);
+        const int ready_idx = g_lc_ready_idx.exchange(-1, std::memory_order_acq_rel);
+        if (ready_idx < 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
         }
+        g_lc_in_use_idx.store(ready_idx, std::memory_order_release);
+        const sensors::LidarCameraData& lc_data = g_lc_buffers[ready_idx];
+        if (lc_data.points_size <= 0) {
+            g_lc_in_use_idx.store(-1, std::memory_order_release);
+            continue;
+        }
+        map_timestamp = lc_data.timestamp;
+        const bool do_map_update = (map_timestamp - g_last_map_timestamp >= mapping::mapMinInterval);
+        if (!do_map_update) {
+            g_lc_in_use_idx.store(-1, std::memory_order_release);
+            continue;
+        }
+        g_last_map_timestamp = map_timestamp;
+        mapping::update_map_from_lidar(lc_data, g_map_frame, &g_rerun_lc, do_map_update, g_map_initialized, q_body_to_world);
+        g_lc_in_use_idx.store(-1, std::memory_order_release);
 
         if (g_rerun_lc.points_size > 0) {
             rerun_log_lidar_frame(&g_rerun_lc);
