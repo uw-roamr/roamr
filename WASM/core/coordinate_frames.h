@@ -38,7 +38,7 @@ namespace core{
     CoordinateFrameId_t frame_id;
 
     PoseSE3d(){
-      translation.fill(0.0);
+      translation = {};
       quaternion = quat_identity();
       frame_id = static_cast<CoordinateFrameId_t>(CoordinateFrameId::kFLU);
     }

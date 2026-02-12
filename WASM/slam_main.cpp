@@ -48,10 +48,12 @@ int main(){
 
     std::thread imu_thread([&m_imu](){
         double g_last_logged_imu_timestamp = -1.0;
+        double g_last_calib_timestamp = -1.0;
 
         g_imu_calib.init_biases();
         g_imu_preintegrator.reset();
         g_imu_preintegrator.init_from_calibration();
+        g_last_calib_timestamp = g_imu_calib.last_calibrated;
         static sensors::IMUData imu_copy;
         while(true){
             std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(sensors::IMUIntervalMs / 2.0)));
@@ -60,6 +62,10 @@ int main(){
                 read_imu(&g_imu_calib.new_write_slot());
                 g_imu_calib.update();
                 g_imu_calib.recalibrate(); // if possible, update biases
+                if (g_imu_calib.last_calibrated > g_last_calib_timestamp) {
+                    g_last_calib_timestamp = g_imu_calib.last_calibrated;
+                    g_imu_preintegrator.init_from_calibration();
+                }
                 imu_copy = g_imu_calib.curr_slot();
             }
             g_imu_preintegrator.integrate(imu_copy);

@@ -23,7 +23,7 @@ class IMUPreintegrator {
 
   void reset() noexcept {
     pose_ = core::PoseSE3d();
-    velocity_.fill(0.0);
+    velocity_ = {};
     last_ts_ = -1.0;
   }
 
