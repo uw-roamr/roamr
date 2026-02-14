@@ -237,6 +237,10 @@
   "erc": {
     "erc_exclusions": [
       [
+        "pin_to_pin|1562100|546100|363f9bb5-9916-4b01-a0cd-3a81eed480bb|3b10971b-fff8-4929-8921-962c95b8f77c|/bfe84b16-3df2-48dd-882e-523c3a68f778/7cadbd84-e43d-43ba-a052-9e62bf6faf2f|/bfe84b16-3df2-48dd-882e-523c3a68f778/7cadbd84-e43d-43ba-a052-9e62bf6faf2f|/bfe84b16-3df2-48dd-882e-523c3a68f778/7cadbd84-e43d-43ba-a052-9e62bf6faf2f",
+        ""
+      ],
+      [
         "power_pin_not_driven|1790700|571500|ab19af74-3b78-47eb-a7e3-6cf311532979|00000000-0000-0000-0000-000000000000|/bfe84b16-3df2-48dd-882e-523c3a68f778/7cadbd84-e43d-43ba-a052-9e62bf6faf2f|/bfe84b16-3df2-48dd-882e-523c3a68f778/7cadbd84-e43d-43ba-a052-9e62bf6faf2f|",
         ""
       ]

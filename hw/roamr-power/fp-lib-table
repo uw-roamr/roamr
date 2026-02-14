@@ -13,4 +13,6 @@
   (lib (name "KR_DELPS1.22-VGVI-23-H3Q4")(type "KiCad")(uri "${KIPRJMOD}/Parts/KR_DELPS1.22-VGVI-23-H3Q4/KiCad/footprints.pretty")(options "")(descr ""))
   (lib (name "SMLJ12A-R")(type "KiCad")(uri "${KIPRJMOD}/Parts/SMLJ12A-R/KiCad/footprints.pretty")(options "")(descr ""))
   (lib (name "TB002-500-02BE")(type "KiCad")(uri "${KIPRJMOD}/Parts/TB002-500-02BE/KiCad/footprints.pretty")(options "")(descr ""))
+  (lib (name "PMEG3050EP")(type "KiCad")(uri "${KIPRJMOD}/Parts/PMEG3050EP/footprints.pretty")(options "")(descr ""))
+  (lib (name "TPS259541DSGR")(type "KiCad")(uri "${KIPRJMOD}/Parts/TPS259541DSGR/footprints.pretty")(options "")(descr ""))
 )

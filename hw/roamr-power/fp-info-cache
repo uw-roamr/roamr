@@ -1,4 +1,4 @@
-27273048167299274
+27276589912610660
 35SVPF39M
 16SVF270M
 E7
@@ -76012,6 +76012,13 @@ DIL DIP PDIP 2.54mm 7.62mm 300mil
 0
 4
 4
+PMEG3050EP
+PMEG3050EP115
+SOD128
+Schottky Diode
+0
+2
+2
 Package_BGA
 Alliance_TFBGA-36_6x8mm_Layout6x8_P0.75mm
 Alliance TFBGA-36, NSMD, 6.0x8.0mm, 36 Ball, 6x8 Layout, 0.75mm Pitch, generated with kicad-footprint-generator ipc_bga_generator.py, https://www.alliancememory.com/wp-content/uploads/pdf/AS6C1008_Mar_2023V1.2.pdf#page=13
@@ -100855,6 +100862,13 @@ Integrated Circuit
 0
 6
 6
+TPS259541DSGR
+SON50P200X200X80-9N
+DSG0008A 1
+Integrated Circuit
+0
+9
+9
 TerminalBlock
 TerminalBlock_MaiXu_MX126-5.0-02P_1x02_P5.00mm
 terminal block MaiXu MX126-5.0-02P, 2 pins, pitch 5mm, size 10.5x7.8mm, drill diameter 1.3mm, pad diameter 2.8mm, https://www.lcsc.com/datasheet/lcsc_datasheet_2309150913_MAX-MX126-5-0-03P-GN01-Cu-S-A_C5188435.pdf, script-generated using https://gitlab.com/kicad/libraries/kicad-footprint-generator/-/tree/master/scripts/TerminalBlock_MaiXu
