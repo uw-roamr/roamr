@@ -289,11 +289,7 @@
       "plot": "",
       "pos_files": "",
       "specctra_dsn": "",
-<<<<<<< HEAD
-      "step": "roamr-power.step",
-=======
       "step": "",
->>>>>>> 3b72960 (WIP ESP32 and USB UART)
       "svg": "",
       "vrml": ""
     },
