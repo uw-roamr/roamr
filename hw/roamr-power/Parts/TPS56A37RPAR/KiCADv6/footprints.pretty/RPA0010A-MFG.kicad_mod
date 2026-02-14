@@ -230,6 +230,17 @@
 		(layer "F.Paste")
 		(uuid "c1f7d2df-fe42-42ea-b7ee-9af26fb7244a")
 	)
+	(fp_rect
+		(start -2.75 -2.25)
+		(end 2.3 2.2)
+		(stroke
+			(width 0.05)
+			(type default)
+		)
+		(fill no)
+		(layer "F.CrtYd")
+		(uuid "f258d6ac-42e7-417d-b3c5-055cf23d745c")
+	)
 	(fp_line
 		(start -1.549999 -1.549999)
 		(end 1.549999 -1.549999)
