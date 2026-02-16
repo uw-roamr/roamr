@@ -7,4 +7,7 @@
   (lib (name "PMEG3050EP")(type "KiCad")(uri "${KIPRJMOD}/Parts/PMEG3050EP/footprints.pretty")(options "")(descr ""))
   (lib (name "SMLJ12A-R")(type "KiCad")(uri "${KIPRJMOD}/Parts/SMLJ12A-R/footprints.pretty")(options "")(descr ""))
   (lib (name "1825910_6")(type "KiCad")(uri "${KIPRJMOD}/Parts/1825910_6/footprints.pretty")(options "")(descr ""))
+  (lib (name "L8050QLT1G")(type "KiCad")(uri "${KIPRJMOD}/Parts/L8050QLT1G/footprints.pretty")(options "")(descr ""))
+  (lib (name "LESD5D5.0CT1G")(type "KiCad")(uri "${KIPRJMOD}/Parts/LESD5D5.0CT1G/footprints.pretty")(options "")(descr ""))
+  (lib (name "1N5819HW_7_F")(type "KiCad")(uri "${KIPRJMOD}/Parts/1N5819HW_7_F/footprints.pretty")(options "")(descr ""))
 )

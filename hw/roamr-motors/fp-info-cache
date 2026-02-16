@@ -1,4 +1,18 @@
-27251812487297374
+27264210820823405
+1N5819HW_7_F
+SOD3715X145N
+
+
+0
+2
+2
+1825910_6
+SW4_1825910-B_TEC
+
+1825910-6 
+0
+4
+4
 Audio_Module
 Reverb_BTDR-1H
 Digital Reverberation Unit, http://www.belton.co.kr/inc/downfile.php?seq=17&file=pdf (footprint from http://www.uk-electronic.de/PDF/BTDR-1.pdf)
@@ -70580,6 +70594,13 @@ LED
 0
 2
 2
+L8050QLT1G
+L8050QLT1G
+L8050QLT1G-1
+Integrated Circuit
+0
+3
+3
 LED_SMD
 LED-APA102-2020
 http://www.led-color.com/upload/201604/APA102-2020%20SMD%20LED.pdf
@@ -71830,6 +71851,13 @@ LED_THT
 LED_VCCLite_5381H7_6.35x6.35mm
 Yellow 5381 Series LED VCCLite https://vcclite.com/wp-content/uploads/wpallimport/files/files/5381Series.pdf http://static.vcclite.com/pdf/Mounting%20Hole%20Pattern%202.pdf
 Yellow 5381 Series LED
+0
+2
+2
+LESD5D5.0CT1G
+LESD5D50CT1G
+LESD5D5.0CT1G-1
+TVS Diode (Bi-directional)
 0
 2
 2
@@ -75977,6 +76005,13 @@ DIL DIP PDIP 2.54mm 7.62mm 300mil
 0
 4
 4
+PMEG3050EP
+PMEG3050EP115
+SOD128
+Schottky Diode
+0
+2
+2
 Package_BGA
 Alliance_TFBGA-36_6x8mm_Layout6x8_P0.75mm
 Alliance TFBGA-36, NSMD, 6.0x8.0mm, 36 Ball, 6x8 Layout, 0.75mm Pitch, generated with kicad-footprint-generator ipc_bga_generator.py, https://www.alliancememory.com/wp-content/uploads/pdf/AS6C1008_Mar_2023V1.2.pdf#page=13
@@ -98685,6 +98720,20 @@ rotary encoder illuminated switch vertical
 0
 9
 8
+SGM2212-3.3XKC3G_TR
+SOT230P700X180-4N
+SOT-223-3
+Integrated Circuit
+0
+4
+4
+SMLJ12A-R
+DIOM7959X262N
+SMC (DO-214AB)
+TVS Diode (Uni-directional)
+0
+2
+2
 Sensor
 ASAIR_AM2302_P2.54mm_Lead2.75mm_TabDown
 Temperature and humidity module, http://akizukidenshi.com/download/ds/aosong/AM2302.pdf

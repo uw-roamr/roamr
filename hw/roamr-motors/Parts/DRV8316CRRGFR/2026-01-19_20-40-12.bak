@@ -85,7 +85,7 @@
 		(symbol "DRV8316CRRGFR_1_1"
 			(polyline
 				(pts
-					(xy 7.62 5.08) (xy 7.62 -40.64)
+					(xy 7.62 5.08) (xy 7.62 -38.1)
 				)
 				(stroke
 					(width 0.127)
@@ -97,7 +97,7 @@
 			)
 			(polyline
 				(pts
-					(xy 7.62 -40.64) (xy 43.18 -40.64)
+					(xy 7.62 -38.1) (xy 43.18 -38.1)
 				)
 				(stroke
 					(width 0.127)
@@ -121,7 +121,7 @@
 			)
 			(polyline
 				(pts
-					(xy 43.18 -40.64) (xy 43.18 5.08)
+					(xy 43.18 -38.1) (xy 43.18 5.08)
 				)
 				(stroke
 					(width 0.127)
@@ -150,7 +150,7 @@
 				)
 			)
 			(pin input line
-				(at 0 -3.81 0)
+				(at 0 -2.54 0)
 				(length 7.62)
 				(name "INHA"
 					(effects
@@ -168,7 +168,7 @@
 				)
 			)
 			(pin input line
-				(at 0 -6.35 0)
+				(at 0 -5.08 0)
 				(length 7.62)
 				(name "INHB"
 					(effects
@@ -186,7 +186,7 @@
 				)
 			)
 			(pin input line
-				(at 0 -8.89 0)
+				(at 0 -7.62 0)
 				(length 7.62)
 				(name "INHC"
 					(effects
@@ -204,7 +204,7 @@
 				)
 			)
 			(pin input line
-				(at 0 -12.7 0)
+				(at 0 -10.16 0)
 				(length 7.62)
 				(name "INLA"
 					(effects
@@ -222,7 +222,7 @@
 				)
 			)
 			(pin input line
-				(at 0 -15.24 0)
+				(at 0 -12.7 0)
 				(length 7.62)
 				(name "INLB"
 					(effects
@@ -240,7 +240,7 @@
 				)
 			)
 			(pin input line
-				(at 0 -17.78 0)
+				(at 0 -15.24 0)
 				(length 7.62)
 				(name "INLC"
 					(effects
@@ -258,7 +258,7 @@
 				)
 			)
 			(pin input line
-				(at 0 -22.86 0)
+				(at 0 -17.78 0)
 				(length 7.62)
 				(name "NSCS"
 					(effects
@@ -276,7 +276,7 @@
 				)
 			)
 			(pin input line
-				(at 0 -25.4 0)
+				(at 0 -20.32 0)
 				(length 7.62)
 				(name "NSLEEP"
 					(effects
@@ -294,7 +294,7 @@
 				)
 			)
 			(pin input line
-				(at 0 -30.48 0)
+				(at 0 -22.86 0)
 				(length 7.62)
 				(name "SCLK"
 					(effects
@@ -312,7 +312,7 @@
 				)
 			)
 			(pin input line
-				(at 0 -33.02 0)
+				(at 0 -25.4 0)
 				(length 7.62)
 				(name "SDI"
 					(effects
@@ -330,34 +330,16 @@
 				)
 			)
 			(pin output line
-				(at 0 -35.56 0)
-				(length 7.62)
-				(name "SDO"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "33"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin power_in line
 				(at 50.8 0 180)
 				(length 7.62)
-				(name "OUTA"
+				(name "NFAULT"
 					(effects
 						(font
 							(size 1.27 1.27)
 						)
 					)
 				)
-				(number "13"
+				(number "22"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -375,7 +357,7 @@
 						)
 					)
 				)
-				(number "14"
+				(number "13"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -384,16 +366,16 @@
 				)
 			)
 			(pin power_in line
-				(at 50.8 -7.62 180)
+				(at 50.8 -5.08 180)
 				(length 7.62)
-				(name "OUTB"
+				(name "OUTA"
 					(effects
 						(font
 							(size 1.27 1.27)
 						)
 					)
 				)
-				(number "16"
+				(number "14"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -411,7 +393,7 @@
 						)
 					)
 				)
-				(number "17"
+				(number "16"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -420,16 +402,16 @@
 				)
 			)
 			(pin power_in line
-				(at 50.8 -15.24 180)
+				(at 50.8 -12.7 180)
 				(length 7.62)
-				(name "OUTC"
+				(name "OUTB"
 					(effects
 						(font
 							(size 1.27 1.27)
 						)
 					)
 				)
-				(number "19"
+				(number "17"
 					(effects
 						(font
 							(size 1.27 1.27)
@@ -447,6 +429,24 @@
 						)
 					)
 				)
+				(number "19"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin power_in line
+				(at 50.8 -20.32 180)
+				(length 7.62)
+				(name "OUTC"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
 				(number "20"
 					(effects
 						(font
@@ -456,7 +456,25 @@
 				)
 			)
 			(pin output line
-				(at 50.8 -22.86 180)
+				(at 50.8 -25.4 180)
+				(length 7.62)
+				(name "SDO"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+				(number "33"
+					(effects
+						(font
+							(size 1.27 1.27)
+						)
+					)
+				)
+			)
+			(pin output line
+				(at 50.8 -27.94 180)
 				(length 7.62)
 				(name "SOA"
 					(effects
@@ -474,7 +492,7 @@
 				)
 			)
 			(pin output line
-				(at 50.8 -25.4 180)
+				(at 50.8 -30.48 180)
 				(length 7.62)
 				(name "SOB"
 					(effects
@@ -492,7 +510,7 @@
 				)
 			)
 			(pin output line
-				(at 50.8 -27.94 180)
+				(at 50.8 -33.02 180)
 				(length 7.62)
 				(name "SOC"
 					(effects
@@ -502,24 +520,6 @@
 					)
 				)
 				(number "38"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-			)
-			(pin output line
-				(at 50.8 -33.02 180)
-				(length 7.62)
-				(name "NFAULT"
-					(effects
-						(font
-							(size 1.27 1.27)
-						)
-					)
-				)
-				(number "22"
 					(effects
 						(font
 							(size 1.27 1.27)

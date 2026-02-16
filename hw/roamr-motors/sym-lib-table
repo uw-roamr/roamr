@@ -2,4 +2,6 @@
   (version 7)
   (lib (name "SGM2212-3_3XKC3G_TR")(type "KiCad")(uri "${KIPRJMOD}/Parts/SGM2212-3.3XKC3G_TR/SGM2212-3_3XKC3G_TR.kicad_sym")(options "")(descr ""))
   (lib (name "1825910_6")(type "KiCad")(uri "${KIPRJMOD}/Parts/1825910_6/1825910_6.kicad_sym")(options "")(descr ""))
+  (lib (name "PMEG3050EP_115")(type "KiCad")(uri "${KIPRJMOD}/Parts/PMEG3050EP/PMEG3050EP_115.kicad_sym")(options "")(descr ""))
+  (lib (name "DRV8316CRRGFR")(type "KiCad")(uri "${KIPRJMOD}/Parts/DRV8316CRRGFR/2026-01-19_20-40-12.kicad_sym")(options "")(descr ""))
 )

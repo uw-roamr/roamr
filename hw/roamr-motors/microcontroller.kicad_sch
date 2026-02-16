@@ -4471,7 +4471,7 @@
 		)
 		(uuid "cfbe2ef3-279b-424f-9a99-c7f010ce7d35")
 	)
-	(label "CHIP_PU"
+	(label "MCU_EN"
 		(at 109.22 92.71 0)
 		(effects
 			(font
@@ -5058,79 +5058,6 @@
 		)
 	)
 	(symbol
-		(lib_id "Device:Q_NPN")
-		(at 91.44 116.84 0)
-		(mirror x)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(uuid "122212ce-3f89-4cad-9b7b-02226c9233e4")
-		(property "Reference" "Q2"
-			(at 96.52 118.11 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "QL8050QLT1G"
-			(at 96.52 115.57 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" ""
-			(at 96.52 119.38 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" "~"
-			(at 91.44 116.84 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "NPN bipolar junction transistor"
-			(at 91.44 116.84 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "E"
-			(uuid "729dbd15-3478-49db-acbb-5782e74f6072")
-		)
-		(pin "C"
-			(uuid "ab806639-f551-423b-8621-ff85efaf9f43")
-		)
-		(pin "B"
-			(uuid "9c0cc907-7141-46cf-a8f3-f25824917372")
-		)
-		(instances
-			(project "roamr-motors"
-				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e/206ea9a6-1e38-4e76-a070-d60887d5750e"
-					(reference "Q2")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
 		(lib_id "Device:C")
 		(at 115.57 50.8 0)
 		(unit 1)
@@ -5505,7 +5432,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" ""
+		(property "Footprint" "L8050QLT1G:L8050QLT1G"
 			(at 96.52 97.79 0)
 			(effects
 				(font
@@ -5965,6 +5892,79 @@
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e/206ea9a6-1e38-4e76-a070-d60887d5750e"
 					(reference "C11")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "Device:Q_NPN")
+		(at 91.44 116.84 0)
+		(mirror x)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(uuid "50dcee9d-3d46-4cf3-9e5b-0e90f4cc9640")
+		(property "Reference" "Q2"
+			(at 96.52 118.1101 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "L8050QLT1G"
+			(at 96.52 115.5701 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "L8050QLT1G:L8050QLT1G"
+			(at 96.52 119.38 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "~"
+			(at 91.44 116.84 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Description" "NPN bipolar junction transistor"
+			(at 91.44 116.84 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(pin "E"
+			(uuid "6ffe8150-7a74-4d5a-b647-48d6eea8b8e5")
+		)
+		(pin "C"
+			(uuid "ac7b6a1c-2c37-46ac-aee5-5de28cacf014")
+		)
+		(pin "B"
+			(uuid "ddfd0148-9b5d-4bc7-9edc-6996bf394a10")
+		)
+		(instances
+			(project "roamr-motors"
+				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e/206ea9a6-1e38-4e76-a070-d60887d5750e"
+					(reference "Q2")
 					(unit 1)
 				)
 			)
@@ -8535,7 +8535,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "1uF (10%)"
+		(property "Value" "1uF"
 			(at 199.39 129.5399 0)
 			(effects
 				(font
