@@ -4,4 +4,7 @@
   (lib (name "1825910_6")(type "KiCad")(uri "${KIPRJMOD}/Parts/1825910_6/1825910_6.kicad_sym")(options "")(descr ""))
   (lib (name "PMEG3050EP_115")(type "KiCad")(uri "${KIPRJMOD}/Parts/PMEG3050EP/PMEG3050EP_115.kicad_sym")(options "")(descr ""))
   (lib (name "DRV8316CRRGFR")(type "KiCad")(uri "${KIPRJMOD}/Parts/DRV8316CRRGFR/2026-01-19_20-40-12.kicad_sym")(options "")(descr ""))
+  (lib (name "1N5819HW-7-F")(type "KiCad")(uri "${KIPRJMOD}/Parts/1N5819HW_7_F/1N5819HW-7-F.kicad_sym")(options "")(descr ""))
+  (lib (name "L8050QLT1G")(type "KiCad")(uri "${KIPRJMOD}/Parts/L8050QLT1G/L8050QLT1G.kicad_sym")(options "")(descr ""))
+  (lib (name "USB4215_03_A")(type "KiCad")(uri "${KIPRJMOD}/Parts/USB4215_03_A/2026-02-14_17-18-27.kicad_sym")(options "")(descr ""))
 )
