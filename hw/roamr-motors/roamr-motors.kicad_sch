@@ -4322,7 +4322,7 @@
 		(uuid 665c0ae7-dc5a-4b33-85a8-b106d1133f3d)
 	)
 	(rectangle
-		(start 17.78 19.05)
+		(start 17.78 17.78)
 		(end 96.52 198.12)
 		(stroke
 			(width 0)
@@ -6819,7 +6819,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "0fb279a4-362d-4fb9-a977-26a0a03b514e")
-		(property "Reference" "J9"
+		(property "Reference" "J8"
 			(at 245.11 106.68 0)
 			(effects
 				(font
@@ -6871,7 +6871,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "J9")
+					(reference "J8")
 					(unit 1)
 				)
 			)
@@ -6886,7 +6886,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "1430a7bf-a939-4c90-a54f-2ed2407b5665")
-		(property "Reference" "#PWR090"
+		(property "Reference" "#PWR028"
 			(at 241.3 74.93 0)
 			(effects
 				(font
@@ -6937,7 +6937,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR090")
+					(reference "#PWR028")
 					(unit 1)
 				)
 			)
@@ -6952,7 +6952,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "1608131b-3913-4e54-a924-85f89b7a71cd")
-		(property "Reference" "R5"
+		(property "Reference" "R1"
 			(at 63.5 48.26 90)
 			(effects
 				(font
@@ -7004,7 +7004,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "R5")
+					(reference "R1")
 					(unit 1)
 				)
 			)
@@ -7020,7 +7020,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "1a84bd47-18b7-4941-8f97-80f9f0c48f18")
-		(property "Reference" "#PWR01"
+		(property "Reference" "#PWR07"
 			(at 59.69 157.48 0)
 			(effects
 				(font
@@ -7070,7 +7070,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR01")
+					(reference "#PWR07")
 					(unit 1)
 				)
 			)
@@ -7086,7 +7086,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "1cd2e00d-1596-4349-8972-354abc260698")
-		(property "Reference" "#PWR0118"
+		(property "Reference" "#PWR05"
 			(at 50.8 157.48 0)
 			(effects
 				(font
@@ -7136,7 +7136,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR0118")
+					(reference "#PWR05")
 					(unit 1)
 				)
 			)
@@ -7151,7 +7151,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "20f243e2-cc08-40f7-b0c1-9a51b9bb6ba6")
-		(property "Reference" "#PWR089"
+		(property "Reference" "#PWR027"
 			(at 236.22 78.74 0)
 			(effects
 				(font
@@ -7201,7 +7201,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR089")
+					(reference "#PWR027")
 					(unit 1)
 				)
 			)
@@ -7217,7 +7217,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "2159bae8-5963-4ecd-b565-634ffd64d2b2")
-		(property "Reference" "#PWR041"
+		(property "Reference" "#PWR09"
 			(at 63.5 193.04 0)
 			(effects
 				(font
@@ -7267,7 +7267,7 @@
 		(instances
 			(project ""
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR041")
+					(reference "#PWR09")
 					(unit 1)
 				)
 			)
@@ -7283,7 +7283,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "2258f666-d21e-44dc-9501-9b66617e3c69")
-		(property "Reference" "J10"
+		(property "Reference" "J5"
 			(at 204.47 106.68 0)
 			(effects
 				(font
@@ -7335,7 +7335,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "J10")
+					(reference "J5")
 					(unit 1)
 				)
 			)
@@ -7351,7 +7351,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "2449a563-cd61-479f-9eea-17ea39b77790")
-		(property "Reference" "#PWR039"
+		(property "Reference" "#PWR012"
 			(at 68.58 193.04 0)
 			(effects
 				(font
@@ -7401,7 +7401,7 @@
 		(instances
 			(project ""
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR039")
+					(reference "#PWR012")
 					(unit 1)
 				)
 			)
@@ -7416,7 +7416,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "34281c79-9ec9-4006-8cb2-551ecdec1884")
-		(property "Reference" "#PWR087"
+		(property "Reference" "#PWR023"
 			(at 196.85 78.74 0)
 			(effects
 				(font
@@ -7466,7 +7466,7 @@
 		(instances
 			(project ""
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR087")
+					(reference "#PWR023")
 					(unit 1)
 				)
 			)
@@ -7482,7 +7482,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "3556d22f-419d-4b1c-bbd0-8a0108ad827b")
-		(property "Reference" "#PWR045"
+		(property "Reference" "#PWR026"
 			(at 233.68 123.19 0)
 			(effects
 				(font
@@ -7532,7 +7532,7 @@
 		(instances
 			(project ""
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR045")
+					(reference "#PWR026")
 					(unit 1)
 				)
 			)
@@ -7548,7 +7548,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "37ca68a4-4cb2-4bed-b6a6-96bd3b0aa642")
-		(property "Reference" "#PWR038"
+		(property "Reference" "#PWR03"
 			(at 35.56 193.04 0)
 			(effects
 				(font
@@ -7598,7 +7598,7 @@
 		(instances
 			(project ""
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR038")
+					(reference "#PWR03")
 					(unit 1)
 				)
 			)
@@ -7615,7 +7615,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "3bb19c77-e1f2-412f-96fa-6325898f88f6")
-		(property "Reference" "J3"
+		(property "Reference" "J1"
 			(at 46.99 172.72 0)
 			(effects
 				(font
@@ -7667,7 +7667,7 @@
 		(instances
 			(project ""
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "J3")
+					(reference "J1")
 					(unit 1)
 				)
 			)
@@ -7683,7 +7683,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "41de3b47-6ade-4c63-84a7-457985c86da8")
-		(property "Reference" "#PWR012"
+		(property "Reference" "#PWR010"
 			(at 68.58 93.98 0)
 			(effects
 				(font
@@ -7733,7 +7733,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR012")
+					(reference "#PWR010")
 					(unit 1)
 				)
 			)
@@ -7749,7 +7749,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "45437091-790f-4344-a05b-b2cc9fb0fc0b")
-		(property "Reference" "#PWR0116"
+		(property "Reference" "#PWR04"
 			(at 50.8 93.98 0)
 			(effects
 				(font
@@ -7799,7 +7799,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR0116")
+					(reference "#PWR04")
 					(unit 1)
 				)
 			)
@@ -7814,7 +7814,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "45a82621-a84c-42d5-b698-b714dda4d4f1")
-		(property "Reference" "D9"
+		(property "Reference" "D1"
 			(at 25.4 177.8 90)
 			(effects
 				(font
@@ -7823,8 +7823,8 @@
 				(justify right)
 			)
 		)
-		(property "Value" "D_TVS"
-			(at 22.86 180.34 90)
+		(property "Value" "SMLJ12A-R"
+			(at 26.67 180.34 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7868,7 +7868,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "D9")
+					(reference "D1")
 					(unit 1)
 				)
 			)
@@ -7884,7 +7884,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "4fe19f2a-1618-4c4f-867b-233fab6b051f")
-		(property "Reference" "#PWR044"
+		(property "Reference" "#PWR022"
 			(at 193.04 123.19 0)
 			(effects
 				(font
@@ -7934,7 +7934,7 @@
 		(instances
 			(project ""
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR044")
+					(reference "#PWR022")
 					(unit 1)
 				)
 			)
@@ -7950,7 +7950,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "50ed0260-a574-409d-91c9-08dd25d813b0")
-		(property "Reference" "#PWR024"
+		(property "Reference" "#PWR018"
 			(at 85.09 116.84 0)
 			(effects
 				(font
@@ -8001,7 +8001,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR024")
+					(reference "#PWR018")
 					(unit 1)
 				)
 			)
@@ -8083,7 +8083,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "572caeaa-5548-4f5a-838f-b5d5a0467ee8")
-		(property "Reference" "#PWR02"
+		(property "Reference" "#PWR011"
 			(at 68.58 157.48 0)
 			(effects
 				(font
@@ -8133,7 +8133,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR02")
+					(reference "#PWR011")
 					(unit 1)
 				)
 			)
@@ -8148,7 +8148,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "5b0a5f97-fb06-44fd-8fcb-7697c3386636")
-		(property "Reference" "D4"
+		(property "Reference" "D2"
 			(at 62.23 71.1199 90)
 			(effects
 				(font
@@ -8202,7 +8202,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "D4")
+					(reference "D2")
 					(unit 1)
 				)
 			)
@@ -8217,7 +8217,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "60e20d94-5d85-4f1b-9db1-78c7e5beeed6")
-		(property "Reference" "#PWR042"
+		(property "Reference" "#PWR021"
 			(at 193.04 113.03 0)
 			(effects
 				(font
@@ -8268,7 +8268,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR042")
+					(reference "#PWR021")
 					(unit 1)
 				)
 			)
@@ -8283,7 +8283,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "630ecd4c-87b7-4bfd-85eb-4576ec57fdb2")
-		(property "Reference" "D2"
+		(property "Reference" "D7"
 			(at 80.01 71.1199 90)
 			(effects
 				(font
@@ -8337,7 +8337,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "D2")
+					(reference "D7")
 					(unit 1)
 				)
 			)
@@ -8353,7 +8353,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "6581933c-b885-4775-8025-7039b3f69a3a")
-		(property "Reference" "#PWR030"
+		(property "Reference" "#PWR019"
 			(at 86.36 44.45 0)
 			(effects
 				(font
@@ -8403,7 +8403,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR030")
+					(reference "#PWR019")
 					(unit 1)
 				)
 			)
@@ -8487,7 +8487,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "73690eb6-eaa3-4a47-8af5-a8aeac20ab72")
-		(property "Reference" "D10"
+		(property "Reference" "D4"
 			(at 57.15 177.8 90)
 			(effects
 				(font
@@ -8496,8 +8496,8 @@
 				(justify right)
 			)
 		)
-		(property "Value" "D_TVS"
-			(at 55.88 180.34 90)
+		(property "Value" "SMLJ12A-R"
+			(at 59.69 180.34 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -8541,7 +8541,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "D10")
+					(reference "D4")
 					(unit 1)
 				)
 			)
@@ -8557,7 +8557,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "7bb3cfd6-7bcc-417f-a5e8-92b20f357654")
-		(property "Reference" "#PWR022"
+		(property "Reference" "#PWR016"
 			(at 85.09 53.34 0)
 			(effects
 				(font
@@ -8608,7 +8608,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR022")
+					(reference "#PWR016")
 					(unit 1)
 				)
 			)
@@ -8624,7 +8624,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "8029f9a3-188b-4c02-bd78-5569698bef4c")
-		(property "Reference" "#PWR040"
+		(property "Reference" "#PWR02"
 			(at 30.48 193.04 0)
 			(effects
 				(font
@@ -8674,7 +8674,7 @@
 		(instances
 			(project ""
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR040")
+					(reference "#PWR02")
 					(unit 1)
 				)
 			)
@@ -8689,7 +8689,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "865cfe08-68d3-4971-b6cb-38d69f950bed")
-		(property "Reference" "#PWR021"
+		(property "Reference" "#PWR015"
 			(at 85.09 50.8 0)
 			(effects
 				(font
@@ -8740,7 +8740,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR021")
+					(reference "#PWR015")
 					(unit 1)
 				)
 			)
@@ -8756,7 +8756,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "893220f9-7b9c-4d51-8dd4-3c10ca86390e")
-		(property "Reference" "#PWR011"
+		(property "Reference" "#PWR06"
 			(at 59.69 93.98 0)
 			(effects
 				(font
@@ -8806,7 +8806,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR011")
+					(reference "#PWR06")
 					(unit 1)
 				)
 			)
@@ -8821,7 +8821,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "8cdfd1ef-e79e-4434-a255-e3e8c5e5d989")
-		(property "Reference" "D7"
+		(property "Reference" "D6"
 			(at 71.12 134.6199 90)
 			(effects
 				(font
@@ -8875,7 +8875,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "D7")
+					(reference "D6")
 					(unit 1)
 				)
 			)
@@ -8891,7 +8891,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "91500f6d-5096-49bd-a47c-086a8802d8ed")
-		(property "Reference" "#PWR036"
+		(property "Reference" "#PWR01"
 			(at 30.48 177.8 0)
 			(effects
 				(font
@@ -8941,7 +8941,7 @@
 		(instances
 			(project ""
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR036")
+					(reference "#PWR01")
 					(unit 1)
 				)
 			)
@@ -8956,7 +8956,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "941ba76f-8954-44aa-af7c-75de450950bc")
-		(property "Reference" "D3"
+		(property "Reference" "D5"
 			(at 71.12 71.1199 90)
 			(effects
 				(font
@@ -9010,7 +9010,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "D3")
+					(reference "D5")
 					(unit 1)
 				)
 			)
@@ -9106,7 +9106,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "993b720b-c051-400d-9a03-6051b2023eb1")
-		(property "Reference" "J1"
+		(property "Reference" "J2"
 			(at 34.29 34.29 0)
 			(effects
 				(font
@@ -9124,7 +9124,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "CONN_8p94X6p5X3p16_12L_GCC"
+		(property "Footprint" "USB4215_03_A:CONN_8p94X6p5X3p16_12L_GCC"
 			(at 46.99 43.18 0)
 			(effects
 				(font
@@ -9192,7 +9192,7 @@
 		(instances
 			(project ""
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "J1")
+					(reference "J2")
 					(unit 1)
 				)
 			)
@@ -9208,7 +9208,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "9bfb3d17-a2c6-446f-b5be-eaf64a77fc05")
-		(property "Reference" "J8"
+		(property "Reference" "J10"
 			(at 252.73 67.31 0)
 			(effects
 				(font
@@ -9272,7 +9272,7 @@
 		(instances
 			(project ""
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "J8")
+					(reference "J10")
 					(unit 1)
 				)
 			)
@@ -9289,7 +9289,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "9e5ade6d-0407-44c3-b395-9122c9b217d5")
-		(property "Reference" "J2"
+		(property "Reference" "J3"
 			(at 34.29 97.79 0)
 			(effects
 				(font
@@ -9307,7 +9307,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "CONN_8p94X6p5X3p16_12L_GCC"
+		(property "Footprint" "USB4215_03_A:CONN_8p94X6p5X3p16_12L_GCC"
 			(at 46.99 106.68 0)
 			(effects
 				(font
@@ -9375,7 +9375,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "J2")
+					(reference "J3")
 					(unit 1)
 				)
 			)
@@ -9390,7 +9390,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "9f9f5051-47bd-4697-9af6-bb88b72c7dbd")
-		(property "Reference" "R8"
+		(property "Reference" "R4"
 			(at 63.5 119.38 90)
 			(effects
 				(font
@@ -9442,7 +9442,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "R8")
+					(reference "R4")
 					(unit 1)
 				)
 			)
@@ -9458,7 +9458,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "a6693b6f-be7b-4bbe-9b72-a9c9226d40ae")
-		(property "Reference" "#PWR037"
+		(property "Reference" "#PWR08"
 			(at 63.5 177.8 0)
 			(effects
 				(font
@@ -9508,7 +9508,7 @@
 		(instances
 			(project ""
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR037")
+					(reference "#PWR08")
 					(unit 1)
 				)
 			)
@@ -9524,7 +9524,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "b38eb98e-6196-43a4-a9d8-2c4d45b05d04")
-		(property "Reference" "J5"
+		(property "Reference" "J6"
 			(at 213.36 40.64 0)
 			(effects
 				(font
@@ -9579,7 +9579,7 @@
 		(instances
 			(project ""
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "J5")
+					(reference "J6")
 					(unit 1)
 				)
 			)
@@ -9594,7 +9594,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "d4193742-4d3a-48c8-8824-26498670be2f")
-		(property "Reference" "D5"
+		(property "Reference" "D3"
 			(at 62.23 134.6199 90)
 			(effects
 				(font
@@ -9648,7 +9648,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "D5")
+					(reference "D3")
 					(unit 1)
 				)
 			)
@@ -9663,7 +9663,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "d8232643-3adc-4a07-9310-73bd75bea650")
-		(property "Reference" "R6"
+		(property "Reference" "R2"
 			(at 63.5 55.88 90)
 			(effects
 				(font
@@ -9715,7 +9715,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "R6")
+					(reference "R2")
 					(unit 1)
 				)
 			)
@@ -9730,7 +9730,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "daf93df1-4c63-41d3-8e86-a7929f85bcee")
-		(property "Reference" "R7"
+		(property "Reference" "R3"
 			(at 63.5 111.76 90)
 			(effects
 				(font
@@ -9782,7 +9782,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "R7")
+					(reference "R3")
 					(unit 1)
 				)
 			)
@@ -9797,7 +9797,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "e0b3431d-4a9e-4f80-baf9-9afffb6bad16")
-		(property "Reference" "#PWR043"
+		(property "Reference" "#PWR025"
 			(at 233.68 113.03 0)
 			(effects
 				(font
@@ -9848,7 +9848,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR043")
+					(reference "#PWR025")
 					(unit 1)
 				)
 			)
@@ -9864,7 +9864,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "e6cc1ca6-d46e-4c72-aa38-cf26f2a9fcb7")
-		(property "Reference" "J6"
+		(property "Reference" "J9"
 			(at 252.73 40.64 0)
 			(effects
 				(font
@@ -9919,7 +9919,7 @@
 		(instances
 			(project ""
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "J6")
+					(reference "J9")
 					(unit 1)
 				)
 			)
@@ -9935,7 +9935,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "e919d67e-683e-4fcc-baa5-05feb5bb23ca")
-		(property "Reference" "#PWR023"
+		(property "Reference" "#PWR017"
 			(at 85.09 114.3 0)
 			(effects
 				(font
@@ -9986,7 +9986,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR023")
+					(reference "#PWR017")
 					(unit 1)
 				)
 			)
@@ -10001,7 +10001,7 @@
 		(on_board yes)
 		(dnp no)
 		(uuid "eb09dc97-be4d-4fc1-8515-c6393388698b")
-		(property "Reference" "#PWR088"
+		(property "Reference" "#PWR024"
 			(at 201.93 74.93 0)
 			(effects
 				(font
@@ -10052,7 +10052,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR088")
+					(reference "#PWR024")
 					(unit 1)
 				)
 			)
@@ -10137,7 +10137,7 @@
 		(dnp no)
 		(fields_autoplaced yes)
 		(uuid "fb1a3f6e-5461-47d7-906d-1fb419875699")
-		(property "Reference" "#PWR031"
+		(property "Reference" "#PWR020"
 			(at 86.36 107.95 0)
 			(effects
 				(font
@@ -10187,7 +10187,7 @@
 		(instances
 			(project "roamr-motors"
 				(path "/db664d1d-d972-4e66-af85-94b6971e1c6e"
-					(reference "#PWR031")
+					(reference "#PWR020")
 					(unit 1)
 				)
 			)
