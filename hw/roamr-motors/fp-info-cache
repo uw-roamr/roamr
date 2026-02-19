@@ -1,4 +1,4 @@
-27265982260357081
+27265982260356762
 1N5819HW_7_F
 SOD3715X145N
 
@@ -96396,6 +96396,13 @@ WiFi IEEE802.11 b/g/n
 0
 44
 44
+RVT1E100M0405
+RVT1E100M0405
+
+
+0
+2
+2
 Relay_SMD
 Relay_2P2T_10x6mm_TE_IMxxG
 Signal Relay, 10x6mm, 2 Form C, Gull Wings, https://www.te.com/commerce/DocumentDelivery/DDEController?Action=showdoc&DocId=Data+Sheet%7F108-98001%7FZ.1%7Fpdf%7FEnglish%7FENG_DS_108-98001_Z.1.pdf
@@ -107985,13 +107992,6 @@ Varistor
 Varistor_Panasonic_VF
 Panasonic VF series varistor, 6x8mm body, 3.2mm height, https://mediap.industry.panasonic.eu/assets/imported/industrial.panasonic.com/cdbs/www-data/pdf/AWA0000/AWA0000C4.pdf
 Varistor VF
-0
-2
-2
-footprints
-RVT1E100M0405
-
-
 0
 2
 2
