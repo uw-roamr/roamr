@@ -11,4 +11,5 @@
   (lib (name "LESD5D5.0CT1G")(type "KiCad")(uri "${KIPRJMOD}/Parts/LESD5D5.0CT1G/footprints.pretty")(options "")(descr ""))
   (lib (name "1N5819HW_7_F")(type "KiCad")(uri "${KIPRJMOD}/Parts/1N5819HW_7_F/footprints.pretty")(options "")(descr ""))
   (lib (name "RVT1E100M0405")(type "KiCad")(uri "${KIPRJMOD}/Parts/RVT1E100M0405/footprints.pretty")(options "")(descr ""))
+  (lib (name "0466005")(type "KiCad")(uri "${KIPRJMOD}/Parts/0466005/footprints.pretty")(options "")(descr ""))
 )
