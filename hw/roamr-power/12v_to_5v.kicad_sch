@@ -1859,7 +1859,7 @@
 		)
 		(uuid "253256b7-7fd4-440f-85fe-df18ba70d618")
 	)
-	(text "2.5Vf"
+	(text "3.1Vf"
 		(exclude_from_sim no)
 		(at 54.61 175.26 0)
 		(effects
@@ -1889,7 +1889,7 @@
 		)
 		(uuid "91e3b206-699d-4ae1-a1d3-ab33b0bd64c7")
 	)
-	(text "2.5Vf"
+	(text "3.1Vf\n"
 		(exclude_from_sim no)
 		(at 99.06 175.26 0)
 		(effects
@@ -3758,7 +3758,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "1.8kR"
+		(property "Value" "4.3kR"
 			(at 50.8 160.0199 0)
 			(effects
 				(font
@@ -4053,6 +4053,15 @@
 		)
 		(property "Description" "Inductor"
 			(at 66.04 64.77 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer_Part_Number" "VLS6045EX"
+			(at 66.04 64.77 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4711,7 +4720,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" "KT_EELP41.12-S2U1-25-2X4X-5-R18:KTEELP4112S2U1252X4X5R18"
+		(property "Footprint" "KT-0603:LEDC1608X70N"
 			(at 48.26 168.91 0)
 			(effects
 				(font
@@ -4740,6 +4749,15 @@
 		)
 		(property "Sim.Pins" "1=K 2=A"
 			(at 48.26 168.91 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer_Part_Number" "KT-0603G"
+			(at 48.26 168.91 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4790,7 +4808,7 @@
 				(justify left)
 			)
 		)
-		(property "Footprint" "Capacitor_SMD:C_0603_1608Metric"
+		(property "Footprint" "Capacitor_SMD:C_0805_2012Metric"
 			(at 87.3252 74.93 0)
 			(effects
 				(font
@@ -4992,7 +5010,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" "KT_EELP41.12-S2U1-25-2X4X-5-R18:KTEELP4112S2U1252X4X5R18"
+		(property "Footprint" "KT-0603:LEDC1608X70N"
 			(at 92.71 168.91 0)
 			(effects
 				(font
@@ -5021,6 +5039,15 @@
 		)
 		(property "Sim.Pins" "1=K 2=A"
 			(at 92.71 168.91 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer_Part_Number" "KT-0603G"
+			(at 92.71 168.91 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5238,6 +5265,15 @@
 				(hide yes)
 			)
 		)
+		(property "Manufacturer_Part_Number" "TPS56A37RPAR"
+			(at 132.08 64.77 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "3"
 			(uuid "580dc823-bfda-4781-a967-fb262aa513a7")
 		)
@@ -5323,6 +5359,15 @@
 		)
 		(property "Description" "Inductor"
 			(at 185.42 64.77 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer_Part_Number" "ETQ-L4M3R3YFN"
+			(at 185.42 64.77 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5569,7 +5614,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "510R"
+		(property "Value" "910R"
 			(at 95.25 160.0199 0)
 			(effects
 				(font

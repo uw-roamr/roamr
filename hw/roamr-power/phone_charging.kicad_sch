@@ -11,6 +11,311 @@
 		(company "Mechatronics FYDP Group 16")
 	)
 	(lib_symbols
+		(symbol "BSS84PH6327XTSA2:BSS84PH6327XTSA2"
+			(pin_names
+				(hide yes)
+			)
+			(exclude_from_sim no)
+			(in_bom yes)
+			(on_board yes)
+			(property "Reference" "Q"
+				(at 11.43 3.81 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left top)
+				)
+			)
+			(property "Value" "BSS84PH6327XTSA2"
+				(at 11.43 1.27 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left top)
+				)
+			)
+			(property "Footprint" "SOT95P240X110-3N"
+				(at 11.43 -98.73 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left top)
+					(hide yes)
+				)
+			)
+			(property "Datasheet" "https://componentsearchengine.com/Datasheets/2/BSS84PH6327XTSA2.pdf"
+				(at 11.43 -198.73 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left top)
+					(hide yes)
+				)
+			)
+			(property "Description" "INFINEON - BSS84PH6327XTSA2 - MOSFET, P, -60V, -0.17A, SOT-23"
+				(at 0 0 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(hide yes)
+				)
+			)
+			(property "Height" "1.1"
+				(at 11.43 -398.73 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left top)
+					(hide yes)
+				)
+			)
+			(property "Mouser Part Number" "726-BSS84PH6327XTSA2"
+				(at 11.43 -498.73 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left top)
+					(hide yes)
+				)
+			)
+			(property "Mouser Price/Stock" "https://www.mouser.co.uk/ProductDetail/Infineon-Technologies/BSS84PH6327XTSA2?qs=K00xGehIljvU09gSF2VpyQ%3D%3D"
+				(at 11.43 -598.73 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left top)
+					(hide yes)
+				)
+			)
+			(property "Manufacturer_Name" "Infineon"
+				(at 11.43 -698.73 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left top)
+					(hide yes)
+				)
+			)
+			(property "Manufacturer_Part_Number" "BSS84PH6327XTSA2"
+				(at 11.43 -798.73 0)
+				(effects
+					(font
+						(size 1.27 1.27)
+					)
+					(justify left top)
+					(hide yes)
+				)
+			)
+			(symbol "BSS84PH6327XTSA2_1_1"
+				(polyline
+					(pts
+						(xy 2.54 0) (xy 5.08 0)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 5.08 5.08) (xy 5.08 0)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 5.842 5.588) (xy 5.842 4.572)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 5.842 2.032) (xy 5.842 3.048)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 5.842 0) (xy 7.62 0)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 5.842 -0.508) (xy 5.842 0.508)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(circle
+					(center 6.35 2.54)
+					(radius 3.81)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 7.62 5.08) (xy 5.842 5.08)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 7.62 5.08) (xy 7.62 7.62)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 7.62 2.54) (xy 5.842 2.54)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 7.62 2.54) (xy 7.62 -2.54)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type none)
+					)
+				)
+				(polyline
+					(pts
+						(xy 7.62 2.54) (xy 6.604 3.048) (xy 6.604 2.032) (xy 7.62 2.54)
+					)
+					(stroke
+						(width 0.254)
+						(type default)
+					)
+					(fill
+						(type outline)
+					)
+				)
+				(pin passive line
+					(at 0 0 0)
+					(length 2.54)
+					(name "G"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "1"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 7.62 10.16 270)
+					(length 2.54)
+					(name "D"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "3"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin passive line
+					(at 7.62 -5.08 90)
+					(length 2.54)
+					(name "S"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "2"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+			)
+			(embedded_fonts no)
+		)
 		(symbol "Device:C"
 			(pin_numbers
 				(hide yes)
@@ -850,7 +1155,7 @@
 			(exclude_from_sim no)
 			(in_bom yes)
 			(on_board yes)
-			(property "Reference" "U2"
+			(property "Reference" "U"
 				(at 22.86 10.16 0)
 				(effects
 					(font
@@ -924,7 +1229,7 @@
 			(symbol "TPS2553DDBVR_0_1"
 				(polyline
 					(pts
-						(xy 7.62 5.08) (xy 7.62 -12.7)
+						(xy 7.62 5.08) (xy 7.62 -10.16)
 					)
 					(stroke
 						(width 0.127)
@@ -936,7 +1241,7 @@
 				)
 				(polyline
 					(pts
-						(xy 7.62 -12.7) (xy 38.1 -12.7)
+						(xy 7.62 -10.16) (xy 38.1 -10.16)
 					)
 					(stroke
 						(width 0.127)
@@ -960,7 +1265,7 @@
 				)
 				(polyline
 					(pts
-						(xy 38.1 -12.7) (xy 38.1 5.08)
+						(xy 38.1 -10.16) (xy 38.1 5.08)
 					)
 					(stroke
 						(width 0.127)
@@ -980,97 +1285,7 @@
 							)
 						)
 					)
-					(number "6"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin input line
-					(at 3.81 -7.62 0)
-					(length 3.81)
-					(name "EN"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "4"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin output line
-					(at 41.91 2.54 180)
-					(length 3.81)
-					(name "OUT"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
 					(number "1"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin output line
-					(at 41.91 -2.54 180)
-					(length 3.81)
-					(name "ILIM"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "2"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin unspecified line
-					(at 41.91 -7.62 180)
-					(length 3.81)
-					(name "EPAD"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "7"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-				)
-				(pin power_in line
-					(at 41.91 -10.16 180)
-					(length 3.81)
-					(name "GND"
-						(effects
-							(font
-								(size 1.27 1.27)
-							)
-						)
-					)
-					(number "5"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -1090,7 +1305,7 @@
 							)
 						)
 					)
-					(number "3"
+					(number "4"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -1098,243 +1313,10 @@
 						)
 					)
 				)
-			)
-			(embedded_fonts no)
-		)
-		(symbol "Transistor_FET:Q_PMOS_DSG"
-			(pin_names
-				(offset 0)
-				(hide yes)
-			)
-			(exclude_from_sim no)
-			(in_bom yes)
-			(on_board yes)
-			(property "Reference" "Q"
-				(at 5.08 1.905 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify left)
-				)
-			)
-			(property "Value" "Q_PMOS_DSG"
-				(at 5.08 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(justify left)
-				)
-			)
-			(property "Footprint" ""
-				(at 5.08 2.54 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Datasheet" "~"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "Description" "P-MOSFET transistor, drain/source/gate"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(property "ki_keywords" "transistor PMOS P-MOS P-MOSFET"
-				(at 0 0 0)
-				(effects
-					(font
-						(size 1.27 1.27)
-					)
-					(hide yes)
-				)
-			)
-			(symbol "Q_PMOS_DSG_0_1"
-				(polyline
-					(pts
-						(xy 0.254 1.905) (xy 0.254 -1.905)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 0.254 0) (xy -2.54 0)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 0.762 2.286) (xy 0.762 1.27)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 0.762 1.778) (xy 3.302 1.778) (xy 3.302 -1.778) (xy 0.762 -1.778)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 0.762 0.508) (xy 0.762 -0.508)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 0.762 -1.27) (xy 0.762 -2.286)
-					)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(circle
-					(center 1.651 0)
-					(radius 2.794)
-					(stroke
-						(width 0.254)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 2.286 0) (xy 1.27 0.381) (xy 1.27 -0.381) (xy 2.286 0)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type outline)
-					)
-				)
-				(polyline
-					(pts
-						(xy 2.54 2.54) (xy 2.54 1.778)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(circle
-					(center 2.54 1.778)
-					(radius 0.254)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type outline)
-					)
-				)
-				(circle
-					(center 2.54 -1.778)
-					(radius 0.254)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type outline)
-					)
-				)
-				(polyline
-					(pts
-						(xy 2.54 -2.54) (xy 2.54 0) (xy 0.762 0)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 2.921 -0.381) (xy 3.683 -0.381)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-				(polyline
-					(pts
-						(xy 3.302 -0.381) (xy 2.921 0.254) (xy 3.683 0.254) (xy 3.302 -0.381)
-					)
-					(stroke
-						(width 0)
-						(type default)
-					)
-					(fill
-						(type none)
-					)
-				)
-			)
-			(symbol "Q_PMOS_DSG_1_1"
 				(pin input line
-					(at -5.08 0 0)
-					(length 2.54)
-					(name "G"
+					(at 3.81 -7.62 0)
+					(length 3.81)
+					(name "EN"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -1349,17 +1331,17 @@
 						)
 					)
 				)
-				(pin passive line
-					(at 2.54 5.08 270)
-					(length 2.54)
-					(name "D"
+				(pin output line
+					(at 41.91 2.54 180)
+					(length 3.81)
+					(name "OUT"
 						(effects
 							(font
 								(size 1.27 1.27)
 							)
 						)
 					)
-					(number "1"
+					(number "6"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -1367,10 +1349,28 @@
 						)
 					)
 				)
-				(pin passive line
-					(at 2.54 -5.08 90)
-					(length 2.54)
-					(name "S"
+				(pin output line
+					(at 41.91 -2.54 180)
+					(length 3.81)
+					(name "ILIM"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+					(number "5"
+						(effects
+							(font
+								(size 1.27 1.27)
+							)
+						)
+					)
+				)
+				(pin power_in line
+					(at 41.91 -7.62 180)
+					(length 3.81)
+					(name "GND"
 						(effects
 							(font
 								(size 1.27 1.27)
@@ -1762,7 +1762,7 @@
 		)
 		(uuid "72533940-66a4-4cda-b5da-e82dbbf05f50")
 	)
-	(text "2.5Vf"
+	(text "3.1Vf\n"
 		(exclude_from_sim no)
 		(at 107.95 149.86 0)
 		(effects
@@ -1781,6 +1781,16 @@
 			)
 		)
 		(uuid "a081f854-4385-425a-894f-8e8f798af59e")
+	)
+	(text "2.4Vf\n"
+		(exclude_from_sim no)
+		(at 181.61 152.4 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "a34d3034-94a6-47e3-985d-892167fe72c0")
 	)
 	(text "Fault Indicator"
 		(exclude_from_sim no)
@@ -1819,12 +1829,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "7da7c488-f583-4757-bbc0-1ba0b837d334")
-	)
-	(junction
-		(at 158.75 67.31)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "ba64d1ce-b73a-4b94-913d-4afca919164d")
 	)
 	(junction
 		(at 115.57 64.77)
@@ -1930,7 +1934,7 @@
 	)
 	(wire
 		(pts
-			(xy 165.1 120.65) (xy 175.26 120.65)
+			(xy 165.1 116.84) (xy 175.26 116.84)
 		)
 		(stroke
 			(width 0)
@@ -1960,7 +1964,7 @@
 	)
 	(wire
 		(pts
-			(xy 158.75 67.31) (xy 158.75 74.93)
+			(xy 158.75 64.77) (xy 158.75 74.93)
 		)
 		(stroke
 			(width 0)
@@ -2000,16 +2004,6 @@
 	)
 	(wire
 		(pts
-			(xy 158.75 64.77) (xy 158.75 67.31)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "601fd2f9-2d8f-4d1b-883f-294aac08e7e5")
-	)
-	(wire
-		(pts
 			(xy 105.41 58.42) (xy 115.57 58.42)
 		)
 		(stroke
@@ -2030,7 +2024,7 @@
 	)
 	(wire
 		(pts
-			(xy 175.26 120.65) (xy 175.26 124.46)
+			(xy 175.26 116.84) (xy 175.26 119.38)
 		)
 		(stroke
 			(width 0)
@@ -2120,16 +2114,6 @@
 	)
 	(wire
 		(pts
-			(xy 158.75 67.31) (xy 156.21 67.31)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "cd93401b-5cbe-457d-8650-5263fd63d027")
-	)
-	(wire
-		(pts
 			(xy 115.57 58.42) (xy 115.57 64.77)
 		)
 		(stroke
@@ -2209,7 +2193,7 @@
 		(uuid "15167630-4eed-4164-86e9-6b219066ced9")
 	)
 	(label "CHG_EN"
-		(at 165.1 120.65 180)
+		(at 165.1 116.84 180)
 		(effects
 			(font
 				(size 1.27 1.27)
@@ -2302,8 +2286,14 @@
 				(hide yes)
 			)
 		)
-		(pin "7"
-			(uuid "b61d9c2b-11e3-436a-ba1c-0be47bc21e23")
+		(property "Manufacturer_Part_Number" "TPS2553DDBVR"
+			(at 114.3 57.15 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
 		)
 		(pin "3"
 			(uuid "13a2d350-96a2-46ed-aef4-c1acb9a2176f")
@@ -2492,7 +2482,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" "KT_EELP41.12-S2U1-25-2X4X-5-R18:KTEELP4112S2U1252X4X5R18"
+		(property "Footprint" "KT-0603:LEDC1608X70N"
 			(at 101.6 143.51 0)
 			(effects
 				(font
@@ -2521,6 +2511,15 @@
 		)
 		(property "Sim.Pins" "1=K 2=A"
 			(at 101.6 143.51 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer_Part_Number" "KT-0603G"
+			(at 101.6 143.51 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -2603,79 +2602,6 @@
 			(project ""
 				(path "/bfe84b16-3df2-48dd-882e-523c3a68f778/7cadbd84-e43d-43ba-a052-9e62bf6faf2f"
 					(reference "#PWR016")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Transistor_FET:Q_PMOS_DSG")
-		(at 172.72 129.54 0)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom yes)
-		(on_board yes)
-		(dnp no)
-		(uuid "2cc1372c-ce89-4520-9ecc-d17ecd201675")
-		(property "Reference" "Q1"
-			(at 179.07 129.54 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "Q_PMOS_DSG"
-			(at 179.07 130.8099 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-				(hide yes)
-			)
-		)
-		(property "Footprint" "BSS84PH6327XTSA2:SOT95P240X110-3N"
-			(at 177.8 127 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" "~"
-			(at 172.72 129.54 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "P-MOSFET transistor, drain/source/gate"
-			(at 172.72 129.54 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "2"
-			(uuid "a432776c-40a7-4ccc-867c-878b32284b0d")
-		)
-		(pin "3"
-			(uuid "ce689b0a-10b4-469f-89b0-46dd8310a3cc")
-		)
-		(pin "1"
-			(uuid "668423ac-5f88-41ea-9997-57a78c3aad13")
-		)
-		(instances
-			(project ""
-				(path "/bfe84b16-3df2-48dd-882e-523c3a68f778/7cadbd84-e43d-43ba-a052-9e62bf6faf2f"
-					(reference "Q1")
 					(unit 1)
 				)
 			)
@@ -2841,7 +2767,7 @@
 				(justify right)
 			)
 		)
-		(property "Footprint" "KR_DELPS1.22-VGVI-23-H3Q4:KRDELPS122VGVI23H3Q4"
+		(property "Footprint" "KT-0603:LEDC1608X70N"
 			(at 175.26 146.05 0)
 			(effects
 				(font
@@ -2870,6 +2796,15 @@
 		)
 		(property "Sim.Pins" "1=K 2=A"
 			(at 175.26 146.05 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer_Part_Number" "KT-0603R"
+			(at 175.26 146.05 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3112,7 +3047,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "560R"
+		(property "Value" "510R"
 			(at 177.8 139.6999 0)
 			(effects
 				(font
@@ -3505,7 +3440,6 @@
 		(in_bom yes)
 		(on_board yes)
 		(dnp no)
-		(fields_autoplaced yes)
 		(uuid "d07bfc2f-bcc7-471d-9d46-082913af42e6")
 		(property "Reference" "SW1"
 			(at 91.44 115.57 0)
@@ -3515,8 +3449,8 @@
 				)
 			)
 		)
-		(property "Value" "SW_SPDT"
-			(at 91.44 118.11 0)
+		(property "Value" "OS102011MS2QN1"
+			(at 96.52 118.11 0)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3550,6 +3484,15 @@
 				(hide yes)
 			)
 		)
+		(property "Manufacturer_Part_Number" "OS102011MS2QN1"
+			(at 91.44 124.46 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "2"
 			(uuid "15610219-1160-452f-9a92-ce8673673ca1")
 		)
@@ -3563,6 +3506,131 @@
 			(project ""
 				(path "/bfe84b16-3df2-48dd-882e-523c3a68f778/7cadbd84-e43d-43ba-a052-9e62bf6faf2f"
 					(reference "SW1")
+					(unit 1)
+				)
+			)
+		)
+	)
+	(symbol
+		(lib_id "BSS84PH6327XTSA2:BSS84PH6327XTSA2")
+		(at 167.64 129.54 0)
+		(unit 1)
+		(exclude_from_sim no)
+		(in_bom yes)
+		(on_board yes)
+		(dnp no)
+		(fields_autoplaced yes)
+		(uuid "d3294024-76f5-4397-ba80-8c4519138ee0")
+		(property "Reference" "Q1"
+			(at 179.07 125.7299 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Value" "BSS84PH6327XTSA2"
+			(at 179.07 128.2699 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left)
+			)
+		)
+		(property "Footprint" "BSS84PH6327XTSA2:SOT95P240X110-3N"
+			(at 179.07 228.27 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+				(hide yes)
+			)
+		)
+		(property "Datasheet" "https://componentsearchengine.com/Datasheets/2/BSS84PH6327XTSA2.pdf"
+			(at 179.07 328.27 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+				(hide yes)
+			)
+		)
+		(property "Description" "INFINEON - BSS84PH6327XTSA2 - MOSFET, P, -60V, -0.17A, SOT-23"
+			(at 167.64 129.54 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Height" "1.1"
+			(at 179.07 528.27 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+				(hide yes)
+			)
+		)
+		(property "Mouser Part Number" "726-BSS84PH6327XTSA2"
+			(at 179.07 628.27 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+				(hide yes)
+			)
+		)
+		(property "Mouser Price/Stock" "https://www.mouser.co.uk/ProductDetail/Infineon-Technologies/BSS84PH6327XTSA2?qs=K00xGehIljvU09gSF2VpyQ%3D%3D"
+			(at 179.07 728.27 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer_Name" "Infineon"
+			(at 179.07 828.27 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer_Part_Number" "BSS84PH6327XTSA2"
+			(at 179.07 928.27 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify left top)
+				(hide yes)
+			)
+		)
+		(pin "3"
+			(uuid "65f3b0ff-40bc-4896-9fe3-cc9e476ea0b7")
+		)
+		(pin "1"
+			(uuid "082b09fe-5a46-408f-a49a-da418f569caf")
+		)
+		(pin "2"
+			(uuid "1162df81-231d-4d26-8b93-1edc67c343a9")
+		)
+		(instances
+			(project ""
+				(path "/bfe84b16-3df2-48dd-882e-523c3a68f778/7cadbd84-e43d-43ba-a052-9e62bf6faf2f"
+					(reference "Q1")
 					(unit 1)
 				)
 			)
@@ -3791,7 +3859,7 @@
 				(justify left)
 			)
 		)
-		(property "Value" "510R"
+		(property "Value" "910R"
 			(at 104.14 134.6199 0)
 			(effects
 				(font

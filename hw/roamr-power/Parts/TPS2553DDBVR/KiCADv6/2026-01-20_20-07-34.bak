@@ -83,7 +83,7 @@
 		(symbol "TPS2553DDBVR_0_1"
 			(polyline
 				(pts
-					(xy 7.62 5.08) (xy 7.62 -10.16)
+					(xy 7.62 5.08) (xy 7.62 -12.7)
 				)
 				(stroke
 					(width 0.127)
@@ -95,7 +95,7 @@
 			)
 			(polyline
 				(pts
-					(xy 7.62 -10.16) (xy 38.1 -10.16)
+					(xy 7.62 -12.7) (xy 38.1 -12.7)
 				)
 				(stroke
 					(width 0.127)
@@ -119,7 +119,7 @@
 			)
 			(polyline
 				(pts
-					(xy 38.1 -10.16) (xy 38.1 5.08)
+					(xy 38.1 -12.7) (xy 38.1 5.08)
 				)
 				(stroke
 					(width 0.127)
@@ -222,7 +222,7 @@
 				)
 			)
 			(pin power_in line
-				(at 41.91 -7.62 180)
+				(at 41.91 -10.16 180)
 				(length 3.81)
 				(name "GND"
 					(effects
