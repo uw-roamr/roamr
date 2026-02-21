@@ -4249,7 +4249,7 @@
 				)
 			)
 		)
-		(property "Value" "47uF"
+		(property "Value" "47nF"
 			(at 57.15 48.26 90)
 			(effects
 				(font
