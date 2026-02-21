@@ -649,7 +649,7 @@
       "plot": "Gerber/",
       "pos_files": "BOM-CPL/",
       "specctra_dsn": "",
-      "step": "roamr-motors.step",
+      "step": "Outputs/roamr-motors.step",
       "svg": "",
       "vrml": ""
     },
@@ -847,7 +847,7 @@
     },
     "net_format_name": "",
     "page_layout_descr_file": "",
-    "plot_directory": "",
+    "plot_directory": "Outputs/",
     "space_save_all_events": true,
     "spice_current_sheet_as_root": false,
     "spice_external_command": "spice \"%I\"",
