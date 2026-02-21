@@ -2641,6 +2641,15 @@
 				(hide yes)
 			)
 		)
+		(property "Sim.Device" ""
+			(at 205.74 139.7 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "e5699006-1e3b-4a16-a401-612c3ba7dca2")
 		)
@@ -2833,6 +2842,15 @@
 		)
 		(property "Description" "Resistor, US symbol"
 			(at 140.97 90.17 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 140.97 90.17 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -3241,6 +3259,15 @@
 				(hide yes)
 			)
 		)
+		(property "Sim.Device" ""
+			(at 64.77 93.98 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "2"
 			(uuid "0fb036b7-6aed-47ae-b5fc-5bbc4c0ea1da")
 		)
@@ -3441,6 +3468,24 @@
 				(hide yes)
 			)
 		)
+		(property "Manufacturer_Part_Number" "5005-5009"
+			(at 236.22 139.7 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 236.22 139.7 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "e437a9d5-a474-46eb-982f-bf76f54307c8")
 		)
@@ -3566,6 +3611,15 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 161.29 62.23 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
 			(at 161.29 62.23 0)
 			(effects
 				(font
@@ -3852,6 +3906,24 @@
 				(hide yes)
 			)
 		)
+		(property "Manufacturer_Part_Number" "KT-0603G"
+			(at 168.91 140.97 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 168.91 140.97 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "981cb45d-7997-40ba-b701-869e5b49bbd0")
 		)
@@ -3913,6 +3985,15 @@
 		)
 		(property "Description" "test point"
 			(at 205.74 124.46 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 205.74 124.46 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4036,6 +4117,15 @@
 				(hide yes)
 			)
 		)
+		(property "Sim.Device" ""
+			(at 228.6 57.15 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "4ab046dc-24e4-4890-92d0-1bfbc30f5a06")
 		)
@@ -4098,6 +4188,15 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 114.3 62.23 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
 			(at 114.3 62.23 0)
 			(effects
 				(font
@@ -4235,6 +4334,15 @@
 			)
 		)
 		(property "Description" "Resistor, US symbol"
+			(at 130.81 130.81 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
 			(at 130.81 130.81 0)
 			(effects
 				(font
@@ -4560,6 +4668,15 @@
 				(hide yes)
 			)
 		)
+		(property "Sim.Device" ""
+			(at 228.6 82.55 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "c99344c4-91df-408a-8659-6e84feda1d56")
 		)
@@ -4877,6 +4994,15 @@
 				(hide yes)
 			)
 		)
+		(property "Sim.Device" ""
+			(at 69.85 119.38 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "6fc61995-37fa-44bf-9d27-a623016b13a8")
 		)
@@ -5145,6 +5271,15 @@
 				(hide yes)
 			)
 		)
+		(property "Sim.Device" ""
+			(at 168.91 130.81 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "a063c719-f365-4cfb-872d-662a11769b45")
 		)
@@ -5206,6 +5341,15 @@
 		)
 		(property "Description" "test point"
 			(at 236.22 124.46 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 236.22 124.46 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5413,6 +5557,15 @@
 				(hide yes)
 			)
 		)
+		(property "Sim.Device" ""
+			(at 111.76 130.81 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "c1b30c1a-4055-484a-b4c1-5d3090820a93")
 		)
@@ -5475,6 +5628,15 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 64.77 62.23 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
 			(at 64.77 62.23 0)
 			(effects
 				(font
@@ -5622,6 +5784,24 @@
 		)
 		(property "Sim.Pins" "1=K 2=A"
 			(at 130.81 140.97 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer_Part_Number" "KT-0603G"
+			(at 130.81 140.97 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 130.81 140.97 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5856,6 +6036,24 @@
 					(size 1.27 1.27)
 				)
 				(justify bottom)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer_Part_Number" "1N5819HW-7-F"
+			(at 57.15 55.88 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 57.15 55.88 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
 				(hide yes)
 			)
 		)
@@ -6508,6 +6706,15 @@
 				(hide yes)
 			)
 		)
+		(property "Sim.Device" ""
+			(at 69.85 144.78 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "30860f1f-57cc-4302-ae05-04fe0cba8dc4")
 		)
@@ -6603,6 +6810,24 @@
 					(size 1.27 1.27)
 				)
 				(justify bottom)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer_Part_Number" "1N5819HW-7-F"
+			(at 57.15 87.63 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 57.15 87.63 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
 				(hide yes)
 			)
 		)
@@ -6866,6 +7091,15 @@
 		)
 		(property "Description" "test point"
 			(at 205.74 154.94 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 205.74 154.94 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7148,6 +7382,24 @@
 				(hide yes)
 			)
 		)
+		(property "Manufacturer_Part_Number" "KT-0603G"
+			(at 111.76 140.97 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 111.76 140.97 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "4959a64c-fc01-45e0-aa68-b3e7f1049616")
 		)
@@ -7210,6 +7462,15 @@
 			)
 		)
 		(property "Description" "Resistor, US symbol"
+			(at 149.86 130.81 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
 			(at 149.86 130.81 0)
 			(effects
 				(font
@@ -7290,6 +7551,24 @@
 		)
 		(property "Sim.Pins" "1=K 2=A"
 			(at 149.86 140.97 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer_Part_Number" "KT-0603G"
+			(at 149.86 140.97 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 149.86 140.97 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -7414,6 +7693,15 @@
 					(size 1.27 1.27)
 				)
 				(justify left top)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 120.65 55.88 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
 				(hide yes)
 			)
 		)

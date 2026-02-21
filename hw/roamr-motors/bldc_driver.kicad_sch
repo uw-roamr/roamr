@@ -3980,6 +3980,15 @@
 				(hide yes)
 			)
 		)
+		(property "Sim.Device" ""
+			(at 130.81 52.07 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "2"
 			(uuid "c4bf2c2e-0182-44c9-abb1-b33c49f7c4e2")
 		)
@@ -4116,6 +4125,15 @@
 			)
 		)
 		(property "Description" "Polarized capacitor"
+			(at 143.51 52.07 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
 			(at 143.51 52.07 0)
 			(effects
 				(font
@@ -4266,6 +4284,15 @@
 				(hide yes)
 			)
 		)
+		(property "Sim.Device" ""
+			(at 57.15 53.34 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "3c353da9-317d-4754-a61b-cd2b0fca2d69")
 		)
@@ -4332,6 +4359,15 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 163.83 144.78 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
 			(at 163.83 144.78 0)
 			(effects
 				(font
@@ -4478,6 +4514,24 @@
 			)
 		)
 		(property "Description" ""
+			(at 63.5 45.72 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer_Part_Number" "DRV8316CRRGFR"
+			(at 63.5 45.72 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
 			(at 63.5 45.72 0)
 			(effects
 				(font
@@ -4747,6 +4801,15 @@
 				(hide yes)
 			)
 		)
+		(property "Sim.Device" ""
+			(at 39.37 76.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "1"
 			(uuid "f51b76e8-8c4d-4fc2-baa9-6ec5ca36f87a")
 		)
@@ -4812,6 +4875,15 @@
 		)
 		(property "Description" "test point"
 			(at 224.79 38.1 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 224.79 38.1 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -4890,6 +4962,15 @@
 				(hide yes)
 			)
 		)
+		(property "Sim.Device" ""
+			(at 138.43 144.78 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "2"
 			(uuid "b10ec09d-8822-46fc-be89-64833a68ba2e")
 		)
@@ -4956,6 +5037,24 @@
 			)
 		)
 		(property "Description" ""
+			(at 58.42 111.76 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Manufacturer_Part_Number" "DRV8316CRRGFR"
+			(at 58.42 111.76 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
 			(at 58.42 111.76 0)
 			(effects
 				(font
@@ -5152,6 +5251,15 @@
 				(hide yes)
 			)
 		)
+		(property "Sim.Device" ""
+			(at 130.81 139.7 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "2"
 			(uuid "2ee08142-4e60-457d-b8e6-8748b1bcd241")
 		)
@@ -5216,6 +5324,15 @@
 		)
 		(property "Description" "Resistor, US symbol"
 			(at 123.19 137.16 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 123.19 137.16 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5297,6 +5414,15 @@
 				(hide yes)
 			)
 		)
+		(property "Sim.Device" ""
+			(at 151.13 144.78 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "2"
 			(uuid "4749653e-7e74-4b7f-816a-774e57cb58da")
 		)
@@ -5368,6 +5494,15 @@
 				(hide yes)
 			)
 		)
+		(property "Sim.Device" ""
+			(at 111.76 55.88 90)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
 		(pin "2"
 			(uuid "7aa6c050-1f8f-4a7e-a398-c4275c15997e")
 		)
@@ -5432,6 +5567,15 @@
 		)
 		(property "Description" "Resistor, US symbol"
 			(at 115.57 134.62 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
+			(at 115.57 134.62 90)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -5714,6 +5858,15 @@
 			)
 		)
 		(property "Description" "Unpolarized capacitor"
+			(at 50.8 76.2 0)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(hide yes)
+			)
+		)
+		(property "Sim.Device" ""
 			(at 50.8 76.2 0)
 			(effects
 				(font
