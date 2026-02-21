@@ -52,16 +52,7 @@
         }
       },
       "diff_pair_dimensions": [],
-      "drc_exclusions": [
-        [
-          "clearance|75300000|75350000|ef5e7ad2-28cf-43c0-9ae6-69cf66a541b9|776bc714-3392-4150-96e5-d7bc594fdeb9",
-          "Built into the footprint"
-        ],
-        [
-          "clearance|75300000|81650000|a7749704-6ff8-4052-a73d-ba7b082d1703|1765e159-5337-4a0b-b895-92c3275f70a3",
-          ""
-        ]
-      ],
+      "drc_exclusions": [],
       "meta": {
         "version": 2
       },
@@ -508,7 +499,7 @@
       "plot": "Gerber/",
       "pos_files": "/Users/oliviaye/roamr/hw/roamr-power/",
       "specctra_dsn": "",
-      "step": "roamr-power.step",
+      "step": "Outputs/roamr-power.step",
       "svg": "",
       "vrml": ""
     },
@@ -664,7 +655,7 @@
     },
     "net_format_name": "",
     "page_layout_descr_file": "",
-    "plot_directory": "",
+    "plot_directory": "Outputs/",
     "space_save_all_events": true,
     "spice_current_sheet_as_root": false,
     "spice_external_command": "spice \"%I\"",
