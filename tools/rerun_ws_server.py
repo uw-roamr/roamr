@@ -11,6 +11,9 @@ import argparse
 import asyncio
 import base64
 import json
+import signal
+import sys
+import time
 from collections import deque
 from dataclasses import dataclass
 from typing import Iterable, Optional
@@ -121,11 +124,17 @@ class RerunBridge:
     async def handle_ws(self, websocket):
         peer = websocket.remote_address
         print(f"[rerun] client connected: {peer}")
-        async for message in websocket:
-            payload = decode_message(message)
-            if not payload:
-                continue
-            await self.route(payload)
+        try:
+            async for message in websocket:
+                payload = decode_message(message)
+                if not payload:
+                    continue
+                try:
+                    await self.route(payload)
+                except Exception as exc:
+                    print(f"[rerun] message handling error: {exc}")
+        except websockets.ConnectionClosed as exc:
+            print(f"[rerun] client disconnected: {peer} ({exc.code})")
 
     async def route(self, payload: dict):
         msg_type = payload.get("type")
@@ -255,7 +264,12 @@ class RerunBridge:
 
     def _log_video_frame(self, payload: dict, timestamp: float) -> None:
         jpeg_b64 = payload.get("jpeg_b64")
-        jpeg_bytes = base64.b64decode(jpeg_b64, validate=True)
+        if not jpeg_b64:
+            return
+        try:
+            jpeg_bytes = base64.b64decode(jpeg_b64, validate=True)
+        except Exception:
+            return
         set_rerun_time(timestamp)
         if self._log_encoded_image("world/base_link/camera/image", jpeg_bytes):
             return
@@ -325,6 +339,16 @@ class RerunBridge:
         return False
 
 
+def _safe_rr_shutdown() -> None:
+    for name in ("flush", "shutdown"):
+        fn = getattr(rr, name, None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception:
+                pass
+
+
 def main():
     parser = argparse.ArgumentParser(description="Rerun websocket bridge for roamr point clouds.")
     parser.add_argument("--host", default="0.0.0.0")
@@ -386,17 +410,42 @@ def main():
 
     async def runner():
         bridge = RerunBridge(history_size=args.history)
-        print(f"[rerun] listening on {args.host}:{args.port}")
-        async with websockets.serve(
-            bridge.handle_ws,
-            args.host,
-            args.port,
-            max_size=20 * 1024 * 1024,
-            process_request=log_handshake,
-        ):
-            await asyncio.Future()
+        stop_event = asyncio.Event()
 
-    asyncio.run(runner())
+        loop = asyncio.get_running_loop()
+
+        def request_shutdown(signame: str):
+            print(f"[rerun] received {signame}, shutting down...")
+            stop_event.set()
+
+        for signame in ("SIGINT", "SIGTERM"):
+            signum = getattr(signal, signame, None)
+            if signum is None:
+                continue
+            try:
+                loop.add_signal_handler(signum, request_shutdown, signame)
+            except (NotImplementedError, RuntimeError):
+                pass
+
+        print(f"[rerun] listening on {args.host}:{args.port}")
+        print("[rerun] waiting for websocket clients (Ctrl+C to stop)")
+        try:
+            async with websockets.serve(
+                bridge.handle_ws,
+                args.host,
+                args.port,
+                max_size=20 * 1024 * 1024,
+                process_request=log_handshake,
+            ):
+                await stop_event.wait()
+        finally:
+            _safe_rr_shutdown()
+
+    try:
+        asyncio.run(runner())
+    except KeyboardInterrupt:
+        print("[rerun] shutdown requested (KeyboardInterrupt)")
+        _safe_rr_shutdown()
 
 
 if __name__ == "__main__":
