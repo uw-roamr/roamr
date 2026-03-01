@@ -41,3 +41,74 @@ Run `idf.py monitor` to monitor the project. Or, you can the TV icon to monitor 
 ## SimpleFOC
 
 SimpleFOC and SimpleFOC drivers are cloned into components.
+
+Setup details (clone commands + required component `CMakeLists.txt` files):
+[`SIMPLEFOC_COMPONENTS_SETUP.md`](SIMPLEFOC_COMPONENTS_SETUP.md)
+
+# SimpleFOC Components Setup
+
+This project expects `simplefoc` and `simplefoc_drivers` as local ESP-IDF components under `components/`.
+
+## 1. Clone Repositories
+
+From the project root:
+
+```bash
+mkdir -p components
+git clone https://github.com/simplefoc/Arduino-FOC.git components/simplefoc
+git clone https://github.com/simplefoc/Arduino-FOC-drivers.git components/simplefoc_drivers
+```
+
+Optional: pin to known-good revisions:
+
+```bash
+git -C components/simplefoc checkout 395b6cd4c621fe460c1d61a99bc0fc38913d5481
+git -C components/simplefoc_drivers checkout ed05aa1644de36cbd19f43e8ea5c3edb643cefa9
+```
+
+## 2. Add `CMakeLists.txt` Files
+
+Upstream repos do not include ESP-IDF component registration files, so create them.
+
+### `components/simplefoc/CMakeLists.txt`
+
+```cmake
+file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.c")
+
+idf_component_register(SRCS ${SOURCES}
+                       INCLUDE_DIRS "src"
+                       REQUIRES espressif__arduino-esp32)
+
+target_compile_options(${COMPONENT_LIB} PRIVATE
+                       -Wno-error=uninitialized
+                       -Wno-error=overloaded-virtual
+                       -Wno-error=switch
+                       -Wno-error=comment)
+```
+
+### `components/simplefoc_drivers/CMakeLists.txt`
+
+```cmake
+file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.c")
+
+idf_component_register(SRCS ${SOURCES}
+                       INCLUDE_DIRS "src"
+                       REQUIRES espressif__arduino-esp32 simplefoc)
+
+target_compile_options(${COMPONENT_LIB} PRIVATE
+                       -Wno-error=overloaded-virtual
+                       -Wno-error=switch
+                       -Wno-error=comment)
+```
+
+## 3. Confirm Main Component Dependencies
+
+Ensure [`main/CMakeLists.txt`](main/CMakeLists.txt) includes:
+
+- `REQUIRES ... simplefoc ... simplefoc_drivers`
+
+Then build:
+
+```bash
+idf.py build
+```

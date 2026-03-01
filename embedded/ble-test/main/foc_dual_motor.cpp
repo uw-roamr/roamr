@@ -176,8 +176,8 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
       if (sscanf(cmd, "%d %d %d", &left_pct, &right_pct, &duration_ms) == 3) {
         // Map percentage (-100 to 100) to voltage (-12 to 12)
         // Assuming 12V power supply as set in setup()
-        float left_voltage = -(left_pct / 100.0f) * 12.0f;
-        float right_voltage = (right_pct / 100.0f) * 12.0f;
+        float left_voltage = (left_pct / 100.0f) * 12.0f;
+        float right_voltage = -(right_pct / 100.0f) * 12.0f;
 
         motor1.target = left_voltage;
         motor2.target = right_voltage;
