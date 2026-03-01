@@ -156,14 +156,13 @@ struct PointCloudCanvasView: View {
             for i in Swift.stride(from: 0, to: points.count, by: stride) {
                 let point = points[i]
 
-                // Account for 90° rotation (.right orientation on camera image)
-                // Camera Y -> Screen X, Camera X -> Screen Y
-                let screenX = centerX - CGFloat(point.y) * scale
-                let screenY = centerY + CGFloat(point.x) * scale
+            // Project FLU (forward/left) into a top-down view.
+            let screenX = centerX - CGFloat(point.y) * scale
+            let screenY = centerY - CGFloat(point.x) * scale
 
-                // Z (depth) as color gradient: close = warm (red/yellow), far = cool (blue)
-                let depth = point.z
-                let normalizedDepth = min(max(Double(depth) / 5.0, 0), 1) // 0-5m range
+            // Forward (X) as color gradient: close = warm (red/yellow), far = cool (blue)
+            let forward = point.x
+            let normalizedDepth = min(max(Double(forward) / 5.0, 0), 1) // 0-5m range
 
                 // Gradient from red (close) -> yellow -> green -> cyan -> blue (far)
                 let hue = normalizedDepth * 0.7 // 0 = red, 0.7 = blue
@@ -197,18 +196,13 @@ struct DepthPixelCanvasView: View {
 
     var body: some View {
         Canvas { context, canvasSize in
-            // Depth map is rotated 90° relative to screen (same as video with .right orientation)
-            // After rotation: depth image is (depthHeight x depthWidth) in screen orientation
+            // Depth pixels are already in portrait orientation to match the video feed.
 
             let depthWidth = CGFloat(data.width)
             let depthHeight = CGFloat(data.height)
 
-            // Rotated depth dimensions (as it appears on screen)
-            let rotatedWidth = depthHeight
-            let rotatedHeight = depthWidth
-
             // Calculate scaledToFill transform (same as video)
-            let imageAspect = rotatedWidth / rotatedHeight
+            let imageAspect = depthWidth / depthHeight
             let screenAspect = canvasSize.width / canvasSize.height
 
             let scale: CGFloat
@@ -217,14 +211,14 @@ struct DepthPixelCanvasView: View {
 
             if imageAspect > screenAspect {
                 // Image is wider - scale by height, crop width
-                scale = canvasSize.height / rotatedHeight
-                offsetX = (canvasSize.width - rotatedWidth * scale) / 2
+                scale = canvasSize.height / depthHeight
+                offsetX = (canvasSize.width - depthWidth * scale) / 2
                 offsetY = 0
             } else {
                 // Image is taller - scale by width, crop height
-                scale = canvasSize.width / rotatedWidth
+                scale = canvasSize.width / depthWidth
                 offsetX = 0
-                offsetY = (canvasSize.height - rotatedHeight * scale) / 2
+                offsetY = (canvasSize.height - depthHeight * scale) / 2
             }
 
             // Sample points for performance
@@ -233,13 +227,9 @@ struct DepthPixelCanvasView: View {
             for i in Swift.stride(from: 0, to: data.count, by: stride) {
                 let pixel = data.pixels[i]
 
-                // Map depth pixel coords to rotated image coords
-                let rotatedX = depthHeight - CGFloat(pixel.y)
-                let rotatedY = CGFloat(pixel.x)
-
                 // Apply scaledToFill transform
-                let screenX = rotatedX * scale + offsetX
-                let screenY = rotatedY * scale + offsetY
+                let screenX = CGFloat(pixel.x) * scale + offsetX
+                let screenY = CGFloat(pixel.y) * scale + offsetY
 
                 // Depth as color gradient: close = red, far = blue
                 let normalizedDepth = min(max(Double(pixel.depth) / 5.0, 0), 1)

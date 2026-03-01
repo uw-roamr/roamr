@@ -15,8 +15,8 @@ final class VideoStreamManager: NSObject, ObservableObject {
 	@Published var frameCount: Int = 0
 	@Published var currentFPS: Double = 0.0
 
-	private var targetWidth: Int = 1280  // 720p width
-	private var targetHeight: Int = 720  // 720p height
+	private var targetWidth: Int = 720   // 720p portrait width
+	private var targetHeight: Int = 1280  // 720p portrait height
 	private var jpegQuality: CGFloat = 0.6  // Balance between quality and bandwidth
 	private var targetFPS: Int = 30
 	private var frameInterval: TimeInterval = 0.0
@@ -92,16 +92,20 @@ final class VideoStreamManager: NSObject, ObservableObject {
 		// Create context for rendering
 		let context = CIContext(options: [.useSoftwareRenderer: false])
 
-		// Calculate scale to maintain aspect ratio
+		// Calculate scale to maintain aspect ratio (portrait)
 		let bufferWidth = CVPixelBufferGetWidth(pixelBuffer)
 		let bufferHeight = CVPixelBufferGetHeight(pixelBuffer)
+		let rotateToPortrait = bufferWidth > bufferHeight
+		let orientedImage = rotateToPortrait ? ciImage.oriented(.right) : ciImage
+		let orientedWidth = rotateToPortrait ? bufferHeight : bufferWidth
+		let orientedHeight = rotateToPortrait ? bufferWidth : bufferHeight
 
-		let scaleX = CGFloat(targetWidth) / CGFloat(bufferWidth)
-		let scaleY = CGFloat(targetHeight) / CGFloat(bufferHeight)
+		let scaleX = CGFloat(targetWidth) / CGFloat(orientedWidth)
+		let scaleY = CGFloat(targetHeight) / CGFloat(orientedHeight)
 		let scale = min(scaleX, scaleY)
 
 		// Apply scaling transform
-		let scaledImage = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+		let scaledImage = orientedImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
 
 		// Render to CGImage
 		guard let cgImage = context.createCGImage(scaledImage, from: scaledImage.extent) else {

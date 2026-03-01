@@ -32,6 +32,7 @@
 			membershipExceptions = (
 				Info.plist,
 				WASM/map.cpp,
+				WASM/map.wasm,
 				WASM/slam_main.cpp,
 				WASM/telemetry.cpp,
 			);

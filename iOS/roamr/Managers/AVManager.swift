@@ -10,6 +10,7 @@ import Foundation
 import AVFoundation
 import Combine
 import UIKit
+import ImageIO
 
 struct LidarCameraInitData {
 	var timestamp: Double
@@ -28,10 +29,13 @@ struct LidarCameraData {
 
     var image: [UInt8]
     var image_size: Int32
+
+    var points_frame_id: FrameId
+    var image_frame_id: FrameId
 }
 
 struct PointCloudData {
-    var points: [SIMD3<Float>]  // 3D world coordinates (meters)
+    var points: [SIMD3<Float>]  // 3D camera-frame points in FLU (meters)
     var colors: [UInt8]         // RGB per point (len = points.count * 3)
     var count: Int
 }
@@ -48,6 +52,7 @@ enum LidarCameraConstants {
     static let maxPointsPerScan = 100000
     static let floatsPerPoint = 3
     static let maxPointsSize = maxPointsPerScan * floatsPerPoint
+    static let pointSubsampleStride = 6
     
     static let colorsPerPoint = 3
     static let maxColorsSize = maxPointsPerScan * colorsPerPoint
@@ -79,6 +84,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
     private let captureSession = AVCaptureSession()
     private let videoOutput = AVCaptureVideoDataOutput()
     private let depthOutput = AVCaptureDepthDataOutput()
+    private let sessionQueue = DispatchQueue(label: "com.roamr.lidar.session", qos: .userInitiated)
     private let outputQueue = DispatchQueue(label: "com.roamr.lidar.camera.queue")
 
     private var outputSynchronizer: AVCaptureDataOutputSynchronizer?
@@ -103,7 +109,30 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
 		colors: [UInt8](),
 		colors_size: 0,
 		image: [UInt8](),
-		image_size: 0)
+		image_size: 0,
+        points_frame_id: CoordinateFrameId.FLU.rawValue,
+        image_frame_id: CoordinateFrameId.RDF.rawValue)
+
+    private func portraitLayout(width: Int, height: Int) -> (width: Int, height: Int, rotate: Bool) {
+        let rotate = width > height
+        return rotate
+            ? (width: height, height: width, rotate: true)
+            : (width: width, height: height, rotate: false)
+    }
+
+    private func rotateBytes90CW(_ src: [UInt8], width: Int, height: Int, channels: Int) -> [UInt8] {
+        var dst = [UInt8](repeating: 0, count: src.count)
+        for y in 0..<height {
+            for x in 0..<width {
+                let srcIndex = (y * width + x) * channels
+                let dstIndex = (x * height + (height - 1 - y)) * channels
+                for c in 0..<channels {
+                    dst[dstIndex + c] = src[srcIndex + c]
+                }
+            }
+        }
+        return dst
+    }
 
     private func startCapture() {
         // Stop any existing session
@@ -260,6 +289,15 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         }
         captureSession.addOutput(depthOutput)
 
+        if let c = videoOutput.connection(with: .video) {
+            if c.isVideoOrientationSupported { c.videoOrientation = .portrait }
+            if c.isVideoMirroringSupported { c.isVideoMirrored = false } // back camera
+        }
+
+        if let c = depthOutput.connection(with: .depthData) {
+            if c.isVideoOrientationSupported { c.videoOrientation = .portrait }
+        }
+
         // Set up synchronizer
         outputSynchronizer = AVCaptureDataOutputSynchronizer(dataOutputs: [videoOutput, depthOutput])
         outputSynchronizer?.setDelegate(self, queue: outputQueue)
@@ -279,14 +317,14 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
             AVCaptureDevice.requestAccess(for: .video) { granted in
                 if granted {
 					self.isActive = true
-                    DispatchQueue.global(qos: .userInitiated).async {
+                    self.sessionQueue.async {
                         self.startCapture()
                     }
                 }
             }
         case .authorized:
 			self.isActive = true
-            DispatchQueue.global(qos: .userInitiated).async {
+            sessionQueue.async {
                 self.startCapture()
             }
         @unknown default:
@@ -295,8 +333,10 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
     }
 
     func stop() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            self.captureSession.stopRunning()
+        sessionQueue.async {
+            if self.captureSession.isRunning {
+                self.captureSession.stopRunning()
+            }
             DispatchQueue.main.async {
                 self.isActive = false
             }
@@ -374,8 +414,64 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         return depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
     }
 
-    func depthDataToPixels(depthData: AVDepthData) -> DepthPixelData? {
-        let convertedDepthData = convertedDepthDataInMeters(depthData)
+    private func orientedDepthDataForPortrait(_ depthData: AVDepthData) -> AVDepthData {
+        let converted = convertedDepthDataInMeters(depthData)
+        let depthMap = converted.depthDataMap
+        let width = CVPixelBufferGetWidth(depthMap)
+        let height = CVPixelBufferGetHeight(depthMap)
+        guard width > height else { return converted }
+        return converted.applyingExifOrientation(CGImagePropertyOrientation.right)
+    }
+
+    private func intrinsicsForDepthMap(
+        calibration: AVCameraCalibrationData,
+        depthWidth: Int,
+        depthHeight: Int
+    ) -> (fx: Float, fy: Float, cx: Float, cy: Float) {
+        let intrinsics = calibration.intrinsicMatrix
+        var fx = intrinsics[0][0]
+        var fy = intrinsics[1][1]
+        var cx = intrinsics[2][0]
+        var cy = intrinsics[2][1]
+
+        var refWidth = Float(calibration.intrinsicMatrixReferenceDimensions.width)
+        var refHeight = Float(calibration.intrinsicMatrixReferenceDimensions.height)
+
+        let depthIsPortrait = depthHeight > depthWidth
+        let refIsPortrait = refHeight > refWidth
+
+        if depthIsPortrait != refIsPortrait {
+            if !refIsPortrait && depthIsPortrait {
+                // Rotate intrinsics 90° clockwise (landscape -> portrait).
+                let newFx = fy
+                let newFy = fx
+                let newCx = refHeight - 1.0 - cy
+                let newCy = cx
+                fx = newFx
+                fy = newFy
+                cx = newCx
+                cy = newCy
+            } else {
+                // Rotate intrinsics 90° counter-clockwise (portrait -> landscape).
+                let newFx = fy
+                let newFy = fx
+                let newCx = cy
+                let newCy = refWidth - 1.0 - cx
+                fx = newFx
+                fy = newFy
+                cx = newCx
+                cy = newCy
+            }
+            swap(&refWidth, &refHeight)
+        }
+
+        let sx = Float(depthWidth) / refWidth
+        let sy = Float(depthHeight) / refHeight
+        return (fx: fx * sx, fy: fy * sy, cx: cx * sx, cy: cy * sy)
+    }
+
+    func depthDataToPixels(depthData: AVDepthData, imageBuffer: CVPixelBuffer) -> DepthPixelData? {
+        let convertedDepthData = orientedDepthDataForPortrait(depthData)
 
         let depthMap = convertedDepthData.depthDataMap
         CVPixelBufferLockBaseAddress(depthMap, .readOnly)
@@ -384,6 +480,16 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         let width = CVPixelBufferGetWidth(depthMap)
         let height = CVPixelBufferGetHeight(depthMap)
         let depthStride = CVPixelBufferGetBytesPerRow(depthMap) / MemoryLayout<Float32>.size
+        let depthWidth = width
+        let depthHeight = height
+
+        let colorWidth = CVPixelBufferGetWidth(imageBuffer)
+        let colorHeight = CVPixelBufferGetHeight(imageBuffer)
+        let colorLayout = portraitLayout(width: colorWidth, height: colorHeight)
+        let outputWidth = colorLayout.width
+        let outputHeight = colorLayout.height
+        let scaleX = Float(outputWidth) / Float(depthWidth)
+        let scaleY = Float(outputHeight) / Float(depthHeight)
 
         guard let baseAddress = CVPixelBufferGetBaseAddress(depthMap) else { return nil }
         let depthPointer = baseAddress.assumingMemoryBound(to: Float32.self)
@@ -396,15 +502,17 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
             for x in 0..<width {
                 let depth = rowPtr[x]
                 guard depth > 0 && depth.isFinite else { continue }
-                pixels.append((x: x, y: y, depth: depth))
+                let mappedX = min(outputWidth - 1, max(0, Int(round(Float(x) * scaleX))))
+                let mappedY = min(outputHeight - 1, max(0, Int(round(Float(y) * scaleY))))
+                pixels.append((x: mappedX, y: mappedY, depth: depth))
             }
         }
 
-        return DepthPixelData(pixels: pixels, width: width, height: height, count: pixels.count)
+        return DepthPixelData(pixels: pixels, width: outputWidth, height: outputHeight, count: pixels.count)
     }
 
     func depthDataToPointCloud(depthData: AVDepthData, imageBuffer: CVPixelBuffer) -> PointCloudData? {
-        let convertedDepthData = convertedDepthDataInMeters(depthData)
+        let convertedDepthData = orientedDepthDataForPortrait(depthData)
 
         let depthMap = convertedDepthData.depthDataMap
         CVPixelBufferLockBaseAddress(depthMap, .readOnly)
@@ -430,29 +538,36 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         }
 
         // Scale intrinsics to the actual depth map resolution (depth maps are often downsampled)
-        let intrinsics = calibration.intrinsicMatrix
-        let refDims = calibration.intrinsicMatrixReferenceDimensions
-        let sx = Float(width) / Float(refDims.width)
-        let sy = Float(height) / Float(refDims.height)
-        let fx = intrinsics[0][0] * sx
-        let fy = intrinsics[1][1] * sy
-        let cx = intrinsics[2][0] * sx
-        let cy = intrinsics[2][1] * sy
+        let intrinsics = intrinsicsForDepthMap(
+            calibration: calibration,
+            depthWidth: width,
+            depthHeight: height
+        )
+        let fx = intrinsics.fx
+        let fy = intrinsics.fy
+        let cx = intrinsics.cx
+        let cy = intrinsics.cy
 
         // Color buffer sizing may differ from depth; scale sampling coords accordingly
         let colorWidth = CVPixelBufferGetWidth(imageBuffer)
         let colorHeight = CVPixelBufferGetHeight(imageBuffer)
         let colorScaleX = Float(colorWidth) / Float(width)
         let colorScaleY = Float(colorHeight) / Float(height)
+        let pointStride = max(1, LidarCameraConstants.pointSubsampleStride)
+        let estimatedPoints = max(1, (width * height) / pointStride)
 
         var points: [SIMD3<Float>] = []
-        points.reserveCapacity(width * height / 4)
+        points.reserveCapacity(estimatedPoints)
         var colors: [UInt8] = []
-        colors.reserveCapacity(width * height / 4 * LidarCameraConstants.colorsPerPoint)
+        colors.reserveCapacity(estimatedPoints * LidarCameraConstants.colorsPerPoint)
 
         for y in 0..<height {
             let rowPtr = depthPointer.advanced(by: y * depthStride)
-            for x in 0..<width {
+            // Row phase follows stride so arbitrary strides spread coverage across x modulo classes.
+            let startX = y % pointStride
+            var x = startX
+            while x < width {
+                defer { x += pointStride }
                 let depth = rowPtr[x]
 
                 // Skip invalid depth values
@@ -465,12 +580,14 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
                 // If unavailable in this deployment target, skip undistortion to keep the build green.
                 // Future: switch to CIFilter-based correction when available.
 
-                // Unproject: pixel (x,y) + depth -> 3D point (meters)
-                let xWorld = (Float(px) - cx) * depth / fx
-                let yWorld = (Float(py) - cy) * depth / fy
-                let zWorld = depth
+                // Unproject: pixel (x,y) + depth -> 3D point in camera RDF (meters)
+                let xCam = (Float(px) - cx) * depth / fx
+                let yCam = (Float(py) - cy) * depth / fy
+                let zCam = depth
 
-                points.append(SIMD3<Float>(xWorld, yWorld, zWorld))
+                let pointRdf = SIMD3<Float>(xCam, yCam, zCam)
+                let pointFlu = CoordinateFrames.cameraRdfToFlu(pointRdf)
+                points.append(pointFlu)
 
                 // Extract color (BGRA -> RGB) using scaled coordinates into the color buffer
                 let colorX = min(colorWidth - 1, max(0, Int(round(Float(x) * colorScaleX))))
@@ -490,7 +607,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
 
     private func depthDataToUIImage(depthData: AVDepthData) -> UIImage? {
         // Convert to meters/Float32 format for consistent visualization.
-        let convertedDepthData = convertedDepthDataInMeters(depthData)
+        let convertedDepthData = orientedDepthDataForPortrait(depthData)
 
         let depthMap = convertedDepthData.depthDataMap
         CVPixelBufferLockBaseAddress(depthMap, .readOnly)
@@ -536,28 +653,36 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
             }
         }
 
+        var outputData = grayscaleData
+        let outputWidth = width
+        let outputHeight = height
+
         guard let context = CGContext(
-            data: &grayscaleData,
-            width: width,
-            height: height,
+            data: &outputData,
+            width: outputWidth,
+            height: outputHeight,
             bitsPerComponent: 8,
-            bytesPerRow: width,
+            bytesPerRow: outputWidth,
             space: colorSpace,
             bitmapInfo: bitmapInfo.rawValue
         ),
         let cgImage = context.makeImage() else { return nil }
 
-        return UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
+        return UIImage(cgImage: cgImage, scale: 1.0, orientation: .up)
     }
 
     private func sampleBufferToUIImage(sampleBuffer: CMSampleBuffer) -> UIImage? {
         guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return nil }
 
         let ciImage = CIImage(cvPixelBuffer: imageBuffer)
+        let width = CVPixelBufferGetWidth(imageBuffer)
+        let height = CVPixelBufferGetHeight(imageBuffer)
+        let layout = portraitLayout(width: width, height: height)
+        let orientedImage = layout.rotate ? ciImage.oriented(.right) : ciImage
         let context = CIContext()
 
-        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return nil }
-        return UIImage(cgImage: cgImage, scale: 1.0, orientation: .right)
+        guard let cgImage = context.createCGImage(orientedImage, from: orientedImage.extent) else { return nil }
+        return UIImage(cgImage: cgImage, scale: 1.0, orientation: .up)
     }
 
     // MARK: - Synchronizer Delegate
@@ -583,13 +708,16 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         guard let imageBuffer = CMSampleBufferGetImageBuffer(videoBuffer) else { return }
         let imageWidth = CVPixelBufferGetWidth(imageBuffer)
         let imageHeight = CVPixelBufferGetHeight(imageBuffer)
+        let layout = portraitLayout(width: imageWidth, height: imageHeight)
+        let outputWidth = layout.width
+        let outputHeight = layout.height
 
         // Minimal work in callback: just stash latest buffers/metadata and signal processing queue
         lock.lock()
         currentVideoBuffer = videoBuffer
         currentDepthData = depthData
-        currentImageWidth = Int32(imageWidth)
-        currentImageHeight = Int32(imageHeight)
+        currentImageWidth = Int32(outputWidth)
+        currentImageHeight = Int32(outputHeight)
         currentImageChannels = 3 // we output RGB bytes
         hasNewFrame = true
         let shouldStartProcessing = !isProcessingFrame
@@ -622,6 +750,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
                         // Build RGB bytes (uint8) from BGRA
                         let imageWidth = CVPixelBufferGetWidth(localImageBuffer)
                         let imageHeight = CVPixelBufferGetHeight(localImageBuffer)
+                        let layout = self.portraitLayout(width: imageWidth, height: imageHeight)
                         let srcChannels = 4
                         let imageChannels = 3
                         let imagePixelCount = imageWidth * imageHeight
@@ -657,9 +786,18 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
                         }
                         CVPixelBufferUnlockBaseAddress(localImageBuffer, .readOnly)
 
+                        if layout.rotate {
+                            imageBytesOut = self.rotateBytes90CW(
+                                imageBytesOut,
+                                width: imageWidth,
+                                height: imageHeight,
+                                channels: imageChannels
+                            )
+                        }
+
                         // Heavy computations off the capture queue
                         let pointCloudData = self.depthDataToPointCloud(depthData: localDepthData, imageBuffer: localImageBuffer)
-                        let depthPixelData = self.depthDataToPixels(depthData: localDepthData)
+                        let depthPixelData = self.depthDataToPixels(depthData: localDepthData, imageBuffer: localImageBuffer)
                         let depthImage = self.depthDataToUIImage(depthData: localDepthData)
                         let camImage = self.sampleBufferToUIImage(sampleBuffer: localVideoBuffer)
 
@@ -712,7 +850,9 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
                             colors: colorsBytes,
                             colors_size: Int32(colorsBytes.count),
                             image: imageBytesOut,
-                            image_size: Int32(imageBytesOut.count)
+                            image_size: Int32(imageBytesOut.count),
+                            points_frame_id: CoordinateFrameId.FLU.rawValue,
+                            image_frame_id: CoordinateFrameId.RDF.rawValue
                         )
                         self.isDataDirty = true
 
@@ -803,7 +943,10 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
     let imageMaxCount = LidarCameraConstants.maxImageSize
     let imageByteCount = imageMaxCount * MemoryLayout<UInt8>.size
     let imageSizeOffset = imageOffset + imageByteCount
-    let totalBytes = imageSizeOffset + MemoryLayout<Int32>.size
+    let imageSizeBytes = MemoryLayout<Int32>.size
+    let pointsFrameIdOffset = imageSizeOffset + imageSizeBytes
+    let imageFrameIdOffset = pointsFrameIdOffset + MemoryLayout<Int32>.size
+    let totalBytes = imageFrameIdOffset + MemoryLayout<Int32>.size
 
     if let nativeEnd = nativeEnd {
         let baseAddr = UInt(bitPattern: basePtr)
@@ -854,5 +997,12 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
     let imageSizeValue = Int32(imageCount)
     basePtr.advanced(by: imageSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
         rebounded.pointee = imageSizeValue
+    }
+
+    basePtr.advanced(by: pointsFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = data.points_frame_id
+    }
+    basePtr.advanced(by: imageFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = data.image_frame_id
     }
 }

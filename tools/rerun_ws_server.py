@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "rerun-sdk",
+#     "rerun-sdk==0.29.1",
 #     "websockets",
 # ]
 # ///
@@ -11,11 +11,14 @@ import argparse
 import asyncio
 import base64
 import json
+import signal
+import threading
 from collections import deque
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
 import rerun as rr
+import rerun.blueprint as rrb
 import websockets
 
 
@@ -101,6 +104,11 @@ def set_rerun_time(timestamp: float) -> None:
         rr.set_time_sequence("timestamp", int(timestamp * 1e6))
 
 
+def log_scalar(path: str, value: float) -> None:
+    """Log a single scalar using the current Rerun SDK API."""
+    rr.log(path, rr.Scalars([value]))
+
+
 class RerunBridge:
     """Routes incoming websocket payloads into Rerun logs.
 
@@ -110,20 +118,33 @@ class RerunBridge:
 
     def __init__(self, history_size: int = 1):
         self.history: deque[PointsMessage] = deque(maxlen=max(1, history_size))
+        self._extrinsics_logged = False
 
     async def handle_ws(self, websocket):
         peer = websocket.remote_address
         print(f"[rerun] client connected: {peer}")
-        async for message in websocket:
-            payload = decode_message(message)
-            if not payload:
-                continue
-            await self.route(payload)
+        try:
+            async for message in websocket:
+                payload = decode_message(message)
+                if not payload:
+                    continue
+                try:
+                    await self.route(payload)
+                except Exception as exc:
+                    print(f"[rerun] message handling error: {exc}")
+        except websockets.ConnectionClosed as exc:
+            print(f"[rerun] client disconnected: {peer} ({exc.code})")
 
     async def route(self, payload: dict):
         msg_type = payload.get("type")
         timestamp = float(payload.get("timestamp") or 0.0)
         set_rerun_time(timestamp)
+
+        self._log_extrinsics_once()
+
+        if msg_type == "imu":
+            self._log_imu(payload, timestamp)
+            return
 
         if msg_type == "pose":
             self._log_pose(payload)
@@ -141,18 +162,61 @@ class RerunBridge:
 
         if msg_type == "video_frame":
             self._log_video_frame(payload, timestamp)
+            return
+
+        if msg_type == "map_frame":
+            self._log_map_frame(payload, timestamp)
+            return
 
     def _log_pose(self, payload: dict) -> None:
         quat = payload.get("quaternion") or []
+        translation = payload.get("translation") or payload.get("position") or []
         if len(quat) != 4:
             return
-        rr.log(
-            "phone/pose",
-            rr.Transform3D(
-                translation=[0, 0, 0],
-                rotation=rr.Quaternion(xyzw=quat),
-            ),
-        )
+        if len(translation) != 3:
+            translation = [0, 0, 0]
+        # Draw explicit axes as arrows (RGB = XYZ) so orientation is always visible.
+        axis_len = 0.1
+        axes = [
+            [axis_len, 0.0, 0.0],
+            [0.0, axis_len, 0.0],
+            [0.0, 0.0, axis_len],
+        ]
+        origins = [[0.0, 0.0, 0.0]] * 3
+        colors = [[255, 0, 0], [0, 255, 0], [0, 0, 255]]
+
+        try:
+            rr.log(
+                "world/base_link",
+                rr.Transform3D(
+                    translation=translation,
+                    rotation=rr.Quaternion(xyzw=quat),
+                ),
+            )
+            rr.log(
+                "world/base_link/axes",
+                rr.Arrows3D(origins=origins, vectors=axes, colors=colors),
+            )
+        except Exception:
+            rr.log(
+                "world/base_link",
+                rr.Transform3D(
+                    translation=[0, 0, 0],
+                    rotation=rr.Quaternion(xyzw=quat),
+                ),
+            )
+
+    def _log_imu(self, payload: dict, timestamp: float) -> None:
+        accel = payload.get("accel") or []
+        gyro = payload.get("gyro") or []
+        frame_id = payload.get("frame_id")
+        if len(accel) != 3 or len(gyro) != 3:
+            return
+
+        rr.log("world/base_link/imu/accel", rr.Scalars(accel))
+        rr.log("world/base_link/imu/gyro", rr.Scalars(gyro))
+        if frame_id is not None:
+            log_scalar("world/base_link/imu/frame_id", float(frame_id))
 
     def _log_motors(self, payload: dict, timestamp: float) -> None:
         left = float(payload.get("left", 0))
@@ -195,14 +259,65 @@ class RerunBridge:
 
         set_rerun_time(msg.timestamp)
         final_colors = merged_colors if merged_colors else colors_from_z(merged_points)
-        rr.log("lidar/points", rr.Points3D(merged_points, colors=final_colors))
+        rr.log("world/base_link/lidar/points", rr.Points3D(merged_points, colors=final_colors))
 
     def _log_video_frame(self, payload: dict, timestamp: float) -> None:
         jpeg_b64 = payload.get("jpeg_b64")
-        jpeg_bytes = base64.b64decode(jpeg_b64, validate=True)
-        set_rerun_time(timestamp)
-        if self._log_encoded_image("camera/image", jpeg_bytes):
+        if not jpeg_b64:
             return
+        try:
+            jpeg_bytes = base64.b64decode(jpeg_b64, validate=True)
+        except Exception:
+            return
+        set_rerun_time(timestamp)
+        if self._log_encoded_image("world/base_link/camera/image", jpeg_bytes):
+            return
+
+    def _log_map_frame(self, payload: dict, timestamp: float) -> None:
+        jpeg_b64 = payload.get("jpeg_b64")
+        if not jpeg_b64:
+            return
+        try:
+            jpeg_bytes = base64.b64decode(jpeg_b64, validate=True)
+        except Exception:
+            return
+        set_rerun_time(timestamp)
+        self._log_encoded_image("map/image", jpeg_bytes)
+
+    def _log_extrinsics_once(self) -> None:
+        if self._extrinsics_logged:
+            return
+        self._extrinsics_logged = True
+        rr.log("world", rr.ViewCoordinates.FLU, static=True)
+        rr.log(
+            "world",
+            rr.Transform3D(
+                translation=[0, 0, 0],
+                rotation=rr.Quaternion(xyzw=[0, 0, 0, 1]),
+            ),
+            static=True,
+        )
+        coord_frame = getattr(rr, "CoordinateFrame", None)
+        if coord_frame is not None:
+            rr.log("world", coord_frame("world"), static=True)
+            rr.log("world/base_link", coord_frame("base_link"), static=True)
+        rr.log("world/base_link", rr.ViewCoordinates.FLU, static=True)
+        rr.log(
+            "world/base_link/imu/accel",
+            rr.SeriesLines(names=["imu_acc_x", "imu_acc_y", "imu_acc_z"]),
+            static=True,
+        )
+        rr.log(
+            "world/base_link/imu/gyro",
+            rr.SeriesLines(names=["imu_gyro_x", "imu_gyro_y", "imu_gyro_z"]),
+            static=True,
+        )
+        identity = rr.Transform3D(
+            translation=[0, 0, 0],
+            rotation=rr.Quaternion(xyzw=[0, 0, 0, 1]),
+        )
+        rr.log("world/base_link/lidar", identity)
+        rr.log("world/base_link/camera", identity)
 
     def _log_encoded_image(self, path: str, jpeg_bytes: bytes) -> bool:
         encoded_cls = getattr(rr, "EncodedImage", None)
@@ -221,6 +336,34 @@ class RerunBridge:
             rr.log(path, build())
             return True
         return False
+
+
+def _call_with_timeout(name: str, fn, timeout_s: float = 2.0) -> None:
+    done = threading.Event()
+    error_holder: list[Exception] = []
+
+    def runner() -> None:
+        try:
+            fn()
+        except Exception as exc:  # pragma: no cover - defensive guard for SDK calls.
+            error_holder.append(exc)
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=runner, name=f"rr-{name}-shutdown", daemon=True)
+    thread.start()
+    if not done.wait(timeout_s):
+        print(f"[rerun] shutdown step '{name}' timed out after {timeout_s:.1f}s; continuing exit")
+        return
+    if error_holder:
+        print(f"[rerun] shutdown step '{name}' failed: {error_holder[0]}")
+
+
+def _safe_rr_shutdown() -> None:
+    for name in ("flush", "disconnect", "shutdown"):
+        fn = getattr(rr, name, None)
+        if callable(fn):
+            _call_with_timeout(name, fn)
 
 
 def main():
@@ -250,6 +393,30 @@ def main():
     args = parser.parse_args()
 
     rr.init("roamr")
+    try:
+        blueprint = rrb.Blueprint(
+            rrb.Horizontal(
+                rrb.Spatial3DView(
+                    origin="world",
+                    name="3D",
+                    contents="world/**",
+                    spatial_information=rrb.SpatialInformation(
+                        target_frame="tf#/world",
+                        show_axes=True,
+                    ),
+                ),
+                rrb.Spatial2DView(
+                    origin="map",
+                    name="Map",
+                    contents="map/**",
+                ),
+                column_shares=[2.0, 1.0],
+            ),
+            collapse_panels=True,
+        )
+        rr.send_blueprint(blueprint)
+    except Exception as exc:
+        print(f"[rerun] blueprint setup failed: {exc}")
     if args.spawn:
         server_uri = rr.serve_grpc()
         if server_uri is not None:
@@ -260,19 +427,48 @@ def main():
 
     async def runner():
         bridge = RerunBridge(history_size=args.history)
-        print(f"[rerun] listening on {args.host}:{args.port}")
-        async with websockets.serve(
-            bridge.handle_ws,
-            args.host,
-            args.port,
-            max_size=20 * 1024 * 1024,
-            process_request=log_handshake,
-        ):
-            await asyncio.Future()
+        stop_event = asyncio.Event()
 
-    asyncio.run(runner())
+        loop = asyncio.get_running_loop()
+
+        def request_shutdown(signame: str):
+            print(f"[rerun] received {signame}, shutting down...")
+            stop_event.set()
+
+        for signame in ("SIGINT", "SIGTERM"):
+            signum = getattr(signal, signame, None)
+            if signum is None:
+                continue
+            try:
+                loop.add_signal_handler(signum, request_shutdown, signame)
+            except (NotImplementedError, RuntimeError):
+                pass
+
+        print(f"[rerun] listening on {args.host}:{args.port}")
+        print("[rerun] waiting for websocket clients (Ctrl+C to stop)")
+        try:
+            async with websockets.serve(
+                bridge.handle_ws,
+                args.host,
+                args.port,
+                max_size=20 * 1024 * 1024,
+                process_request=log_handshake,
+            ):
+                await stop_event.wait()
+        except OSError as exc:
+            print(f"[rerun] failed to bind websocket server on {args.host}:{args.port}: {exc}")
+            if getattr(exc, "errno", None) in (48, 98):
+                print("[rerun] another process may still be using this port")
+            raise
+        finally:
+            _safe_rr_shutdown()
+
+    try:
+        asyncio.run(runner())
+    except KeyboardInterrupt:
+        print("[rerun] shutdown requested (KeyboardInterrupt)")
+        _safe_rr_shutdown()
 
 
 if __name__ == "__main__":
     main()
-
