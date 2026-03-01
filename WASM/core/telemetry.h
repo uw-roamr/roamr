@@ -15,10 +15,9 @@ constexpr double kLidarLogIntervalSec = 0.1;
 WASM_IMPORT("host", "rerun_log_lidar_frame") void rerun_log_lidar_frame(const sensors::LidarCameraData *data);
 WASM_IMPORT("host", "rerun_log_imu") void rerun_log_imu(const sensors::IMUData* data);
 WASM_IMPORT("host", "rerun_log_pose") void rerun_log_pose(const sensors::PoseLog* data);
+WASM_IMPORT("host", "rerun_log_pose_wheel") void rerun_log_pose_wheel(const sensors::PoseLog* data);
 
 void log_config(const sensors::CameraConfig& cam_config);
 
 void log_imu(std::mutex& m_imu, const sensors::IMUData& imu_data, double& last_imu_timestamp);
 void log_lc(std::mutex& m_lc, const sensors::LidarCameraData& lc_data, double& last_lc_timestamp);
-
-

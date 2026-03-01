@@ -168,13 +168,25 @@ class RerunBridge:
             self._log_map_frame(payload, timestamp)
             return
 
+    def _pose_paths(self, pose_source: str) -> tuple[str, str]:
+        source = (pose_source or "").strip().lower()
+        if source == "wheel_odometry":
+            base = "world/base_link_wheel_odometry"
+        elif source == "imu":
+            base = "world/base_link_imu"
+        else:
+            base = "world/base_link"
+        return base, f"{base}/axes"
+
     def _log_pose(self, payload: dict) -> None:
         quat = payload.get("quaternion") or []
         translation = payload.get("translation") or payload.get("position") or []
+        pose_source = payload.get("pose_source", "imu")
         if len(quat) != 4:
             return
         if len(translation) != 3:
             translation = [0, 0, 0]
+        base_path, axes_path = self._pose_paths(pose_source)
         # Draw explicit axes as arrows (RGB = XYZ) so orientation is always visible.
         axis_len = 0.1
         axes = [
@@ -187,19 +199,19 @@ class RerunBridge:
 
         try:
             rr.log(
-                "world/base_link",
+                base_path,
                 rr.Transform3D(
                     translation=translation,
                     rotation=rr.Quaternion(xyzw=quat),
                 ),
             )
             rr.log(
-                "world/base_link/axes",
+                axes_path,
                 rr.Arrows3D(origins=origins, vectors=axes, colors=colors),
             )
         except Exception:
             rr.log(
-                "world/base_link",
+                base_path,
                 rr.Transform3D(
                     translation=[0, 0, 0],
                     rotation=rr.Quaternion(xyzw=quat),
@@ -227,7 +239,9 @@ class RerunBridge:
 
         rr.log("motors/percent", rr.BarChart(values=[left, right]))
 
-    def _build_points_message(self, payload: dict, timestamp: float) -> Optional[PointsMessage]:
+    def _build_points_message(
+        self, payload: dict, timestamp: float
+    ) -> Optional[PointsMessage]:
         flat_points = payload.get("points") or []
         if not flat_points:
             return None
@@ -248,9 +262,9 @@ class RerunBridge:
         self.history.append(msg)
 
         merged_points: list[list[float]] = []
-        merged_colors: Optional[list[list[int]]] = [] if any(
-            m.colors is not None for m in self.history
-        ) else None
+        merged_colors: Optional[list[list[int]]] = (
+            [] if any(m.colors is not None for m in self.history) else None
+        )
 
         for item in self.history:
             merged_points.extend(item.points)
@@ -259,7 +273,10 @@ class RerunBridge:
 
         set_rerun_time(msg.timestamp)
         final_colors = merged_colors if merged_colors else colors_from_z(merged_points)
-        rr.log("world/base_link/lidar/points", rr.Points3D(merged_points, colors=final_colors))
+        rr.log(
+            "world/base_link/lidar/points",
+            rr.Points3D(merged_points, colors=final_colors),
+        )
 
     def _log_video_frame(self, payload: dict, timestamp: float) -> None:
         jpeg_b64 = payload.get("jpeg_b64")
@@ -301,7 +318,15 @@ class RerunBridge:
         if coord_frame is not None:
             rr.log("world", coord_frame("world"), static=True)
             rr.log("world/base_link", coord_frame("base_link"), static=True)
+            rr.log("world/base_link_imu", coord_frame("base_link_imu"), static=True)
+            rr.log(
+                "world/base_link_wheel_odometry",
+                coord_frame("base_link_wheel_odometry"),
+                static=True,
+            )
         rr.log("world/base_link", rr.ViewCoordinates.FLU, static=True)
+        rr.log("world/base_link_imu", rr.ViewCoordinates.FLU, static=True)
+        rr.log("world/base_link_wheel_odometry", rr.ViewCoordinates.FLU, static=True)
         rr.log(
             "world/base_link/imu/accel",
             rr.SeriesLines(names=["imu_acc_x", "imu_acc_y", "imu_acc_z"]),
@@ -353,7 +378,9 @@ def _call_with_timeout(name: str, fn, timeout_s: float = 2.0) -> None:
     thread = threading.Thread(target=runner, name=f"rr-{name}-shutdown", daemon=True)
     thread.start()
     if not done.wait(timeout_s):
-        print(f"[rerun] shutdown step '{name}' timed out after {timeout_s:.1f}s; continuing exit")
+        print(
+            f"[rerun] shutdown step '{name}' timed out after {timeout_s:.1f}s; continuing exit"
+        )
         return
     if error_holder:
         print(f"[rerun] shutdown step '{name}' failed: {error_holder[0]}")
@@ -367,7 +394,9 @@ def _safe_rr_shutdown() -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Rerun websocket bridge for roamr point clouds.")
+    parser = argparse.ArgumentParser(
+        description="Rerun websocket bridge for roamr point clouds."
+    )
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=9877)
     parser.add_argument(
@@ -456,7 +485,9 @@ def main():
             ):
                 await stop_event.wait()
         except OSError as exc:
-            print(f"[rerun] failed to bind websocket server on {args.host}:{args.port}: {exc}")
+            print(
+                f"[rerun] failed to bind websocket server on {args.host}:{args.port}: {exc}"
+            )
             if getattr(exc, "errno", None) in (48, 98):
                 print("[rerun] another process may still be using this port")
             raise
