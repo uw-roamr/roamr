@@ -1,7 +1,8 @@
 #include <atomic>
+#include <chrono>
+#include <cmath>
 #include <mutex>
 #include <thread>
-#include <chrono>
 
 #include "controls/motors.h"
 #include "core/telemetry.h"
@@ -9,6 +10,7 @@
 #include "sensors/imu.h"
 #include "sensors/imu_preintegration.h"
 #include "sensors/lidar_camera.h"
+#include "sensors/wheel_odometry.h"
 #include "mapping/map_api.h"
 #include "mapping/map_update.h"
 
@@ -29,10 +31,38 @@ static sensors::PoseLog g_pose;
 static core::Vector4d g_latest_quat = {0.0, 0.0, 0.0, 1.0};
 static std::atomic<bool> g_imu_ready{false};
 
+namespace {
+constexpr double kWheelTicksPerRev = 16384.0;
+constexpr double kWheelRadiusMeters = 0.03;
+constexpr double kWheelBaseMeters = 0.18;
+constexpr double kTwoPi = 6.28318530717958647692;
+
+void integrate_wheel_odometry(
+    const sensors::WheelOdometryData& odom,
+    double* x,
+    double* y,
+    double* yaw) {
+    if (!x || !y || !yaw) {
+        return;
+    }
+    const double meters_per_tick = (kTwoPi * kWheelRadiusMeters) / kWheelTicksPerRev;
+    const double dl = static_cast<double>(odom.dl_ticks) * meters_per_tick;
+    const double dr = static_cast<double>(odom.dr_ticks) * meters_per_tick;
+
+    const double ds = 0.5 * (dl + dr);
+    const double dtheta = (dr - dl) / kWheelBaseMeters;
+    const double heading_mid = *yaw + (0.5 * dtheta);
+
+    *x += ds * std::cos(heading_mid);
+    *y += ds * std::sin(heading_mid);
+    *yaw += dtheta;
+}
+} // namespace
+
 // Quick demo: drive both wheels forward briefly.
 void drive_forward_demo() {
     controls::MotorController motors;
-    
+
     // Ramp from reverse to forward with a dwell at each step.
     for (int i = -2; i <= 3; i++){
         const int pct = i * 10;
@@ -81,7 +111,6 @@ int main(){
                 g_latest_quat = g_imu_preintegrator.pose().quaternion;
             }
             g_imu_preintegrator.get_pose_log(&g_pose);
-            rerun_log_pose(&g_pose);
             // log_imu(m_imu, imu_copy, g_last_logged_imu_timestamp);
         }
     });
@@ -116,13 +145,13 @@ int main(){
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
       while(true){
-        
+
         core::Vector4d q_body_to_world = {0.0, 0.0, 0.0, 1.0};
         {
             std::lock_guard<std::mutex> lk(m_pose);
             q_body_to_world = g_latest_quat;
         }
-        
+
         const int ready_idx = g_lc_ready_idx.exchange(-1, std::memory_order_acq_rel);
         if (ready_idx < 0) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -147,12 +176,35 @@ int main(){
         if (g_rerun_lc.points_size > 0) {
             rerun_log_lidar_frame(&g_rerun_lc);
         }
-        
+
       }
+    });
+
+    std::thread wheel_odom_thread([](){
+        sensors::WheelOdometryData odom = {};
+        sensors::PoseLog wheel_pose = {};
+        double x = 0.0;
+        double y = 0.0;
+        double yaw = 0.0;
+
+        while (true) {
+            read_wheel_odometry(&odom);
+            if (odom.seq < 0 || odom.timestamp <= 0.0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                continue;
+            }
+
+            integrate_wheel_odometry(odom, &x, &y, &yaw);
+            wheel_pose.timestamp = odom.timestamp;
+            wheel_pose.translation = {x, y, 0.0};
+            wheel_pose.quaternion = {0.0, 0.0, std::sin(yaw * 0.5), std::cos(yaw * 0.5)};
+            rerun_log_pose(&wheel_pose);
+        }
     });
 
     drive_forward_demo();
     imu_thread.join();
     lidar_camera_thread.join();
     mapping_thread.join();
+    wheel_odom_thread.join();
 }

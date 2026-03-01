@@ -9,6 +9,14 @@ import Foundation
 import CoreBluetooth
 import Combine
 
+struct WheelOdometrySample {
+    var timestamp: Double
+    var seq: Int32
+    var dlTicks: Int32
+    var drTicks: Int32
+    var samplePeriodMs: Int32
+}
+
 class BluetoothManager: NSObject, ObservableObject {
     static let shared = BluetoothManager()
 
@@ -26,6 +34,10 @@ class BluetoothManager: NSObject, ObservableObject {
     private var shouldStartScanningWhenReady = false
 
     private var lastOdomSeq: UInt16?
+    private var latestOdomSamplePeriodMs: UInt16 = 20
+    private let odomQueueLock = NSLock()
+    private var pendingOdomSamples: [WheelOdometrySample] = []
+    private let maxPendingOdomSamples = 12_000
 
     // UUIDs matching ESP32 firmware
     private let serviceUUID = CBUUID(string: "00FF")
@@ -104,6 +116,30 @@ class BluetoothManager: NSObject, ObservableObject {
         sendMessage("GET_STATUS")
     }
 
+    func popWheelOdometrySample() -> WheelOdometrySample? {
+        odomQueueLock.lock()
+        defer { odomQueueLock.unlock() }
+        guard !pendingOdomSamples.isEmpty else { return nil }
+        return pendingOdomSamples.removeFirst()
+    }
+
+    private func enqueueWheelOdometrySamples(_ samples: [WheelOdometrySample]) {
+        guard !samples.isEmpty else { return }
+        odomQueueLock.lock()
+        pendingOdomSamples.append(contentsOf: samples)
+        let overflow = pendingOdomSamples.count - maxPendingOdomSamples
+        if overflow > 0 {
+            pendingOdomSamples.removeFirst(overflow)
+        }
+        odomQueueLock.unlock()
+    }
+
+    private func clearWheelOdometrySamples() {
+        odomQueueLock.lock()
+        pendingOdomSamples.removeAll(keepingCapacity: true)
+        odomQueueLock.unlock()
+    }
+
     private func decodeOdomFrame(_ data: Data) {
         guard data.count >= 3 else {
             print("Odom frame too short: \(data.count)")
@@ -128,21 +164,31 @@ class BluetoothManager: NSObject, ObservableObject {
         }
         lastOdomSeq = seq
 
-        var samples: [(Int16, Int16)] = []
+        let samplePeriodSeconds = Double(latestOdomSamplePeriodMs) / 1000.0
+        let baseTimestamp = Date().timeIntervalSince1970
+        var samples: [WheelOdometrySample] = []
         samples.reserveCapacity(sampleCount)
-
         var offset = 3
-        for _ in 0..<sampleCount {
+        for idx in 0..<sampleCount {
             let dlRaw = UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8)
             let drRaw = UInt16(bytes[offset + 2]) | (UInt16(bytes[offset + 3]) << 8)
             let dl = Int16(bitPattern: dlRaw)
             let dr = Int16(bitPattern: drRaw)
-            samples.append((dl, dr))
+            samples.append(
+                WheelOdometrySample(
+                    timestamp: baseTimestamp + (Double(idx) * samplePeriodSeconds),
+                    seq: Int32(seq),
+                    dlTicks: Int32(dl),
+                    drTicks: Int32(dr),
+                    samplePeriodMs: Int32(latestOdomSamplePeriodMs)
+                )
+            )
             offset += 4
         }
+        enqueueWheelOdometrySamples(samples)
 
         if let first = samples.first {
-            print("Odom frame seq=\(seq) n=\(sampleCount) first=(\(first.0), \(first.1))")
+            print("Odom frame seq=\(seq) n=\(sampleCount) first=(\(first.dlTicks), \(first.drTicks))")
         } else {
             print("Odom frame seq=\(seq) n=0")
         }
@@ -162,6 +208,7 @@ class BluetoothManager: NSObject, ObservableObject {
         let dropped = UInt16(bytes[3]) | (UInt16(bytes[4]) << 8)
         let lastSeq = UInt16(bytes[5]) | (UInt16(bytes[6]) << 8)
         let samplePeriodMs = UInt16(bytes[7]) | (UInt16(bytes[8]) << 8)
+        latestOdomSamplePeriodMs = samplePeriodMs
 
         let stateName: String
         switch state {
@@ -205,6 +252,8 @@ extension BluetoothManager: CBCentralManagerDelegate {
         connectedDevice = peripheral
         isConnected = true
         lastOdomSeq = nil
+        latestOdomSamplePeriodMs = 20
+        clearWheelOdometrySamples()
         connectionStatus = "Connected to \(peripheral.name ?? "Unknown")"
         peripheral.delegate = self
         peripheral.discoverServices([serviceUUID])
@@ -217,6 +266,8 @@ extension BluetoothManager: CBCentralManagerDelegate {
         dataCharacteristic = nil
         statusCharacteristic = nil
         lastOdomSeq = nil
+        latestOdomSamplePeriodMs = 20
+        clearWheelOdometrySamples()
         connectionStatus = "Disconnected"
     }
 
@@ -225,6 +276,25 @@ extension BluetoothManager: CBCentralManagerDelegate {
         if let error = error {
             print("Connection error: \(error.localizedDescription)")
         }
+    }
+}
+
+// exported function for Wasm
+func read_wheel_odometry_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+    guard let ptr = ptr else { return }
+
+    let sample = BluetoothManager.shared.popWheelOdometrySample() ??
+        WheelOdometrySample(timestamp: 0.0, seq: -1, dlTicks: 0, drTicks: 0, samplePeriodMs: 0)
+
+    let base = ptr.bindMemory(to: Double.self, capacity: 1)
+    base[0] = sample.timestamp
+
+    let intOffset = MemoryLayout<Double>.size
+    ptr.advanced(by: intOffset).withMemoryRebound(to: Int32.self, capacity: 4) { ints in
+        ints[0] = sample.seq
+        ints[1] = sample.dlTicks
+        ints[2] = sample.drTicks
+        ints[3] = sample.samplePeriodMs
     }
 }
 

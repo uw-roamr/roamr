@@ -50,6 +50,7 @@ class WasmManager {
 
         let nativeFunctions: [NativeFunction] = [
             NativeFunction(name: "read_imu", signature: "(*)", impl: read_imu_impl),
+            NativeFunction(name: "read_wheel_odometry", signature: "(*)", impl: read_wheel_odometry_impl),
             NativeFunction(name: "init_camera", signature: "(*)", impl: init_camera_impl),
             NativeFunction(name: "read_lidar_camera", signature: "(*)", impl: read_lidar_camera_impl),
             NativeFunction(name: "rerun_log_lidar_frame", signature: "(*)", impl: rerun_log_lidar_frame_impl),
