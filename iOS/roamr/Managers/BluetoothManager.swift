@@ -11,6 +11,7 @@ import Combine
 
 class BluetoothManager: NSObject, ObservableObject {
     static let shared = BluetoothManager()
+
     @Published var discoveredDevices: [CBPeripheral] = []
     @Published var connectedDevice: CBPeripheral?
     @Published var isScanning = false
@@ -19,12 +20,18 @@ class BluetoothManager: NSObject, ObservableObject {
     @Published var lastMessage = ""
 
     private var centralManager: CBCentralManager!
-    private var writeCharacteristic: CBCharacteristic?
+    private var controlCharacteristic: CBCharacteristic?
+    private var dataCharacteristic: CBCharacteristic?
+    private var statusCharacteristic: CBCharacteristic?
     private var shouldStartScanningWhenReady = false
 
-    // UUIDs matching ESP32 C6 configuration
+    private var lastOdomSeq: UInt16?
+
+    // UUIDs matching ESP32 firmware
     private let serviceUUID = CBUUID(string: "00FF")
-    private let characteristicUUID = CBUUID(string: "FF01")
+    private let controlCharacteristicUUID = CBUUID(string: "FF01")
+    private let dataCharacteristicUUID = CBUUID(string: "FF02")
+    private let statusCharacteristicUUID = CBUUID(string: "FF03")
 
     override init() {
         super.init()
@@ -62,20 +69,109 @@ class BluetoothManager: NSObject, ObservableObject {
         if let device = connectedDevice {
             centralManager.cancelPeripheralConnection(device)
         }
-		startScanning()
+        startScanning()
     }
 
     func sendMessage(_ message: String) {
-        guard let characteristic = writeCharacteristic,
+        guard let characteristic = controlCharacteristic,
               let device = connectedDevice,
               let data = message.data(using: .utf8) else {
             lastMessage = "Error: Not ready to send"
             return
         }
 
-		device.writeValue(data, for: characteristic, type: .withoutResponse)
+        device.writeValue(data, for: characteristic, type: .withoutResponse)
         lastMessage = "Sent: \(message)"
-        print("📤 Sent: \(message)")
+        print("Sent: \(message)")
+    }
+
+    func startOdometry(durationMs: Int, samplePeriodMs: Int = 20) {
+        sendMessage("START \(durationMs) \(samplePeriodMs)")
+    }
+
+    func stopOdometry() {
+        sendMessage("STOP")
+    }
+
+    func clearOdometry() {
+        sendMessage("CLEAR")
+    }
+
+    func requestOdometryStatus() {
+        if let device = connectedDevice, let statusCharacteristic {
+            device.readValue(for: statusCharacteristic)
+        }
+        sendMessage("GET_STATUS")
+    }
+
+    private func decodeOdomFrame(_ data: Data) {
+        guard data.count >= 3 else {
+            print("Odom frame too short: \(data.count)")
+            return
+        }
+
+        let bytes = [UInt8](data)
+        let seq = UInt16(bytes[0]) | (UInt16(bytes[1]) << 8)
+        let sampleCount = Int(bytes[2])
+        let expectedLength = 3 + sampleCount * 4
+
+        guard data.count == expectedLength else {
+            print("Odom frame length mismatch: got=\(data.count) expected=\(expectedLength)")
+            return
+        }
+
+        if let previous = lastOdomSeq {
+            let expected = previous &+ 1
+            if seq != expected {
+                print("Odom seq gap: expected=\(expected) got=\(seq)")
+            }
+        }
+        lastOdomSeq = seq
+
+        var samples: [(Int16, Int16)] = []
+        samples.reserveCapacity(sampleCount)
+
+        var offset = 3
+        for _ in 0..<sampleCount {
+            let dlRaw = UInt16(bytes[offset]) | (UInt16(bytes[offset + 1]) << 8)
+            let drRaw = UInt16(bytes[offset + 2]) | (UInt16(bytes[offset + 3]) << 8)
+            let dl = Int16(bitPattern: dlRaw)
+            let dr = Int16(bitPattern: drRaw)
+            samples.append((dl, dr))
+            offset += 4
+        }
+
+        if let first = samples.first {
+            print("Odom frame seq=\(seq) n=\(sampleCount) first=(\(first.0), \(first.1))")
+        } else {
+            print("Odom frame seq=\(seq) n=0")
+        }
+
+        lastMessage = "Odom seq=\(seq) n=\(sampleCount)"
+    }
+
+    private func decodeOdomStatus(_ data: Data) {
+        guard data.count >= 9 else {
+            print("Odom status too short: \(data.count)")
+            return
+        }
+
+        let bytes = [UInt8](data)
+        let state = bytes[0]
+        let buffered = UInt16(bytes[1]) | (UInt16(bytes[2]) << 8)
+        let dropped = UInt16(bytes[3]) | (UInt16(bytes[4]) << 8)
+        let lastSeq = UInt16(bytes[5]) | (UInt16(bytes[6]) << 8)
+        let samplePeriodMs = UInt16(bytes[7]) | (UInt16(bytes[8]) << 8)
+
+        let stateName: String
+        switch state {
+        case 0: stateName = "IDLE"
+        case 1: stateName = "RECORDING"
+        case 2: stateName = "UPLOADING"
+        default: stateName = "UNKNOWN(\(state))"
+        }
+
+        print("Odom status state=\(stateName) buffered=\(buffered) dropped=\(dropped) last_seq=\(lastSeq) dt=\(samplePeriodMs)ms")
     }
 }
 
@@ -108,6 +204,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         connectedDevice = peripheral
         isConnected = true
+        lastOdomSeq = nil
         connectionStatus = "Connected to \(peripheral.name ?? "Unknown")"
         peripheral.delegate = self
         peripheral.discoverServices([serviceUUID])
@@ -116,7 +213,10 @@ extension BluetoothManager: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         connectedDevice = nil
         isConnected = false
-        writeCharacteristic = nil
+        controlCharacteristic = nil
+        dataCharacteristic = nil
+        statusCharacteristic = nil
+        lastOdomSeq = nil
         connectionStatus = "Disconnected"
     }
 
@@ -134,7 +234,7 @@ extension BluetoothManager: CBPeripheralDelegate {
         guard let services = peripheral.services else { return }
 
         for service in services {
-            peripheral.discoverCharacteristics([characteristicUUID], for: service)
+            peripheral.discoverCharacteristics([controlCharacteristicUUID, dataCharacteristicUUID, statusCharacteristicUUID], for: service)
         }
     }
 
@@ -142,23 +242,36 @@ extension BluetoothManager: CBPeripheralDelegate {
         guard let characteristics = service.characteristics else { return }
 
         for characteristic in characteristics {
-            if characteristic.uuid == characteristicUUID {
-                writeCharacteristic = characteristic
-                connectionStatus = "Ready to Send"
+            if characteristic.uuid == controlCharacteristicUUID {
+                controlCharacteristic = characteristic
+                print("Control characteristic discovered")
+            } else if characteristic.uuid == dataCharacteristicUUID {
+                dataCharacteristic = characteristic
+                peripheral.setNotifyValue(true, for: characteristic)
+                print("Data characteristic discovered (subscribing)")
+            } else if characteristic.uuid == statusCharacteristicUUID {
+                statusCharacteristic = characteristic
+                peripheral.readValue(for: characteristic)
+                print("Status characteristic discovered")
             }
+        }
+
+        if controlCharacteristic != nil {
+            connectionStatus = "Ready"
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
-            print("❌ Failed to subscribe to notifications: \(error.localizedDescription)")
+            print("Failed to subscribe to notifications: \(error.localizedDescription)")
             return
         }
 
         if characteristic.isNotifying {
-            print("✅ Successfully subscribed to notifications")
+            print("Notifications enabled for \(characteristic.uuid)")
+            connectionStatus = "Ready + Odom Notify"
         } else {
-            print("⚠️ Notifications disabled")
+            print("Notifications disabled for \(characteristic.uuid)")
         }
     }
 
@@ -182,11 +295,21 @@ extension BluetoothManager: CBPeripheralDelegate {
             return
         }
 
+        if characteristic.uuid == dataCharacteristicUUID {
+            decodeOdomFrame(data)
+            return
+        }
+
+        if characteristic.uuid == statusCharacteristicUUID {
+            decodeOdomStatus(data)
+            return
+        }
+
         if let response = String(data: data, encoding: .utf8) {
-            print("📱 Received response: \(response)")
+            print("Received response: \(response)")
             lastMessage = "Received: \(response)"
         } else {
-            print("📱 Received data (hex): \(data.map { String(format: "%02x", $0) }.joined(separator: " "))")
+            print("Received data (hex): \(data.map { String(format: "%02x", $0) }.joined(separator: " "))")
         }
     }
 }
