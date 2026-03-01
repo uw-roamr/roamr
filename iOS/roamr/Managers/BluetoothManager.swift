@@ -38,6 +38,11 @@ class BluetoothManager: NSObject, ObservableObject {
     private let odomQueueLock = NSLock()
     private var pendingOdomSamples: [WheelOdometrySample] = []
     private let maxPendingOdomSamples = 12_000
+    private let odomControlQueue = DispatchQueue(label: "com.roamr.odom-control")
+    private var odomStreamingEnabled = false
+    private var odomStreamingWorkItem: DispatchWorkItem?
+    private let odomSessionDurationMs = 900
+    private let odomSessionIntervalMs = 1200
 
     // UUIDs matching ESP32 firmware
     private let serviceUUID = CBUUID(string: "00FF")
@@ -92,7 +97,9 @@ class BluetoothManager: NSObject, ObservableObject {
             return
         }
 
-        device.writeValue(data, for: characteristic, type: .withoutResponse)
+        let writeType: CBCharacteristicWriteType =
+            characteristic.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
+        device.writeValue(data, for: characteristic, type: writeType)
         lastMessage = "Sent: \(message)"
         print("Sent: \(message)")
     }
@@ -123,6 +130,16 @@ class BluetoothManager: NSObject, ObservableObject {
         return pendingOdomSamples.removeFirst()
     }
 
+    func ensureWheelOdometryStreaming() {
+        odomControlQueue.async {
+            if self.odomStreamingEnabled {
+                return
+            }
+            self.odomStreamingEnabled = true
+            self.scheduleNextOdometrySession(immediate: true)
+        }
+    }
+
     private func enqueueWheelOdometrySamples(_ samples: [WheelOdometrySample]) {
         guard !samples.isEmpty else { return }
         odomQueueLock.lock()
@@ -138,6 +155,38 @@ class BluetoothManager: NSObject, ObservableObject {
         odomQueueLock.lock()
         pendingOdomSamples.removeAll(keepingCapacity: true)
         odomQueueLock.unlock()
+    }
+
+    private func stopWheelOdometryStreaming() {
+        odomControlQueue.async {
+            self.odomStreamingEnabled = false
+            self.odomStreamingWorkItem?.cancel()
+            self.odomStreamingWorkItem = nil
+        }
+    }
+
+    private func scheduleNextOdometrySession(immediate: Bool) {
+        odomStreamingWorkItem?.cancel()
+        let delayMs = immediate ? 0 : odomSessionIntervalMs
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard self.odomStreamingEnabled else { return }
+
+            DispatchQueue.main.async {
+                guard self.isConnected, self.controlCharacteristic != nil else { return }
+                guard self.dataCharacteristic?.isNotifying == true else { return }
+                self.startOdometry(
+                    durationMs: self.odomSessionDurationMs,
+                    samplePeriodMs: Int(self.latestOdomSamplePeriodMs)
+                )
+            }
+
+            self.odomControlQueue.async {
+                self.scheduleNextOdometrySession(immediate: false)
+            }
+        }
+        odomStreamingWorkItem = workItem
+        odomControlQueue.asyncAfter(deadline: .now() + .milliseconds(delayMs), execute: workItem)
     }
 
     private func decodeOdomFrame(_ data: Data) {
@@ -249,6 +298,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        stopWheelOdometryStreaming()
         connectedDevice = peripheral
         isConnected = true
         lastOdomSeq = nil
@@ -268,6 +318,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
         lastOdomSeq = nil
         latestOdomSamplePeriodMs = 20
         clearWheelOdometrySamples()
+        stopWheelOdometryStreaming()
         connectionStatus = "Disconnected"
     }
 
@@ -282,6 +333,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
 // exported function for Wasm
 func read_wheel_odometry_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     guard let ptr = ptr else { return }
+    BluetoothManager.shared.ensureWheelOdometryStreaming()
 
     let sample = BluetoothManager.shared.popWheelOdometrySample() ??
         WheelOdometrySample(timestamp: 0.0, seq: -1, dlTicks: 0, drTicks: 0, samplePeriodMs: 0)
