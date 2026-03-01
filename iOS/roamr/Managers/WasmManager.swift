@@ -57,6 +57,7 @@ class WasmManager {
             NativeFunction(name: "rerun_log_map_frame", signature: "(*)", impl: rerun_log_map_frame_impl),
             NativeFunction(name: "rerun_log_imu", signature: "(*)", impl: rerun_log_imu_impl),
             NativeFunction(name: "rerun_log_pose", signature: "(*)", impl: rerun_log_pose_impl),
+            NativeFunction(name: "rerun_log_pose_wheel", signature: "(*)", impl: rerun_log_pose_wheel_impl),
             NativeFunction(name: "write_motors", signature: "(*)", impl: write_motors_impl)
         ]
 

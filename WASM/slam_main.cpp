@@ -111,6 +111,7 @@ int main(){
                 g_latest_quat = g_imu_preintegrator.pose().quaternion;
             }
             g_imu_preintegrator.get_pose_log(&g_pose);
+            rerun_log_pose(&g_pose);
             // log_imu(m_imu, imu_copy, g_last_logged_imu_timestamp);
         }
     });
@@ -198,7 +199,7 @@ int main(){
             wheel_pose.timestamp = odom.timestamp;
             wheel_pose.translation = {x, y, 0.0};
             wheel_pose.quaternion = {0.0, 0.0, std::sin(yaw * 0.5), std::cos(yaw * 0.5)};
-            rerun_log_pose(&wheel_pose);
+            rerun_log_pose_wheel(&wheel_pose);
         }
     });
 
