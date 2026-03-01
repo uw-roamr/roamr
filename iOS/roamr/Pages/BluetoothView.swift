@@ -71,13 +71,19 @@ struct BluetoothView: View {
 
                     Spacer()
 
-					// Last Message
-					Text(bluetoothManager.lastMessage.isEmpty ? " " : bluetoothManager.lastMessage)
-						.font(.caption2)
-						.foregroundColor(.gray)
-						.lineLimit(1)
-						.truncationMode(.middle)
-						.padding()
+					// Sent / Received messages
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Sent: \(bluetoothManager.lastSentMessage)")
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text("Received: \(bluetoothManager.lastReceivedMessage)")
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .font(.caption2)
+                    .foregroundColor(.gray)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
                 }
 				.padding(.bottom, AppConstants.shared.tabBarHeight)
             }

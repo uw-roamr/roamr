@@ -293,6 +293,16 @@ static void startRecording(int duration_ms, int requested_sample_period_ms) {
   setOdomState(OdomState::RECORDING);
 }
 
+static void startContinuousStreaming() {
+  odomBufferClear();
+  g_upload_seq = 0;
+  g_last_uploaded_seq = 0xFFFF;
+  g_prev_raw_valid = false;
+  g_record_until_ms = 0;
+  g_last_sample_ms = millis();
+  setOdomState(OdomState::RECORDING);
+}
+
 static void stopRecordingAndUpload() {
   if (g_odom_state == OdomState::RECORDING || g_ring_count > 0) {
     setOdomState(OdomState::UPLOADING);
@@ -469,7 +479,7 @@ static void odometryUpdateTick() {
   }
 
   if (static_cast<uint32_t>(now - g_last_sample_ms) < g_sample_period_ms) {
-    if (timeReached(now, g_record_until_ms)) {
+    if (g_record_until_ms != 0 && timeReached(now, g_record_until_ms)) {
       setOdomState(OdomState::UPLOADING);
     }
     return;
@@ -487,17 +497,17 @@ static void odometryUpdateTick() {
   g_prev_right_raw = right_raw;
   g_last_sample_ms = now;
 
-  if (timeReached(now, g_record_until_ms)) {
+  if (g_record_until_ms != 0 && timeReached(now, g_record_until_ms)) {
     setOdomState(OdomState::UPLOADING);
   }
 }
 
 static void bleUploadLoop() {
-  if (g_odom_state != OdomState::UPLOADING) {
+  if (g_odom_state == OdomState::IDLE) {
     return;
   }
 
-  if (g_ring_count == 0) {
+  if (g_ring_count == 0 && g_odom_state == OdomState::UPLOADING) {
     setOdomState(OdomState::IDLE);
     return;
   }
@@ -569,7 +579,7 @@ static void bleUploadLoop() {
     markStatusDirty();
   }
 
-  if (g_ring_count == 0) {
+  if (g_ring_count == 0 && g_odom_state == OdomState::UPLOADING) {
     setOdomState(OdomState::IDLE);
   }
 }
@@ -663,6 +673,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
     g_data_notify_enabled = false;
     g_ble_congested = false;
     g_negotiated_att_mtu = BLE_DEFAULT_ATT_MTU;
+    clearRecording();
     esp_ble_gap_start_advertising(&adv_params);
     markStatusDirty();
     break;
@@ -680,6 +691,11 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
       uint16_t cccd = static_cast<uint16_t>(param->write.value[0]) |
                       (static_cast<uint16_t>(param->write.value[1]) << 8);
       g_data_notify_enabled = (cccd & 0x0001u) != 0;
+      if (g_data_notify_enabled) {
+        startContinuousStreaming();
+      } else {
+        clearRecording();
+      }
       markStatusDirty();
     } else if (param->write.handle == g_control_char_handle) {
       handleControlCommand(param->write.value, param->write.len);
