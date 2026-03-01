@@ -12,8 +12,7 @@ import asyncio
 import base64
 import json
 import signal
-import sys
-import time
+import threading
 from collections import deque
 from dataclasses import dataclass
 from typing import Iterable, Optional
@@ -339,14 +338,32 @@ class RerunBridge:
         return False
 
 
+def _call_with_timeout(name: str, fn, timeout_s: float = 2.0) -> None:
+    done = threading.Event()
+    error_holder: list[Exception] = []
+
+    def runner() -> None:
+        try:
+            fn()
+        except Exception as exc:  # pragma: no cover - defensive guard for SDK calls.
+            error_holder.append(exc)
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=runner, name=f"rr-{name}-shutdown", daemon=True)
+    thread.start()
+    if not done.wait(timeout_s):
+        print(f"[rerun] shutdown step '{name}' timed out after {timeout_s:.1f}s; continuing exit")
+        return
+    if error_holder:
+        print(f"[rerun] shutdown step '{name}' failed: {error_holder[0]}")
+
+
 def _safe_rr_shutdown() -> None:
-    for name in ("flush", "shutdown"):
+    for name in ("flush", "disconnect", "shutdown"):
         fn = getattr(rr, name, None)
         if callable(fn):
-            try:
-                fn()
-            except Exception:
-                pass
+            _call_with_timeout(name, fn)
 
 
 def main():
@@ -438,6 +455,11 @@ def main():
                 process_request=log_handshake,
             ):
                 await stop_event.wait()
+        except OSError as exc:
+            print(f"[rerun] failed to bind websocket server on {args.host}:{args.port}: {exc}")
+            if getattr(exc, "errno", None) in (48, 98):
+                print("[rerun] another process may still be using this port")
+            raise
         finally:
             _safe_rr_shutdown()
 

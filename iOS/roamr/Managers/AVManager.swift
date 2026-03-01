@@ -52,6 +52,7 @@ enum LidarCameraConstants {
     static let maxPointsPerScan = 100000
     static let floatsPerPoint = 3
     static let maxPointsSize = maxPointsPerScan * floatsPerPoint
+    static let pointSubsampleStride = 6
     
     static let colorsPerPoint = 3
     static let maxColorsSize = maxPointsPerScan * colorsPerPoint
@@ -83,6 +84,7 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
     private let captureSession = AVCaptureSession()
     private let videoOutput = AVCaptureVideoDataOutput()
     private let depthOutput = AVCaptureDepthDataOutput()
+    private let sessionQueue = DispatchQueue(label: "com.roamr.lidar.session", qos: .userInitiated)
     private let outputQueue = DispatchQueue(label: "com.roamr.lidar.camera.queue")
 
     private var outputSynchronizer: AVCaptureDataOutputSynchronizer?
@@ -315,14 +317,14 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
             AVCaptureDevice.requestAccess(for: .video) { granted in
                 if granted {
 					self.isActive = true
-                    DispatchQueue.global(qos: .userInitiated).async {
+                    self.sessionQueue.async {
                         self.startCapture()
                     }
                 }
             }
         case .authorized:
 			self.isActive = true
-            DispatchQueue.global(qos: .userInitiated).async {
+            sessionQueue.async {
                 self.startCapture()
             }
         @unknown default:
@@ -331,8 +333,10 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
     }
 
     func stop() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            self.captureSession.stopRunning()
+        sessionQueue.async {
+            if self.captureSession.isRunning {
+                self.captureSession.stopRunning()
+            }
             DispatchQueue.main.async {
                 self.isActive = false
             }
@@ -549,15 +553,21 @@ class AVManager: NSObject, ObservableObject, AVCaptureDataOutputSynchronizerDele
         let colorHeight = CVPixelBufferGetHeight(imageBuffer)
         let colorScaleX = Float(colorWidth) / Float(width)
         let colorScaleY = Float(colorHeight) / Float(height)
+        let pointStride = max(1, LidarCameraConstants.pointSubsampleStride)
+        let estimatedPoints = max(1, (width * height) / pointStride)
 
         var points: [SIMD3<Float>] = []
-        points.reserveCapacity(width * height / 4)
+        points.reserveCapacity(estimatedPoints)
         var colors: [UInt8] = []
-        colors.reserveCapacity(width * height / 4 * LidarCameraConstants.colorsPerPoint)
+        colors.reserveCapacity(estimatedPoints * LidarCameraConstants.colorsPerPoint)
 
         for y in 0..<height {
             let rowPtr = depthPointer.advanced(by: y * depthStride)
-            for x in 0..<width {
+            // Row phase follows stride so arbitrary strides spread coverage across x modulo classes.
+            let startX = y % pointStride
+            var x = startX
+            while x < width {
+                defer { x += pointStride }
                 let depth = rowPtr[x]
 
                 // Skip invalid depth values
