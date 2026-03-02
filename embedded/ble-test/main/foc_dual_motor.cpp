@@ -25,15 +25,6 @@
 #include "freertos/semphr.h"
 #include "nvs_flash.h"
 
-extern "C" void __wrap_esp_log_write(esp_log_level_t level, const char *tag,
-                                     const char *format, ...) {
-  (void)level;
-  (void)tag;
-  va_list args;
-  va_start(args, format);
-  vprintf(format, args);
-  va_end(args);
-}
 
 #define GATTS_TAG "BLE_ODOM"
 #define DEVICE_NAME "ESP32_C6"
