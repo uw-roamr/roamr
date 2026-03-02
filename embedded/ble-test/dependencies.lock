@@ -10,7 +10,7 @@ dependencies:
       type: service
     version: 1.0.3
   espressif/arduino-esp32:
-    component_hash: b08668a01eaf1ecd61340a59bf965f03dd966c18b1aa7c8ae98d74cfe2a40258
+    component_hash: c1ed9d8ca2790678814eaa09bde8ee95c35810167bf397e93cbb1ead36799bb7
     dependencies:
     - name: chmorgan/esp-libhelix-mp3
       registry_url: https://components.espressif.com
@@ -21,12 +21,12 @@ dependencies:
       require: private
       rules:
       - if: target not in [esp32c2, esp32p4]
-      version: 0.6.0~1
+      version: 0.6.1~4
     - name: espressif/esp-dsp
       registry_url: https://components.espressif.com
       require: private
       rules:
-      - if: target != esp32c2
+      - if: target not in [esp32c2, esp32c61]
       version: ^1.3.4
     - name: espressif/esp-modbus
       registry_url: https://components.espressif.com
@@ -42,14 +42,14 @@ dependencies:
       registry_url: https://components.espressif.com
       require: private
       rules:
-      - if: target not in [esp32c2, esp32p4]
+      - if: target not in [esp32c2, esp32c61, esp32p4]
       version: ==1.6.4
     - name: espressif/esp-zigbee-lib
       registry_url: https://components.espressif.com
       require: private
       rules:
-      - if: target not in [esp32c2, esp32p4]
-      version: ==1.6.7
+      - if: target not in [esp32c2, esp32c61, esp32p4]
+      version: ==1.6.8
     - name: espressif/esp_diag_data_store
       registry_url: https://components.espressif.com
       require: private
@@ -67,7 +67,7 @@ dependencies:
       require: private
       rules:
       - if: target == esp32p4
-      version: ^2.0.12
+      version: ^2.9.2
     - name: espressif/esp_insights
       registry_url: https://components.espressif.com
       require: private
@@ -77,7 +77,7 @@ dependencies:
     - name: espressif/esp_modem
       registry_url: https://components.espressif.com
       require: private
-      version: ^1.1.0
+      version: ^2.0.0
     - name: espressif/esp_rainmaker
       registry_url: https://components.espressif.com
       require: private
@@ -89,7 +89,7 @@ dependencies:
       require: private
       rules:
       - if: target == esp32p4
-      version: ^0.13.0
+      version: ^1.2.2
     - name: espressif/lan867x
       registry_url: https://components.espressif.com
       require: private
@@ -138,21 +138,22 @@ dependencies:
     - esp32c3
     - esp32c5
     - esp32c6
+    - esp32c61
     - esp32h2
     - esp32p4
     - esp32s2
     - esp32s3
-    version: 3.3.3
+    version: 3.3.7
   espressif/cbor:
-    component_hash: 440f4ee4504841cc9b4f3a8ef755776a612ac9dace355514c68b999868f990ff
+    component_hash: dad9ca860963e930366510a10b422b3125a4fb27b979712ed65efcbcd742de50
     dependencies:
     - name: idf
       require: private
-      version: '>=4.3'
+      version: '>=5.0'
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 0.6.0~1
+    version: 0.6.1~4
   espressif/esp-dsp:
     component_hash: 42dce32d46ac93dc11f60d368e29a830e9661c7345d794b8a45c343479cae636
     dependencies:
@@ -191,7 +192,7 @@ dependencies:
       type: service
     version: 1.6.4
   espressif/esp-zigbee-lib:
-    component_hash: 4b73d7dc7d018114f24712a5af1bb7a53dca95f979fe646461f066f344dd9120
+    component_hash: fa0812e6743e2a7d999af9f44ccdcea17ccb1e80f98d6b2956f44687503a88fd
     dependencies:
     - name: idf
       require: private
@@ -199,7 +200,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.6.7
+    version: 1.6.8
   espressif/esp_diag_data_store:
     component_hash: c1e5cf62f545d2b136db299f4df1b228b9840be5bc3410c9ad2d2a882b5c0d64
     dependencies:
@@ -253,7 +254,7 @@ dependencies:
       type: service
     version: 1.2.2
   espressif/esp_modem:
-    component_hash: 40af7f39c6c8c0c85c98014721fca8d9d2186f18f70645c66b94548192cf1e03
+    component_hash: 07b6ca85dc0c1edbcd76f650005c74067001db138db6bfa106bf05567adca4af
     dependencies:
     - name: idf
       require: private
@@ -261,7 +262,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.4.2
+    version: 2.0.0
   espressif/esp_rainmaker:
     component_hash: f6fe458fc7a0102ee2879f0247da4b41419e6c07de12031f66e5e9454d25baaa
     dependencies:
@@ -335,7 +336,7 @@ dependencies:
       type: service
     version: 1.2.0
   espressif/esp_secure_cert_mgr:
-    component_hash: e8ce8d5ac0ef4ef5df12fdb266190413c4170ad39b394435f0e3115a4fddc6a6
+    component_hash: 054e3b074b5cd50cacfcbdb5e7ccc2b4d6d26c1016268297c6027897e28928ca
     dependencies:
     - name: idf
       require: private
@@ -343,7 +344,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 2.7.2
+    version: 2.9.0
   espressif/jsmn:
     component_hash: d80350c41bbaa827c98a25b6072df00884e72f54885996fab4a4f0aebce6b6c3
     dependencies:
@@ -375,7 +376,7 @@ dependencies:
       type: service
     version: 1.0.3
   espressif/libsodium:
-    component_hash: 25b968723c584a2742ca36cebe5a7ef049c6767e059f7b1e1eec69946019025d
+    component_hash: 6ee084dee7a4d664498274870aa65391c9ec9d38dcdb34d2ad2b8518726f8b5e
     dependencies:
     - name: idf
       require: private
@@ -383,9 +384,9 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.0.20~2
+    version: 1.0.20~3
   espressif/mdns:
-    component_hash: 29e47564b1a7ee778135e17fbbf2a2773f71c97ebabfe626c8eda7c958a7ad16
+    component_hash: 043f989435fd88f771c70507bfde854380c259a8fec8c0d60bcfd8714f16960e
     dependencies:
     - name: idf
       require: private
@@ -393,7 +394,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.9.1
+    version: 1.10.0
   espressif/network_provisioning:
     component_hash: ef2e10182fd1861e68b821491916327c25416ca7ae70e5a6e43313dbc71fe993
     dependencies:
@@ -421,9 +422,9 @@ dependencies:
   idf:
     source:
       type: idf
-    version: 5.5.1
+    version: 5.5.2
   joltwallet/littlefs:
-    component_hash: 1808d73e99168f6f3c26dd31799a248484762b3a320ec4962dec11a145f4277f
+    component_hash: dcea25bcef2de023f089f5f01e8d8c46ad1b8ffef75861ad5ffb4098555839df
     dependencies:
     - name: idf
       require: private
@@ -431,7 +432,7 @@ dependencies:
     source:
       registry_url: https://components.espressif.com
       type: service
-    version: 1.20.3
+    version: 1.20.4
 direct_dependencies:
 - espressif/arduino-esp32
 manifest_hash: a7af9d974ec0e4a93d215549901c1af52b6316d01e44e93148d98c3ad7647a26

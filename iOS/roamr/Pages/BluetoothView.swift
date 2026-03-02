@@ -14,6 +14,27 @@ struct BluetoothView: View {
 	@EnvironmentObject private var bluetoothManager: BluetoothManager
     @State private var messageToSend = ""
 
+	private var sortedDiscoveredDevices: [CBPeripheral] {
+		bluetoothManager.discoveredDevices.sorted { lhs, rhs in
+			let lhsName = lhs.name ?? ""
+			let rhsName = rhs.name ?? ""
+			let lhsIsPreferred = lhsName.hasPrefix("ESP32_C6")
+			let rhsIsPreferred = rhsName.hasPrefix("ESP32_C6")
+
+			if lhsIsPreferred != rhsIsPreferred {
+				return lhsIsPreferred
+			}
+
+			let lhsLower = lhsName.lowercased()
+			let rhsLower = rhsName.lowercased()
+			if lhsLower != rhsLower {
+				return lhsLower < rhsLower
+			}
+
+			return lhs.identifier.uuidString < rhs.identifier.uuidString
+		}
+	}
+
     var body: some View {
         VStack {
 			PageHeader(
@@ -33,7 +54,7 @@ struct BluetoothView: View {
             // Scan Button
             if !bluetoothManager.isConnected {
 				List {
-					ForEach(bluetoothManager.discoveredDevices, id: \.identifier) { device in
+					ForEach(sortedDiscoveredDevices, id: \.identifier) { device in
 						Button(action: {
 							bluetoothManager.connect(to: device)
 						}) {
@@ -72,12 +93,19 @@ struct BluetoothView: View {
                     Spacer()
 
 					// Last Message
-					Text(bluetoothManager.lastMessage.isEmpty ? " " : bluetoothManager.lastMessage)
-						.font(.caption2)
-						.foregroundColor(.gray)
-						.lineLimit(1)
-						.truncationMode(.middle)
-						.padding()
+					VStack(spacing: 6) {
+						Text(bluetoothManager.lastSentCommand.isEmpty ? " " : "Sent: \(bluetoothManager.lastSentCommand)")
+							.font(.caption2)
+							.foregroundColor(.gray)
+							.lineLimit(1)
+							.truncationMode(.middle)
+						Text(bluetoothManager.lastOdomInfo.isEmpty ? " " : bluetoothManager.lastOdomInfo)
+							.font(.caption2)
+							.foregroundColor(.gray)
+							.lineLimit(1)
+							.truncationMode(.middle)
+					}
+					.padding()
                 }
 				.padding(.bottom, AppConstants.shared.tabBarHeight)
             }
