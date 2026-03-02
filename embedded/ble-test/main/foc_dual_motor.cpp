@@ -22,6 +22,7 @@
 #endif
 #include "esp_log.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "nvs_flash.h"
 
 extern "C" void __wrap_esp_log_write(esp_log_level_t level, const char *tag,
@@ -150,6 +151,8 @@ static uint8_t g_data_char_value[BLE_DATA_CHAR_MAX_LEN] = {0};
 static uint8_t g_status_char_value[sizeof(OdomStatusPayload)] = {0};
 static uint8_t g_data_cccd_value[2] = {0, 0};
 
+SemaphoreHandle_t g_odom_mutex = NULL;
+
 bool init_success = false;
 bool motor1_ready = false;
 bool motor2_ready = false;
@@ -173,17 +176,21 @@ static bool timeReached(uint32_t now_ms, uint32_t target_ms) {
 }
 
 static void odomBufferClear() {
+  if (g_odom_mutex) xSemaphoreTake(g_odom_mutex, portMAX_DELAY);
   g_ring_head = 0;
   g_ring_tail = 0;
   g_ring_count = 0;
   g_dropped_samples = 0;
   markStatusDirty();
+  if (g_odom_mutex) xSemaphoreGive(g_odom_mutex);
 }
 
 static bool odomBufferPush(const OdomSample &sample) {
+  if (g_odom_mutex) xSemaphoreTake(g_odom_mutex, portMAX_DELAY);
   if (g_ring_count >= ODOM_RING_CAPACITY) {
     g_dropped_samples++;
     markStatusDirty();
+    if (g_odom_mutex) xSemaphoreGive(g_odom_mutex);
     return false;
   }
 
@@ -191,21 +198,27 @@ static bool odomBufferPush(const OdomSample &sample) {
   g_ring_head = (g_ring_head + 1) % ODOM_RING_CAPACITY;
   g_ring_count++;
   markStatusDirty();
+  if (g_odom_mutex) xSemaphoreGive(g_odom_mutex);
   return true;
 }
 
 static OdomSample odomBufferPeek(size_t index) {
+  if (g_odom_mutex) xSemaphoreTake(g_odom_mutex, portMAX_DELAY);
   size_t pos = (g_ring_tail + index) % ODOM_RING_CAPACITY;
-  return g_ring_buffer[pos];
+  OdomSample s = g_ring_buffer[pos];
+  if (g_odom_mutex) xSemaphoreGive(g_odom_mutex);
+  return s;
 }
 
 static void odomBufferDrop(size_t count) {
+  if (g_odom_mutex) xSemaphoreTake(g_odom_mutex, portMAX_DELAY);
   if (count > g_ring_count) {
     count = g_ring_count;
   }
   g_ring_tail = (g_ring_tail + count) % ODOM_RING_CAPACITY;
   g_ring_count -= count;
   markStatusDirty();
+  if (g_odom_mutex) xSemaphoreGive(g_odom_mutex);
 }
 
 static int16_t wrappedDeltaTicks(uint16_t current, uint16_t previous) {
@@ -711,6 +724,37 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
   }
 }
 
+void realTimeTask(void *pvParameters) {
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  const TickType_t xFrequency = pdMS_TO_TICKS(1);
+
+  while (true) {
+    if (init_success) {
+      if (motor1_ready) {
+        motor1.loopFOC();
+        motor1.move();
+      }
+      if (motor2_ready) {
+        motor2.loopFOC();
+        motor2.move();
+      }
+      odometryUpdateTick();
+    }
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+  }
+}
+
+void commTask(void *pvParameters) {
+  while (true) {
+    if (init_success) {
+      bleUploadLoop();
+      refreshStatusCharacteristic();
+      command.run();
+    }
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -810,35 +854,19 @@ void setup() {
   init_success = true;
   motor1_ready = m1_ready;
   motor2_ready = m2_ready;
+
+  g_odom_mutex = xSemaphoreCreateMutex();
+  xTaskCreatePinnedToCore(realTimeTask, "RealTime", 4096, NULL, 10, NULL, 0);
+  xTaskCreatePinnedToCore(commTask, "Comm", 4096, NULL, 1, NULL, 0);
 }
 
 void loop() {
-  if (!init_success) {
-    return;
-  }
-
-  if (motor1_ready) {
-    motor1.loopFOC();
-    motor1.move();
-  }
-  if (motor2_ready) {
-    motor2.loopFOC();
-    motor2.move();
-  }
-  command.run();
-
-  odometryUpdateTick();
-  bleUploadLoop();
-  refreshStatusCharacteristic();
 }
 
 extern "C" void app_main() {
   initArduino();
   setup();
-  while (true) {
-    loop();
-    vTaskDelay(1);
-  }
+  vTaskDelete(NULL);
 }
 
 #pragma GCC diagnostic pop
