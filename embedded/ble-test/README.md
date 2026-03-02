@@ -151,3 +151,25 @@ So frame size is `3 + 4*n` bytes.
 - `dropped_samples`: `uint16`
 - `last_seq`: `uint16` (`0xFFFF` before first upload frame)
 - `sample_period_ms`: `uint16`
+
+### docker build
+
+For reproducible builds across platforms, we suggest using the docker container for release-v5.5
+
+https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/tools/idf-docker-image.html
+
+```sh
+docker run --rm -v $PWD:/project -w /project -u $UID -e HOME=/tmp -it espressif/idf:release-v5.5
+```
+
+Build, then flash the firmware.
+
+```sh
+idf.py build
+```
+
+Then flash the ESP. It may be necessary to configure additional settings in Windows or MacOS.
+
+```sh
+idf.py flash
+```
