@@ -45,6 +45,8 @@ extern "C" void __wrap_esp_log_write(esp_log_level_t level, const char *tag,
 constexpr uint16_t BLE_DEFAULT_ATT_MTU = 23;
 constexpr uint16_t BLE_PREFERRED_ATT_MTU = 185;
 constexpr size_t BLE_DATA_CHAR_MAX_LEN = 244;
+constexpr bool BLE_PACKET_LOGGING = true; // temporary debug logging
+constexpr size_t BLE_LOG_HEX_PREVIEW_BYTES = 24;
 
 constexpr size_t ODOM_RING_CAPACITY = 2048;
 constexpr uint16_t ODOM_DEFAULT_SAMPLE_PERIOD_MS = 20;
@@ -52,8 +54,8 @@ constexpr uint16_t ODOM_MIN_SAMPLE_PERIOD_MS = 5;
 constexpr uint16_t ODOM_MAX_SAMPLE_PERIOD_MS = 1000;
 constexpr uint8_t ODOM_FRAME_HEADER_SIZE = 3; // seq:uint16 + n:uint8
 constexpr uint8_t ODOM_SAMPLE_SIZE = 4;       // dl:int16 + dr:int16
-constexpr uint8_t MAX_NOTIFY_FRAMES_PER_LOOP = 4;
 constexpr size_t CONTROL_CMD_MAX_LEN = 127;
+constexpr uint16_t MOTOR_MIN_HOLD_MS = 100; // 0.1s minimum hold
 
 constexpr int PIN_MOSI = 4;
 constexpr int PIN_SCLK = 5;
@@ -136,6 +138,9 @@ static uint32_t g_dropped_samples = 0;
 
 static uint16_t g_upload_seq = 0;
 static uint16_t g_last_uploaded_seq = 0xFFFF;
+static bool g_odom_indication_pending = false;
+static size_t g_pending_samples = 0;
+static uint16_t g_pending_seq = 0;
 static uint32_t g_record_until_ms = 0;
 static uint16_t g_sample_period_ms = ODOM_DEFAULT_SAMPLE_PERIOD_MS;
 static uint32_t g_last_sample_ms = 0;
@@ -150,11 +155,45 @@ static uint8_t g_data_char_value[BLE_DATA_CHAR_MAX_LEN] = {0};
 static uint8_t g_status_char_value[sizeof(OdomStatusPayload)] = {0};
 static uint8_t g_data_cccd_value[2] = {0, 0};
 
+static bool g_motor_hold_active = false;
+static uint32_t g_motor_hold_until_ms = 0; // 0 means "until next command"
+
 bool init_success = false;
 bool motor1_ready = false;
 bool motor2_ready = false;
 
 static void markStatusDirty() { g_status_dirty = true; }
+
+static void logBlePacket(const char *dir, uint16_t handle, const uint8_t *data,
+                         size_t len) {
+  if (!BLE_PACKET_LOGGING || dir == nullptr) {
+    return;
+  }
+
+  if (data == nullptr || len == 0) {
+    Serial.printf("BLE %s h=0x%04X len=%u\n", dir, handle,
+                  static_cast<unsigned>(len));
+    return;
+  }
+
+  constexpr char kHexDigits[] = "0123456789ABCDEF";
+  char hex[(BLE_LOG_HEX_PREVIEW_BYTES * 3) + 1];
+
+  size_t shown = len < BLE_LOG_HEX_PREVIEW_BYTES ? len : BLE_LOG_HEX_PREVIEW_BYTES;
+  size_t out = 0;
+  for (size_t i = 0; i < shown; i++) {
+    uint8_t b = data[i];
+    hex[out++] = kHexDigits[(b >> 4) & 0x0F];
+    hex[out++] = kHexDigits[b & 0x0F];
+    hex[out++] = (i + 1 < shown) ? ' ' : '\0';
+  }
+  if (shown == 0) {
+    hex[0] = '\0';
+  }
+
+  Serial.printf("BLE %s h=0x%04X len=%u%s %s\n", dir, handle,
+                static_cast<unsigned>(len), shown < len ? "+" : "", hex);
+}
 
 static uint16_t clampU16(uint32_t value) {
   return value > 0xFFFFu ? 0xFFFFu : static_cast<uint16_t>(value);
@@ -170,6 +209,12 @@ static void setOdomState(OdomState state) {
 
 static bool timeReached(uint32_t now_ms, uint32_t target_ms) {
   return static_cast<int32_t>(now_ms - target_ms) >= 0;
+}
+
+static void resetPendingOdomIndication() {
+  g_odom_indication_pending = false;
+  g_pending_samples = 0;
+  g_pending_seq = 0;
 }
 
 static void odomBufferClear() {
@@ -276,11 +321,42 @@ static int parseIntTokens(const char *text, int *out_values, int max_values) {
   return count;
 }
 
+static void applyMotorCommand(float left_voltage, float right_voltage, int hold_ms) {
+  motor1.target = left_voltage;
+  motor2.target = right_voltage;
+
+  g_motor_hold_active = true;
+  if (hold_ms > 0) {
+    uint32_t effective_hold_ms = static_cast<uint32_t>(hold_ms);
+    if (effective_hold_ms < MOTOR_MIN_HOLD_MS) {
+      effective_hold_ms = MOTOR_MIN_HOLD_MS;
+    }
+    g_motor_hold_until_ms = millis() + effective_hold_ms;
+  } else {
+    // Hold until a new command arrives.
+    g_motor_hold_until_ms = 0;
+  }
+}
+
+static void updateMotorCommandWatchdog() {
+  if (!g_motor_hold_active || g_motor_hold_until_ms == 0) {
+    return;
+  }
+
+  if (timeReached(millis(), g_motor_hold_until_ms)) {
+    motor1.target = 0.0f;
+    motor2.target = 0.0f;
+    g_motor_hold_active = false;
+    g_motor_hold_until_ms = 0;
+  }
+}
+
 static void startRecording(int duration_ms, int requested_sample_period_ms) {
   if (duration_ms <= 0) {
     return;
   }
 
+  resetPendingOdomIndication();
   odomBufferClear();
   g_upload_seq = 0;
   g_last_uploaded_seq = 0xFFFF;
@@ -293,6 +369,17 @@ static void startRecording(int duration_ms, int requested_sample_period_ms) {
   setOdomState(OdomState::RECORDING);
 }
 
+static void startContinuousStreaming() {
+  resetPendingOdomIndication();
+  odomBufferClear();
+  g_upload_seq = 0;
+  g_last_uploaded_seq = 0xFFFF;
+  g_prev_raw_valid = false;
+  g_record_until_ms = 0;
+  g_last_sample_ms = millis();
+  setOdomState(OdomState::RECORDING);
+}
+
 static void stopRecordingAndUpload() {
   if (g_odom_state == OdomState::RECORDING || g_ring_count > 0) {
     setOdomState(OdomState::UPLOADING);
@@ -302,6 +389,7 @@ static void stopRecordingAndUpload() {
 }
 
 static void clearRecording() {
+  resetPendingOdomIndication();
   odomBufferClear();
   g_upload_seq = 0;
   g_last_uploaded_seq = 0xFFFF;
@@ -318,12 +406,12 @@ static void handleMotorCommand(const char *cmd) {
     float left_voltage = (left_pct / 100.0f) * 12.0f;
     float right_voltage = -(right_pct / 100.0f) * 12.0f;
 
-    motor1.target = left_voltage;
-    motor2.target = right_voltage;
-    (void)duration_ms;
+    applyMotorCommand(left_voltage, right_voltage, duration_ms);
     return;
   }
 
+  g_motor_hold_active = false;
+  g_motor_hold_until_ms = 0;
   command.run(const_cast<char *>(cmd));
 }
 
@@ -384,8 +472,7 @@ static void addControlCharacteristic() {
 
   esp_ble_gatts_add_char(g_service_handle, &char_uuid,
                          ESP_GATT_PERM_WRITE,
-                         ESP_GATT_CHAR_PROP_BIT_WRITE |
-                             ESP_GATT_CHAR_PROP_BIT_WRITE_NR,
+                         ESP_GATT_CHAR_PROP_BIT_WRITE_NR,
                          &control_attr, nullptr);
 }
 
@@ -400,7 +487,7 @@ static void addDataCharacteristic() {
   data_attr.attr_value = g_data_char_value;
 
   esp_ble_gatts_add_char(g_service_handle, &char_uuid, ESP_GATT_PERM_READ,
-                         ESP_GATT_CHAR_PROP_BIT_NOTIFY, &data_attr, nullptr);
+                         ESP_GATT_CHAR_PROP_BIT_INDICATE, &data_attr, nullptr);
 }
 
 static void addDataCccdDescriptor() {
@@ -452,6 +539,8 @@ static void sendWriteResponseIfNeeded(esp_gatt_if_t gatts_if,
 
   esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
                               param->write.trans_id, ESP_GATT_OK, &rsp);
+  logBlePacket("TX-RSP", rsp.attr_value.handle, rsp.attr_value.value,
+               rsp.attr_value.len);
 }
 
 static void odometryUpdateTick() {
@@ -469,7 +558,7 @@ static void odometryUpdateTick() {
   }
 
   if (static_cast<uint32_t>(now - g_last_sample_ms) < g_sample_period_ms) {
-    if (timeReached(now, g_record_until_ms)) {
+    if (g_record_until_ms != 0 && timeReached(now, g_record_until_ms)) {
       setOdomState(OdomState::UPLOADING);
     }
     return;
@@ -487,17 +576,21 @@ static void odometryUpdateTick() {
   g_prev_right_raw = right_raw;
   g_last_sample_ms = now;
 
-  if (timeReached(now, g_record_until_ms)) {
+  if (g_record_until_ms != 0 && timeReached(now, g_record_until_ms)) {
     setOdomState(OdomState::UPLOADING);
   }
 }
 
 static void bleUploadLoop() {
-  if (g_odom_state != OdomState::UPLOADING) {
+  if (g_odom_state == OdomState::IDLE) {
     return;
   }
 
-  if (g_ring_count == 0) {
+  if (g_odom_indication_pending) {
+    return;
+  }
+
+  if (g_ring_count == 0 && g_odom_state == OdomState::UPLOADING) {
     setOdomState(OdomState::IDLE);
     return;
   }
@@ -527,49 +620,61 @@ static void bleUploadLoop() {
     max_samples = 255;
   }
 
+  if (g_ring_count == 0 || g_ble_congested) {
+    return;
+  }
+
+  size_t samples_in_frame = g_ring_count < max_samples ? g_ring_count : max_samples;
+  if (samples_in_frame == 0) {
+    return;
+  }
+
   uint8_t frame[BLE_DATA_CHAR_MAX_LEN];
+  frame[0] = static_cast<uint8_t>(g_upload_seq & 0xFF);
+  frame[1] = static_cast<uint8_t>((g_upload_seq >> 8) & 0xFF);
+  frame[2] = static_cast<uint8_t>(samples_in_frame);
 
-  for (uint8_t frame_idx = 0; frame_idx < MAX_NOTIFY_FRAMES_PER_LOOP;
-       frame_idx++) {
-    if (g_ring_count == 0 || g_ble_congested) {
-      break;
-    }
+  size_t offset = ODOM_FRAME_HEADER_SIZE;
+  for (size_t i = 0; i < samples_in_frame; i++) {
+    OdomSample sample = odomBufferPeek(i);
 
-    size_t samples_in_frame = g_ring_count < max_samples ? g_ring_count : max_samples;
-    if (samples_in_frame == 0) {
-      break;
-    }
+    uint16_t dl = static_cast<uint16_t>(sample.dl_ticks);
+    uint16_t dr = static_cast<uint16_t>(sample.dr_ticks);
 
-    frame[0] = static_cast<uint8_t>(g_upload_seq & 0xFF);
-    frame[1] = static_cast<uint8_t>((g_upload_seq >> 8) & 0xFF);
-    frame[2] = static_cast<uint8_t>(samples_in_frame);
+    frame[offset++] = static_cast<uint8_t>(dl & 0xFF);
+    frame[offset++] = static_cast<uint8_t>((dl >> 8) & 0xFF);
+    frame[offset++] = static_cast<uint8_t>(dr & 0xFF);
+    frame[offset++] = static_cast<uint8_t>((dr >> 8) & 0xFF);
+  }
 
-    size_t offset = ODOM_FRAME_HEADER_SIZE;
-    for (size_t i = 0; i < samples_in_frame; i++) {
-      OdomSample sample = odomBufferPeek(i);
+  esp_err_t err = esp_ble_gatts_send_indicate(
+      g_ble_gatts_if, g_ble_conn_id, g_data_char_handle, offset, frame, true);
+  if (err != ESP_OK) {
+    return;
+  }
 
-      uint16_t dl = static_cast<uint16_t>(sample.dl_ticks);
-      uint16_t dr = static_cast<uint16_t>(sample.dr_ticks);
+  logBlePacket("TX", g_data_char_handle, frame, offset);
+  g_odom_indication_pending = true;
+  g_pending_samples = samples_in_frame;
+  g_pending_seq = g_upload_seq;
+}
 
-      frame[offset++] = static_cast<uint8_t>(dl & 0xFF);
-      frame[offset++] = static_cast<uint8_t>((dl >> 8) & 0xFF);
-      frame[offset++] = static_cast<uint8_t>(dr & 0xFF);
-      frame[offset++] = static_cast<uint8_t>((dr >> 8) & 0xFF);
-    }
+static void handleOdomIndicationConfirm(esp_ble_gatts_cb_param_t *param) {
+  if (!g_odom_indication_pending || param == nullptr ||
+      param->conf.handle != g_data_char_handle) {
+    return;
+  }
 
-    esp_err_t err = esp_ble_gatts_send_indicate(
-        g_ble_gatts_if, g_ble_conn_id, g_data_char_handle, offset, frame, false);
-    if (err != ESP_OK) {
-      break;
-    }
-
-    odomBufferDrop(samples_in_frame);
-    g_last_uploaded_seq = g_upload_seq;
-    g_upload_seq++;
+  if (param->conf.status == ESP_GATT_OK) {
+    odomBufferDrop(g_pending_samples);
+    g_last_uploaded_seq = g_pending_seq;
+    g_upload_seq = static_cast<uint16_t>(g_pending_seq + 1);
     markStatusDirty();
   }
 
-  if (g_ring_count == 0) {
+  resetPendingOdomIndication();
+
+  if (g_ring_count == 0 && g_odom_state == OdomState::UPLOADING) {
     setOdomState(OdomState::IDLE);
   }
 }
@@ -655,6 +760,10 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
     g_data_notify_enabled = false;
     g_ble_congested = false;
     g_negotiated_att_mtu = BLE_DEFAULT_ATT_MTU;
+    resetPendingOdomIndication();
+    if (BLE_PACKET_LOGGING) {
+      Serial.printf("BLE CONNECT conn_id=%u\n", g_ble_conn_id);
+    }
     markStatusDirty();
     break;
 
@@ -663,23 +772,38 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
     g_data_notify_enabled = false;
     g_ble_congested = false;
     g_negotiated_att_mtu = BLE_DEFAULT_ATT_MTU;
+    clearRecording();
     esp_ble_gap_start_advertising(&adv_params);
     markStatusDirty();
     break;
 
   case ESP_GATTS_MTU_EVT:
     g_negotiated_att_mtu = param->mtu.mtu;
+    if (BLE_PACKET_LOGGING) {
+      Serial.printf("BLE MTU=%u\n", g_negotiated_att_mtu);
+    }
     break;
 
   case ESP_GATTS_CONGEST_EVT:
     g_ble_congested = param->congest.congested;
     break;
 
+  case ESP_GATTS_CONF_EVT:
+    handleOdomIndicationConfirm(param);
+    break;
+
   case ESP_GATTS_WRITE_EVT: {
+    logBlePacket("RX", param->write.handle, param->write.value, param->write.len);
+
     if (param->write.handle == g_data_cccd_handle && param->write.len >= 2) {
       uint16_t cccd = static_cast<uint16_t>(param->write.value[0]) |
                       (static_cast<uint16_t>(param->write.value[1]) << 8);
-      g_data_notify_enabled = (cccd & 0x0001u) != 0;
+      g_data_notify_enabled = (cccd & 0x0002u) != 0;
+      if (g_data_notify_enabled) {
+        startContinuousStreaming();
+      } else {
+        clearRecording();
+      }
       markStatusDirty();
     } else if (param->write.handle == g_control_char_handle) {
       handleControlCommand(param->write.value, param->write.len);
@@ -816,6 +940,8 @@ void loop() {
   if (!init_success) {
     return;
   }
+
+  updateMotorCommandWatchdog();
 
   if (motor1_ready) {
     motor1.loopFOC();
