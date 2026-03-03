@@ -6,13 +6,11 @@
 //
 
 import SwiftUI
-import CoreBluetooth
 
 struct BluetoothView: View {
 	@Environment(\.safeAreaInsets) private var safeAreaInsets
 
 	@EnvironmentObject private var bluetoothManager: BluetoothManager
-    @State private var messageToSend = ""
 
 	private var sortedDiscoveredDevices: [CBPeripheral] {
 		bluetoothManager.discoveredDevices.sorted { lhs, rhs in
@@ -88,24 +86,30 @@ struct BluetoothView: View {
                             let message = "\(left) \(right) \(duration)"
                             bluetoothManager.sendMessage(message)
                         }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(bluetoothManager.lastMotorCommandText)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundColor(.secondary)
+                            Text(bluetoothManager.lastOdomFrameText)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundColor(.secondary)
+                            Text(bluetoothManager.lastMotorOdomText)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
                     }
 
                     Spacer()
 
-					// Last Message
-					VStack(spacing: 6) {
-						Text(bluetoothManager.lastSentCommand.isEmpty ? " " : "Sent: \(bluetoothManager.lastSentCommand)")
-							.font(.caption2)
-							.foregroundColor(.gray)
-							.lineLimit(1)
-							.truncationMode(.middle)
-						Text(bluetoothManager.lastOdomInfo.isEmpty ? " " : bluetoothManager.lastOdomInfo)
-							.font(.caption2)
-							.foregroundColor(.gray)
-							.lineLimit(1)
-							.truncationMode(.middle)
-					}
-					.padding()
+					Text(bluetoothManager.lastMessage.isEmpty ? " " : bluetoothManager.lastMessage)
+						.font(.caption2)
+						.foregroundColor(.gray)
+						.lineLimit(1)
+						.truncationMode(.middle)
+						.padding()
                 }
 				.padding(.bottom, AppConstants.shared.tabBarHeight)
             }

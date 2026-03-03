@@ -26,32 +26,30 @@ class BluetoothManager: NSObject, ObservableObject {
     @Published var isConnected = false
     @Published var connectionStatus = "Not Connected"
     @Published var lastMessage = ""
-    @Published var lastSentCommand = ""
-    @Published var lastOdomInfo = ""
+    @Published var lastMotorCommandText = "TX motor: -"
+    @Published var lastOdomFrameText = "RX odom: -"
+    @Published var lastMotorOdomText = "TX->RX: -"
 
     private var centralManager: CBCentralManager!
     private var controlCharacteristic: CBCharacteristic?
     private var dataCharacteristic: CBCharacteristic?
-    private var statusCharacteristic: CBCharacteristic?
     private var shouldStartScanningWhenReady = false
-    private var odomCharacteristicsDiscoveryRequested = false
+    private var odomNotifyRequested = false
 
     private var lastOdomSeq: UInt16?
     private var latestOdomSamplePeriodMs: UInt16 = 20
+    private var lastMotorCommandTimestamp: TimeInterval = 0
+    private var lastMotorLeftPercent = 0
+    private var lastMotorRightPercent = 0
+    private var lastMotorHoldMs = 0
     private let odomQueueLock = NSLock()
     private var pendingOdomSamples: [WheelOdometrySample] = []
     private let maxPendingOdomSamples = 12_000
-    private let odomControlQueue = DispatchQueue(label: "com.roamr.odom-control")
-    private var odomStreamingEnabled = false
-    private var odomStreamingWorkItem: DispatchWorkItem?
-    private let odomSessionDurationMs = 900
-    private let odomSessionIntervalMs = 1200
 
     // UUIDs matching ESP32 firmware
     private let serviceUUID = CBUUID(string: "00FF")
     private let controlCharacteristicUUID = CBUUID(string: "FF01")
     private let dataCharacteristicUUID = CBUUID(string: "FF02")
-    private let statusCharacteristicUUID = CBUUID(string: "FF03")
 
     override init() {
         super.init()
@@ -110,25 +108,24 @@ class BluetoothManager: NSObject, ObservableObject {
         device.writeValue(data, for: characteristic, type: writeType)
         lastMessage = "Sent: \(message)"
         print("[BLE TX] queued msg=\"\(message)\"")
-    }
 
-    func startOdometry(durationMs: Int, samplePeriodMs: Int = 20) {
-        sendMessage("START \(durationMs) \(samplePeriodMs)")
-    }
-
-    func stopOdometry() {
-        sendMessage("STOP")
-    }
-
-    func clearOdometry() {
-        sendMessage("CLEAR")
-    }
-
-    func requestOdometryStatus() {
-        if let device = connectedDevice, let statusCharacteristic {
-            device.readValue(for: statusCharacteristic)
+        if let motor = parseMotorCommand(message) {
+            lastMotorCommandTimestamp = Date().timeIntervalSince1970
+            lastMotorLeftPercent = motor.left
+            lastMotorRightPercent = motor.right
+            lastMotorHoldMs = motor.durationMs
+            lastMotorCommandText = "TX motor: \(motor.left) \(motor.right) \(motor.durationMs)"
+            return
         }
-        sendMessage("GET_STATUS")
+
+        if let samplePeriodMs = parseSetPeriodCommand(message) {
+            let clamped = max(1, min(1000, samplePeriodMs))
+            latestOdomSamplePeriodMs = UInt16(clamped)
+        }
+    }
+
+    func setOdometrySamplePeriod(samplePeriodMs: Int) {
+        sendMessage("SET_PERIOD \(samplePeriodMs)")
     }
 
     func popWheelOdometrySample() -> WheelOdometrySample? {
@@ -139,11 +136,8 @@ class BluetoothManager: NSObject, ObservableObject {
     }
 
     func ensureWheelOdometryStreaming() {
-        odomControlQueue.async {
-            self.odomStreamingEnabled = true
-            DispatchQueue.main.async {
-                self.activateOdometryStreamingIfPossible()
-            }
+        DispatchQueue.main.async { [weak self] in
+            self?.activateOdometryStreamingIfPossible()
         }
     }
 
@@ -164,62 +158,13 @@ class BluetoothManager: NSObject, ObservableObject {
         odomQueueLock.unlock()
     }
 
-    private func stopWheelOdometryStreaming() {
-        odomControlQueue.async {
-            self.odomStreamingEnabled = false
-            self.odomStreamingWorkItem?.cancel()
-            self.odomStreamingWorkItem = nil
-        }
-    }
-
-    private func scheduleNextOdometrySession(immediate: Bool) {
-        odomStreamingWorkItem?.cancel()
-        let delayMs = immediate ? 0 : odomSessionIntervalMs
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            guard self.odomStreamingEnabled else { return }
-
-            DispatchQueue.main.async {
-                guard self.isConnected, self.controlCharacteristic != nil else { return }
-                guard self.dataCharacteristic?.isNotifying == true else { return }
-                self.startOdometry(
-                    durationMs: self.odomSessionDurationMs,
-                    samplePeriodMs: Int(self.latestOdomSamplePeriodMs)
-                )
-            }
-
-            self.odomControlQueue.async {
-                self.scheduleNextOdometrySession(immediate: false)
-            }
-        }
-        odomStreamingWorkItem = workItem
-        odomControlQueue.asyncAfter(deadline: .now() + .milliseconds(delayMs), execute: workItem)
-    }
-
-    private func requestOdometryCharacteristicsIfNeeded(on peripheral: CBPeripheral) {
-        guard !odomCharacteristicsDiscoveryRequested else { return }
-        guard let services = peripheral.services, !services.isEmpty else { return }
-        odomCharacteristicsDiscoveryRequested = true
-        for service in services {
-            peripheral.discoverCharacteristics([dataCharacteristicUUID, statusCharacteristicUUID], for: service)
-        }
-    }
-
     private func activateOdometryStreamingIfPossible() {
-        guard isConnected, let device = connectedDevice else { return }
-        if dataCharacteristic == nil || statusCharacteristic == nil {
-            requestOdometryCharacteristicsIfNeeded(on: device)
+        guard isConnected, let device = connectedDevice, let dataCharacteristic else { return }
+        if dataCharacteristic.isNotifying || odomNotifyRequested {
+            return
         }
-        guard let dataCharacteristic else { return }
-        if dataCharacteristic.isNotifying {
-            odomControlQueue.async {
-                if self.odomStreamingEnabled && self.odomStreamingWorkItem == nil {
-                    self.scheduleNextOdometrySession(immediate: true)
-                }
-            }
-        } else {
-            device.setNotifyValue(true, for: dataCharacteristic)
-        }
+        odomNotifyRequested = true
+        device.setNotifyValue(true, for: dataCharacteristic)
     }
 
     private func decodeOdomFrame(_ data: Data) {
@@ -267,10 +212,20 @@ class BluetoothManager: NSObject, ObservableObject {
             )
             offset += 4
         }
+
         enqueueWheelOdometrySamples(samples)
         odomQueueLock.lock()
         let queuedCount = pendingOdomSamples.count
         odomQueueLock.unlock()
+
+        let sumDl = samples.reduce(0) { $0 + Int($1.dlTicks) }
+        let sumDr = samples.reduce(0) { $0 + Int($1.drTicks) }
+        lastOdomFrameText = "RX odom: seq \(seq) n \(sampleCount) sum(\(sumDl),\(sumDr)) q=\(queuedCount)"
+
+        let sinceMotorCommandMs = Int((Date().timeIntervalSince1970 - lastMotorCommandTimestamp) * 1000.0)
+        if lastMotorCommandTimestamp > 0, sinceMotorCommandMs >= 0, sinceMotorCommandMs <= 2000 {
+            lastMotorOdomText = "TX->RX: cmd(\(lastMotorLeftPercent),\(lastMotorRightPercent),\(lastMotorHoldMs)) -> ticks(\(sumDl),\(sumDr)) @\(sinceMotorCommandMs)ms"
+        }
 
         if let first = samples.first {
             print("[BLE ODOM RX] frame seq=\(seq) n=\(sampleCount) dt_ms=\(latestOdomSamplePeriodMs) first=(\(first.dlTicks),\(first.drTicks)) queued=\(queuedCount)")
@@ -281,32 +236,6 @@ class BluetoothManager: NSObject, ObservableObject {
         let odomInfo = "Odom seq=\(seq) n=\(sampleCount)"
         lastOdomInfo = odomInfo
         lastMessage = odomInfo
-    }
-
-    private func decodeOdomStatus(_ data: Data) {
-        guard data.count >= 9 else {
-            print("[BLE ODOM RX] status too short bytes=\(data.count)")
-            return
-        }
-
-        let bytes = [UInt8](data)
-        let state = bytes[0]
-        let buffered = UInt16(bytes[1]) | (UInt16(bytes[2]) << 8)
-        let dropped = UInt16(bytes[3]) | (UInt16(bytes[4]) << 8)
-        let lastSeq = UInt16(bytes[5]) | (UInt16(bytes[6]) << 8)
-        let samplePeriodMs = UInt16(bytes[7]) | (UInt16(bytes[8]) << 8)
-        latestOdomSamplePeriodMs = samplePeriodMs
-
-        let stateName: String
-        switch state {
-        case 0: stateName = "IDLE"
-        case 1: stateName = "RECORDING"
-        case 2: stateName = "UPLOADING"
-        default: stateName = "UNKNOWN(\(state))"
-        }
-
-        print("[BLE ODOM RX] status state=\(stateName) buffered=\(buffered) dropped=\(dropped) last_seq=\(lastSeq) dt_ms=\(samplePeriodMs)")
-        lastOdomInfo = "Odom \(stateName) buffered=\(buffered) dropped=\(dropped) dt=\(samplePeriodMs)ms"
     }
 }
 
@@ -337,13 +266,18 @@ extension BluetoothManager: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        stopWheelOdometryStreaming()
         connectedDevice = peripheral
         isConnected = true
-        odomCharacteristicsDiscoveryRequested = false
         lastOdomSeq = nil
         latestOdomSamplePeriodMs = 20
-        lastOdomInfo = ""
+        odomNotifyRequested = false
+        lastMotorCommandText = "TX motor: -"
+        lastOdomFrameText = "RX odom: -"
+        lastMotorOdomText = "TX->RX: -"
+        lastMotorCommandTimestamp = 0
+        lastMotorLeftPercent = 0
+        lastMotorRightPercent = 0
+        lastMotorHoldMs = 0
         clearWheelOdometrySamples()
         connectionStatus = "Connected to \(peripheral.name ?? "Unknown")"
         peripheral.delegate = self
@@ -355,14 +289,17 @@ extension BluetoothManager: CBCentralManagerDelegate {
         isConnected = false
         controlCharacteristic = nil
         dataCharacteristic = nil
-        statusCharacteristic = nil
-        odomCharacteristicsDiscoveryRequested = false
         lastOdomSeq = nil
         latestOdomSamplePeriodMs = 20
-        lastSentCommand = ""
-        lastOdomInfo = ""
+        odomNotifyRequested = false
+        lastMotorCommandText = "TX motor: -"
+        lastOdomFrameText = "RX odom: -"
+        lastMotorOdomText = "TX->RX: -"
+        lastMotorCommandTimestamp = 0
+        lastMotorLeftPercent = 0
+        lastMotorRightPercent = 0
+        lastMotorHoldMs = 0
         clearWheelOdometrySamples()
-        stopWheelOdometryStreaming()
         connectionStatus = "Disconnected"
     }
 
@@ -372,6 +309,25 @@ extension BluetoothManager: CBCentralManagerDelegate {
             print("Connection error: \(error.localizedDescription)")
         }
     }
+}
+
+private func parseMotorCommand(_ text: String) -> (left: Int, right: Int, durationMs: Int)? {
+    let tokens = text.split(whereSeparator: { $0.isWhitespace })
+    guard tokens.count == 3,
+          let left = Int(tokens[0]),
+          let right = Int(tokens[1]),
+          let durationMs = Int(tokens[2]) else {
+        return nil
+    }
+    return (left, right, durationMs)
+}
+
+private func parseSetPeriodCommand(_ text: String) -> Int? {
+    let tokens = text.split(whereSeparator: { $0.isWhitespace })
+    guard tokens.count == 2, String(tokens[0]) == "SET_PERIOD", let period = Int(tokens[1]) else {
+        return nil
+    }
+    return period
 }
 
 // exported function for Wasm
@@ -398,10 +354,8 @@ func read_wheel_odometry_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawP
 extension BluetoothManager: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard let services = peripheral.services else { return }
-
-        for service in services {
-            // Keep control discovery behavior aligned with the old working manager.
-            peripheral.discoverCharacteristics([controlCharacteristicUUID], for: service)
+        for service in services where service.uuid == serviceUUID {
+            peripheral.discoverCharacteristics([controlCharacteristicUUID, dataCharacteristicUUID], for: service)
         }
     }
 
@@ -412,49 +366,37 @@ extension BluetoothManager: CBPeripheralDelegate {
             if characteristic.uuid == controlCharacteristicUUID {
                 controlCharacteristic = characteristic
                 print("Control characteristic discovered")
-                if odomStreamingEnabled {
-                    activateOdometryStreamingIfPossible()
-                }
             } else if characteristic.uuid == dataCharacteristicUUID {
                 dataCharacteristic = characteristic
                 print("Data characteristic discovered")
-                if odomStreamingEnabled {
-                    activateOdometryStreamingIfPossible()
-                }
-            } else if characteristic.uuid == statusCharacteristicUUID {
-                statusCharacteristic = characteristic
-                print("Status characteristic discovered")
-                if odomStreamingEnabled {
-                    peripheral.readValue(for: characteristic)
-                }
             }
         }
 
+        activateOdometryStreamingIfPossible()
+
         if controlCharacteristic != nil {
-            connectionStatus = "Ready"
+            connectionStatus = (dataCharacteristic?.isNotifying == true) ? "Ready + Odom Notify" : "Ready"
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        if characteristic.uuid != dataCharacteristicUUID {
+            return
+        }
+
+        odomNotifyRequested = false
+
         if let error = error {
-            print("Failed to subscribe to notifications: \(error.localizedDescription)")
+            print("Failed to subscribe to odometry notifications: \(error.localizedDescription)")
             return
         }
 
         if characteristic.isNotifying {
             print("Notifications enabled for \(characteristic.uuid)")
-            if characteristic.uuid == dataCharacteristicUUID {
-                connectionStatus = "Ready + Odom Notify"
-                if odomStreamingEnabled {
-                    odomControlQueue.async {
-                        if self.odomStreamingWorkItem == nil {
-                            self.scheduleNextOdometrySession(immediate: true)
-                        }
-                    }
-                }
-            }
+            connectionStatus = "Ready + Odom Notify"
         } else {
             print("Notifications disabled for \(characteristic.uuid)")
+            activateOdometryStreamingIfPossible()
         }
     }
 
@@ -479,13 +421,7 @@ extension BluetoothManager: CBPeripheralDelegate {
         }
 
         if characteristic.uuid == dataCharacteristicUUID {
-            print("[BLE ODOM RX] notify bytes=\(data.count)")
             decodeOdomFrame(data)
-            return
-        }
-
-        if characteristic.uuid == statusCharacteristicUUID {
-            decodeOdomStatus(data)
             return
         }
 
