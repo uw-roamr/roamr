@@ -105,7 +105,10 @@ namespace mapping {
                              sensors::LidarCameraData* rerun_out,
                              bool update_map,
                              bool& map_initialized,
-                             const core::Vector4d& q_body_to_world_in) {
+                             const core::Vector4d& q_body_to_world_in
+                            //  const core::PoseSE3d& pose,
+                            //  const bool rotation_only_bc_imu_drifts
+                            ) {
     const int total_points = static_cast<int>(lc_data.points_size / 3);
     if (total_points <= 0) return;
 
@@ -262,5 +265,5 @@ namespace mapping {
                 << " | up=[" << cx << "," << cy << "," << cz << "]"
                 << std::endl;
     }
-  } 
+  }
 }//namespace mapping
