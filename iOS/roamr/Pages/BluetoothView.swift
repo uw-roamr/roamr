@@ -6,13 +6,11 @@
 //
 
 import SwiftUI
-import CoreBluetooth
 
 struct BluetoothView: View {
 	@Environment(\.safeAreaInsets) private var safeAreaInsets
 
 	@EnvironmentObject private var bluetoothManager: BluetoothManager
-    @State private var messageToSend = ""
 
     var body: some View {
         VStack {
@@ -67,11 +65,24 @@ struct BluetoothView: View {
                             let message = "\(left) \(right) \(duration)"
                             bluetoothManager.sendMessage(message)
                         }
+
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(bluetoothManager.lastMotorCommandText)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundColor(.secondary)
+                            Text(bluetoothManager.lastOdomFrameText)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundColor(.secondary)
+                            Text(bluetoothManager.lastMotorOdomText)
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 20)
                     }
 
                     Spacer()
 
-					// Last Message
 					Text(bluetoothManager.lastMessage.isEmpty ? " " : bluetoothManager.lastMessage)
 						.font(.caption2)
 						.foregroundColor(.gray)

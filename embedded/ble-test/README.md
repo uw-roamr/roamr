@@ -115,20 +115,17 @@ idf.py build
 
 ## BLE Odometry Upload Protocol
 
-The firmware now exposes one custom service (`0x00FF`) with 3 characteristics:
+The firmware exposes one custom service (`0x00FF`) with 2 characteristics:
 
 - `0xFF01` control (`WRITE`, `WRITE_NO_RSP`)
 - `0xFF02` data (`NOTIFY`)
-- `0xFF03` status (`READ`)
 
 ### Control commands (`FF01`)
 
-- `START <duration_ms> [sample_period_ms]`
-- `STOP`
-- `CLEAR`
-- `GET_STATUS`
+- `SET_PERIOD <sample_period_ms>`
+- `CLEAR` (clears pending encoder backlog)
 
-Legacy motor command writes (`"<left> <right> <duration>"`) still work on `FF01`.
+Legacy motor command writes (`"<left> <right> <duration>"`) still work on `FF01` and can be sent continuously while odometry notifications are active.
 
 ### Data frames (`FF02` notify)
 
@@ -144,10 +141,4 @@ Each notification is MTU-aware and chunked (`max_payload = ATT_MTU - 3`).
 
 So frame size is `3 + 4*n` bytes.
 
-### Status payload (`FF03` read, little-endian)
-
-- `state`: `uint8` (`0=IDLE, 1=RECORDING, 2=UPLOADING`)
-- `buffered_samples`: `uint16`
-- `dropped_samples`: `uint16`
-- `last_seq`: `uint16` (`0xFFFF` before first upload frame)
-- `sample_period_ms`: `uint16`
+There is no separate status characteristic in the stripped-down firmware.
