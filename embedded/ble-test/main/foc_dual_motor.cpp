@@ -110,7 +110,15 @@ static uint8_t g_data_cccd_value[2] = {0, 0};
 
 static bool g_motor_left_ready = false;
 static bool g_motor_right_ready = false;
-
+extern "C" void __wrap_esp_log_write(esp_log_level_t level, const char *tag,
+                                     const char *format, ...) {
+  (void)level;
+  (void)tag;
+  va_list args;
+  va_start(args, format);
+  vprintf(format, args);
+  va_end(args);
+}
 static int clampPercent(int value) {
   if (value < -100) {
     return -100;
