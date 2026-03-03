@@ -55,6 +55,16 @@ constexpr int PIN_DRIVER2_2 = 22;
 constexpr int PIN_DRIVER2_3 = 21;
 constexpr int PIN_DRIVER2_EN = 20;
 
+extern "C" void __wrap_esp_log_write(esp_log_level_t level, const char *tag,
+                                     const char *format, ...) {
+  (void)level;
+  (void)tag;
+  va_list args;
+  va_start(args, format);
+  vprintf(format, args);
+  va_end(args);
+}
+
 struct OdomSample {
   int16_t dl_ticks;
   int16_t dr_ticks;
