@@ -122,9 +122,11 @@ int main(){
       while(true){
 
         core::Vector4d q_body_to_world = {0.0, 0.0, 0.0, 1.0};
+        core::Vector3d t_body_to_world = {0.0, 0.0, 0.0};
         {
             std::lock_guard<std::mutex> lk(m_pose);
             q_body_to_world = g_pose.quaternion;
+            t_body_to_world = g_pose.translation;
         }
 
         const int ready_idx = g_lc_ready_idx.exchange(-1, std::memory_order_acq_rel);
@@ -145,7 +147,15 @@ int main(){
             continue;
         }
         g_last_map_timestamp = map_timestamp;
-        mapping::update_map_from_lidar(lc_data, g_map_frame, &g_rerun_lc, do_map_update, g_map_initialized, q_body_to_world);
+        mapping::update_map_from_lidar(
+            lc_data,
+            g_map_frame,
+            &g_rerun_lc,
+            do_map_update,
+            g_map_initialized,
+            q_body_to_world,
+            t_body_to_world
+        );
         g_lc_in_use_idx.store(-1, std::memory_order_release);
 
         if (g_rerun_lc.points_size > 0) {
@@ -185,7 +195,7 @@ int main(){
     });
 
     // TODO: remove once autonomy control loop is closed
-    controls::drive_forward_demo();
+    // controls::drive_forward_demo();
 
     imu_thread.join();
     lidar_camera_thread.join();

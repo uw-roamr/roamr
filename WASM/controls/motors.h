@@ -56,10 +56,13 @@ namespace controls{
         MotorController motors;
 
         // Ramp from reverse to forward with a dwell at each step.
-        for (int i = -2; i <= 3; i++){
-            const int pct = i * 10;
-            motors.drive_for(-pct, pct, 3000, true);
-        }
+        // for (int i = -2; i <= 3; i++){
+        //     const int pct = i * 10;
+        //     motors.drive_for(-pct, pct, 3000, true);
+        // }
+
+        motors.drive_for(10, 12, 5000, true);
+
         motors.stop();
     }
 }; //namespace controls

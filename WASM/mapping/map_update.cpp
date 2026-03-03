@@ -10,6 +10,7 @@ namespace mapping {
   constexpr int mapWidth = 256;
   constexpr int mapHeight = 256;
   constexpr int mapMaxPoints = 20000; // keep in sync with map.cpp
+  constexpr int mapMaxPoses = 4096; // keep in sync with map.cpp
   constexpr float mapMaxRangeMeters = 1.8f;
   constexpr float mapMinZ = 0.0f; // drop ground (world Z up)
   constexpr float mapMaxZ = 0.15f; // drop ceiling/background
@@ -25,6 +26,7 @@ namespace mapping {
 
   static double g_last_yaw_log_ts = -1.0;
   static double g_last_map_log_ts = -1.0;
+  static int g_pose_history_count = 0;
 
 
   void update_map_from_lidar(const sensors::LidarCameraData& lc_data,
@@ -32,7 +34,8 @@ namespace mapping {
                              sensors::LidarCameraData* rerun_out,
                              bool update_map,
                              bool& map_initialized,
-                             const core::Vector4d& q_body_to_world_in
+                             const core::Vector4d& q_body_to_world_in,
+                             const core::Vector3d& t_body_to_world_in
                             //  const core::PoseSE3d& pose,
                             //  const bool rotation_only_bc_imu_drifts
                             ) {
@@ -44,11 +47,12 @@ namespace mapping {
       reset_points();
       reset_poses();
       set_points_world(1);
-      set_pose(0, 0.0f, 0.0f, 0.0f);
+      g_pose_history_count = 0;
       map_initialized = true;
     }
 
     const core::Vector4d q_body_to_world = core::quat_normalize(q_body_to_world_in);
+    const core::Vector3d t_body_to_world = t_body_to_world_in;
     const bool points_rdf =
         lc_data.points_frame_id == static_cast<core::CoordinateFrameId_t>(core::CoordinateFrameId::kRDF);
 
@@ -65,7 +69,14 @@ namespace mapping {
     // project to SE2
     const double yaw = std::atan2(ffw.y, ffw.x);
     const double range = std::sqrt(ffw.x * ffw.x + ffw.y * ffw.y);
-    set_pose(0, 0.0f, 0.0f, yaw);
+    if (update_map) {
+      if (g_pose_history_count < mapMaxPoses) {
+        set_pose(g_pose_history_count, t_body_to_world.x, t_body_to_world.y, yaw);
+        g_pose_history_count += 1;
+      } else {
+        set_pose(mapMaxPoses - 1, t_body_to_world.x, t_body_to_world.y, yaw);
+      }
+    }
 
 
     const core::Vector4d q_body_to_world_yaw = core::quat_from_euler_zyx(0.0f, 0.0f, yaw);
@@ -104,7 +115,10 @@ namespace mapping {
       }
 
       const core::Vector3d sensor_point = {x, y, z};
-      const core::Vector3d world_point = core::quat_rotate(q_point_to_world, sensor_point);
+      core::Vector3d world_point = core::quat_rotate(q_point_to_world, sensor_point);
+      world_point.x += t_body_to_world.x;
+      world_point.y += t_body_to_world.y;
+      world_point.z += t_body_to_world.z;
       const core::Vector3d& wp = world_point;
 
 
@@ -144,7 +158,9 @@ namespace mapping {
       }
 
       if (update_map && filtered && (i % stride == 0) && used_points < mapMaxPoints) {
-        const core::Vector3d map_point = core::quat_rotate(q_point_to_world_yaw, sensor_point);
+        core::Vector3d map_point = core::quat_rotate(q_point_to_world_yaw, sensor_point);
+        map_point.x += t_body_to_world.x;
+        map_point.y += t_body_to_world.y;
         set_point(used_points, map_point.x, map_point.y);
         used_points += 1;
       }
@@ -162,7 +178,7 @@ namespace mapping {
     }
     g_last_map_log_ts = lc_data.timestamp;
 
-    draw_map(1, used_points, mapWidth, mapHeight);
+    draw_map(g_pose_history_count, used_points, mapWidth, mapHeight);
 
     map_frame.width = get_image_width();
     map_frame.timestamp = lc_data.timestamp;

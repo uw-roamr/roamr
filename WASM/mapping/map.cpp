@@ -372,26 +372,51 @@
 			}
 		}
 
-		// Overlay poses as 3x3 white dots.
-		for (int32_t i = 0; i < poseCount; ++i) {
-			int32_t base = i * 3;
+		// Overlay wheel-odometry path as a red polyline.
+		if (poseCount > 1) {
+			for (int32_t i = 1; i < poseCount; ++i) {
+				const int32_t base0 = (i - 1) * 3;
+				const int32_t base1 = i * 3;
+				const double x0_world = POSES[base0 + 0];
+				const double y0_world = POSES[base0 + 1];
+				const double x1_world = POSES[base1 + 0];
+				const double y1_world = POSES[base1 + 1];
+				int32_t gx0 = 0, gy0 = 0, gx1 = 0, gy1 = 0;
+				if (!world_to_grid(x0_world, y0_world, &gx0, &gy0) ||
+					!world_to_grid(x1_world, y1_world, &gx1, &gy1)) {
+					continue;
+				}
+				int32_t px0 = 0, py0 = 0, px1 = 0, py1 = 0;
+				if (!grid_to_pixel(gx0, gy0, scale, off_x, off_y, &px0, &py0) ||
+					!grid_to_pixel(gx1, gy1, scale, off_x, off_y, &px1, &py1)) {
+					continue;
+				}
+				draw_line_pixel(px0, py0, px1, py1, 255, 0, 0, 255);
+			}
+		}
+
+		// Overlay only the latest pose as a 3x3 white dot.
+		if (poseCount > 0) {
+			int32_t base = (poseCount - 1) * 3;
 			const double px_world = POSES[base + 0];
 			const double py_world = POSES[base + 1];
 			int32_t gx = 0;
 			int32_t gy = 0;
-			if (!world_to_grid(px_world, py_world, &gx, &gy)) continue;
-			int32_t px = 0;
-			int32_t py = 0;
-			if (!grid_to_pixel(gx, gy, scale, off_x, off_y, &px, &py)) continue;
-			for (int dy = -1; dy <= 1; ++dy) {
-				for (int dx = -1; dx <= 1; ++dx) {
-					int32_t x = clampi(px + dx, 0, CUR_W - 1);
-					int32_t y = clampi(py + dy, 0, CUR_H - 1);
-					int32_t o = (y * CUR_W + x) * 4;
-					IMAGE[o + 0] = 255;
-					IMAGE[o + 1] = 255;
-					IMAGE[o + 2] = 255;
-					IMAGE[o + 3] = 255;
+			if (world_to_grid(px_world, py_world, &gx, &gy)) {
+				int32_t px = 0;
+				int32_t py = 0;
+				if (grid_to_pixel(gx, gy, scale, off_x, off_y, &px, &py)) {
+					for (int dy = -1; dy <= 1; ++dy) {
+						for (int dx = -1; dx <= 1; ++dx) {
+							int32_t x = clampi(px + dx, 0, CUR_W - 1);
+							int32_t y = clampi(py + dy, 0, CUR_H - 1);
+							int32_t o = (y * CUR_W + x) * 4;
+							IMAGE[o + 0] = 255;
+							IMAGE[o + 1] = 255;
+							IMAGE[o + 2] = 255;
+							IMAGE[o + 3] = 255;
+						}
+					}
 				}
 			}
 		}
