@@ -32,6 +32,8 @@ constexpr size_t ODOM_RING_CAPACITY = 2048;
 constexpr uint16_t ODOM_DEFAULT_SAMPLE_PERIOD_MS = 20;
 constexpr uint16_t ODOM_MIN_SAMPLE_PERIOD_MS = 5;
 constexpr uint16_t ODOM_MAX_SAMPLE_PERIOD_MS = 1000;
+constexpr int kLeftEncoderSign = 1;
+constexpr int kRightEncoderSign = -1;
 constexpr uint8_t ODOM_FRAME_HEADER_SIZE = 3; // seq:uint16 + n:uint8
 constexpr uint8_t ODOM_SAMPLE_SIZE = 4;       // dl:int16 + dr:int16
 constexpr uint8_t MAX_NOTIFY_FRAMES_PER_LOOP = 4;
@@ -110,15 +112,7 @@ static uint8_t g_data_cccd_value[2] = {0, 0};
 
 static bool g_motor_left_ready = false;
 static bool g_motor_right_ready = false;
-extern "C" void __wrap_esp_log_write(esp_log_level_t level, const char *tag,
-                                     const char *format, ...) {
-  (void)level;
-  (void)tag;
-  va_list args;
-  va_start(args, format);
-  vprintf(format, args);
-  va_end(args);
-}
+
 static int clampPercent(int value) {
   if (value < -100) {
     return -100;
@@ -339,9 +333,11 @@ static void odometryUpdateTick() {
   const uint16_t left_raw = g_sensor_left.readRawAngle();
   const uint16_t right_raw = g_sensor_right.readRawAngle();
 
+  const int16_t dl = wrappedDeltaTicks(left_raw, g_prev_left_raw);
+  const int16_t dr = wrappedDeltaTicks(right_raw, g_prev_right_raw);
   OdomSample sample = {};
-  sample.dl_ticks = wrappedDeltaTicks(left_raw, g_prev_left_raw);
-  sample.dr_ticks = wrappedDeltaTicks(right_raw, g_prev_right_raw);
+  sample.dl_ticks = static_cast<int16_t>(kLeftEncoderSign * static_cast<int32_t>(dl));
+  sample.dr_ticks = static_cast<int16_t>(kRightEncoderSign * static_cast<int32_t>(dr));
   odomBufferPush(sample);
 
   g_prev_left_raw = left_raw;
