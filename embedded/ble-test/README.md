@@ -142,3 +142,48 @@ Each notification is MTU-aware and chunked (`max_payload = ATT_MTU - 3`).
 So frame size is `3 + 4*n` bytes.
 
 There is no separate status characteristic in the stripped-down firmware.
+### Status payload (`FF03` read, little-endian)
+
+- `state`: `uint8` (`0=IDLE, 1=RECORDING, 2=UPLOADING`)
+- `buffered_samples`: `uint16`
+- `dropped_samples`: `uint16`
+- `last_seq`: `uint16` (`0xFFFF` before first upload frame)
+- `sample_period_ms`: `uint16`
+
+### docker build
+
+For reproducible builds across platforms, we suggest using the docker container for release-v5.5
+
+https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/tools/idf-docker-image.html
+
+```sh
+docker run --rm -v $PWD:/project -w /project -u $UID -e HOME=/tmp -it espressif/idf:release-v5.5
+```
+
+## Linux
+```sh
+docker run --rm -v $PWD:/project -w /project -u $UID -e HOME=/tmp -it --device=/dev/ttyUSB0 --group-add dialout espressif/idf:release-v5.5
+```
+
+Build, then flash the firmware.
+
+```sh
+idf.py build
+```
+
+Then flash the ESP. It may be necessary to configure additional settings in Windows or MacOS.
+
+```sh
+idf.py flash
+```
+
+## Windows Instructions:
+
+Run the following command in a separate terminal to open the COM port to the ESP (check your COM port in device manager)
+```sh
+esp_rfc2217_server -v -p 4000 COM3
+```
+To flash the ESP,  run the following command in roamr/embedded/ble-test
+```sh
+MSYS_NO_PATHCONV=1 docker run --rm -v "/$(pwd):/project" -w /project -u $UID -e HOME=/tmp -it espressif/idf:release-v5.5 idf.py --port 'rfc2217://host.docker.internal:4000?ign_set_control' flash
+```

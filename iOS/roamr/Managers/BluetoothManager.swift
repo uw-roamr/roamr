@@ -91,6 +91,8 @@ class BluetoothManager: NSObject, ObservableObject {
     }
 
     func sendMessage(_ message: String) {
+        lastSentCommand = message
+
         guard let characteristic = controlCharacteristic,
               let device = connectedDevice,
               let data = message.data(using: .utf8) else {
@@ -231,7 +233,9 @@ class BluetoothManager: NSObject, ObservableObject {
             print("[BLE ODOM RX] frame seq=\(seq) n=0 queued=\(queuedCount)")
         }
 
-        lastMessage = "Odom seq=\(seq) n=\(sampleCount)"
+        let odomInfo = "Odom seq=\(seq) n=\(sampleCount)"
+        lastOdomInfo = odomInfo
+        lastMessage = odomInfo
     }
 }
 
