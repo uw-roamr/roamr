@@ -44,7 +44,6 @@ enum class PoseSource{
 static constexpr PoseSource pose_source = PoseSource::wheel_odom;
 
 
-
 int main(){
     std::mutex m_imu;
     std::mutex m_lc;
@@ -196,6 +195,7 @@ int main(){
 
     // TODO: remove once autonomy control loop is closed
     // controls::drive_forward_demo();
+    controls::drive_twist_demo();
 
     imu_thread.join();
     lidar_camera_thread.join();
