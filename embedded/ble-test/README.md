@@ -162,6 +162,11 @@ https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/tools/idf
 docker run --rm -v $PWD:/project -w /project -u $UID -e HOME=/tmp -it espressif/idf:release-v5.5
 ```
 
+## Linux
+```sh
+docker run --rm -v $PWD:/project -w /project -u $UID -e HOME=/tmp -it --device=/dev/ttyUSB0 --group-add dialout espressif/idf:release-v5.5
+```
+
 Build, then flash the firmware.
 
 ```sh
