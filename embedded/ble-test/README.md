@@ -173,3 +173,14 @@ Then flash the ESP. It may be necessary to configure additional settings in Wind
 ```sh
 idf.py flash
 ```
+
+## Windows Instructions:
+
+Run the following command in a separate terminal to open the COM port to the ESP (check your COM port in device manager)
+```sh
+esp_rfc2217_server -v -p 4000 COM3
+```
+To flash the ESP,  run the following command in roamr/embedded/ble-test
+```sh
+MSYS_NO_PATHCONV=1 docker run --rm -v "/$(pwd):/project" -w /project -u $UID -e HOME=/tmp -it espressif/idf:release-v5.5 idf.py --port 'rfc2217://host.docker.internal:4000?ign_set_control' flash
+```
