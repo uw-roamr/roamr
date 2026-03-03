@@ -14,7 +14,7 @@ struct MotorCommand {
     var hold_ms: Int32
 }
 
-// Simple watchdog to enforce hold_ms on the iOS side (BLE target currently ignores it).
+// Host watchdog for hold_ms. Firmware also enforces hold timeout as a safety backstop.
 private let motorQueue = DispatchQueue(label: "com.roamr.motorbridge")
 private var lastCommandToken = 0
 

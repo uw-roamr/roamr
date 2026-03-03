@@ -144,6 +144,8 @@ static uint8_t g_data_cccd_value[2] = {0, 0};
 bool init_success = false;
 bool motor1_ready = false;
 bool motor2_ready = false;
+static bool g_motor_hold_active = false;
+static uint32_t g_motor_hold_until_ms = 0;
 
 static void markStatusDirty() { g_status_dirty = true; }
 
@@ -161,6 +163,22 @@ static void setOdomState(OdomState state) {
 
 static bool timeReached(uint32_t now_ms, uint32_t target_ms) {
   return static_cast<int32_t>(now_ms - target_ms) >= 0;
+}
+
+static void stopMotorsNow() {
+  motor1.target = 0.0f;
+  motor2.target = 0.0f;
+}
+
+static void updateMotorHoldTimeout() {
+  if (!g_motor_hold_active) {
+    return;
+  }
+  uint32_t now = millis();
+  if (timeReached(now, g_motor_hold_until_ms)) {
+    stopMotorsNow();
+    g_motor_hold_active = false;
+  }
 }
 
 static void odomBufferClear() {
@@ -306,12 +324,20 @@ static void handleMotorCommand(const char *cmd) {
     int left_pct = values[0];
     int right_pct = values[1];
     int duration_ms = values[2];
+    if (duration_ms < 0) {
+      duration_ms = 0;
+    }
     float left_voltage = (left_pct / 100.0f) * 12.0f;
     float right_voltage = -(right_pct / 100.0f) * 12.0f;
 
     motor1.target = left_voltage;
     motor2.target = right_voltage;
-    (void)duration_ms;
+    if (duration_ms > 0) {
+      g_motor_hold_until_ms = millis() + static_cast<uint32_t>(duration_ms);
+      g_motor_hold_active = true;
+    } else {
+      g_motor_hold_active = false;
+    }
     return;
   }
 
@@ -340,7 +366,11 @@ static void handleControlCommand(const uint8_t *data, uint16_t len) {
     int values[2] = {0, static_cast<int>(ODOM_DEFAULT_SAMPLE_PERIOD_MS)};
     int parsed = parseIntTokens(cmd + 5, values, 2);
     if (parsed >= 1) {
-      startRecording(values[0], values[1]);
+      // START is only valid from IDLE; repeated START while active must not
+      // wipe buffered samples or reset an active upload session.
+      if (g_odom_state == OdomState::IDLE) {
+        startRecording(values[0], values[1]);
+      }
     }
     return;
   }
@@ -646,6 +676,7 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
     g_data_notify_enabled = false;
     g_ble_congested = false;
     g_negotiated_att_mtu = BLE_DEFAULT_ATT_MTU;
+    g_motor_hold_active = false;
     markStatusDirty();
     break;
 
@@ -654,6 +685,8 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
     g_data_notify_enabled = false;
     g_ble_congested = false;
     g_negotiated_att_mtu = BLE_DEFAULT_ATT_MTU;
+    g_motor_hold_active = false;
+    stopMotorsNow();
     esp_ble_gap_start_advertising(&adv_params);
     markStatusDirty();
     break;
@@ -807,6 +840,8 @@ void loop() {
   if (!init_success) {
     return;
   }
+
+  updateMotorHoldTimeout();
 
   if (motor1_ready) {
     motor1.loopFOC();
