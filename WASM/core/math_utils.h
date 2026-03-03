@@ -6,6 +6,8 @@
 
 namespace core {
 
+constexpr double pi = 3.141592653589793238462643383279502884;
+
 struct Vector3d {
   double x = 0.0;
   double y = 0.0;
@@ -143,12 +145,30 @@ inline Vector4d quat_mul(const Vector4d& a, const Vector4d& b) noexcept {
   return {cv.x, cv.y, cv.z, w};
 }
 
+
 inline Vector4d quat_normalize(const Vector4d& q) noexcept {
   const double n = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
   if (n < 1e-12) {
     return quat_identity();
   }
   return {q.x / n, q.y / n, q.z / n, q.w / n};
+}
+
+inline Vector4d quat_from_euler_zyx(const double roll, const double pitch, const double yaw){
+  const float cr = std::cos(roll * 0.5f);
+    const float sr = std::sin(roll * 0.5f);
+    const float cp = std::cos(pitch * 0.5f);
+    const float sp = std::sin(pitch * 0.5f);
+    const float cy = std::cos(yaw * 0.5f);
+    const float sy = std::sin(yaw * 0.5f);
+
+    Vector4d q{
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+        cr * cp * cy + sr * sp * sy,
+    };
+    return quat_normalize(q);
 }
 
 inline Vector4d quat_from_rotvec(const Vector3d& w) noexcept {

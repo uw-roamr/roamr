@@ -22,8 +22,8 @@ namespace mapping{
   void reset_points();
   void reset_poses();
   void set_points_world(int32_t in_world);
-  void set_pose(int32_t idx, float x, float y, float theta);
-  void set_point(int32_t idx, float x, float y);
+  void set_pose(int32_t idx, double x, double y, double theta);
+  void set_point(int32_t idx, double x, double y);
   void draw_map(int32_t poseCount, int32_t pointCount, int32_t width, int32_t height);
   int32_t get_image_width();
   int32_t get_image_height();

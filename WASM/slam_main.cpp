@@ -28,12 +28,12 @@ static sensors::LidarCameraData g_rerun_lc;
 static sensors::calibration::IMUHistoryBuffer g_imu_history;
 static sensors::calibration::IMUCalibration g_imu_calib(g_imu_history);
 static sensors::IMUPreintegrator g_imu_preintegrator(g_imu_calib);
-static core::Vector4d g_latest_quat_imu = {0.0, 0.0, 0.0, 1.0};
+static core::Vector4d g_latest_quat_imu = core::quat_identity();
 static std::atomic<bool> g_imu_ready{false};
 
 // motor encoder odometry globals
 static core::Vector3d g_latest_translation_odom = {0.0, 0.0, 0.0};
-static core::Vector4d g_latest_quat_odom = {0.0, 0.0, 0.0, 1.0};
+static core::Vector4d g_latest_quat_odom = core::quat_identity();
 
 static sensors::PoseLog g_pose;
 enum class PoseSource{
@@ -80,11 +80,9 @@ int main(){
                 imu_copy = g_imu_calib.curr_slot();
             }
             g_imu_preintegrator.integrate(imu_copy);
-            {
-                std::lock_guard<std::mutex> lk(m_pose);
-                g_latest_quat_imu = g_imu_preintegrator.pose().quaternion;
-            }
+            g_latest_quat_imu = g_imu_preintegrator.pose().quaternion;
             if (pose_source == PoseSource::IMU){
+                std::lock_guard<std::mutex> lk(m_pose);
                 g_imu_preintegrator.get_pose_log(&g_pose);
                 rerun_log_pose(&g_pose);
             }
@@ -126,7 +124,7 @@ int main(){
         core::Vector4d q_body_to_world = {0.0, 0.0, 0.0, 1.0};
         {
             std::lock_guard<std::mutex> lk(m_pose);
-            q_body_to_world = g_latest_quat_imu;
+            q_body_to_world = g_pose.quaternion;
         }
 
         const int ready_idx = g_lc_ready_idx.exchange(-1, std::memory_order_acq_rel);
@@ -157,7 +155,7 @@ int main(){
       }
     });
 
-    std::thread wheel_odom_thread([](){
+    std::thread wheel_odom_thread([&m_pose](){
         sensors::WheelOdometryData odom = {};
         sensors::PoseLog wheel_pose = {};
         double x = 0.0;
@@ -177,6 +175,7 @@ int main(){
             g_latest_quat_odom = {0.0, 0.0, std::sin(yaw * 0.5), std::cos(yaw * 0.5)};
 
             if (pose_source == PoseSource::wheel_odom){
+                std::lock_guard<std::mutex> lk(m_pose);
                 g_pose.timestamp = odom.timestamp;
                 g_pose.translation = g_latest_translation_odom;
                 g_pose.quaternion = g_latest_quat_odom;
