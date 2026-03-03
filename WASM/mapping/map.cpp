@@ -368,7 +368,7 @@
 				int32_t px = 0;
 				int32_t py = 0;
 				if (!grid_to_pixel(gx, gy, scale, off_x, off_y, &px, &py)) continue;
-				set_pixel(px, py, 255, 0, 0, 255);
+				set_pixel(px, py, 255, 0, 255, 255);
 			}
 		}
 

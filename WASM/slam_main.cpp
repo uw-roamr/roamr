@@ -157,7 +157,6 @@ int main(){
 
     std::thread wheel_odom_thread([&m_pose](){
         sensors::WheelOdometryData odom = {};
-        sensors::PoseLog wheel_pose = {};
         double x = 0.0;
         double y = 0.0;
         double yaw = 0.0;
@@ -170,7 +169,6 @@ int main(){
             }
 
             sensors::integrate_wheel_odometry(odom, &x, &y, &yaw);
-            wheel_pose.timestamp = odom.timestamp;
             g_latest_translation_odom = {x, y, 0.0};
             g_latest_quat_odom = {0.0, 0.0, std::sin(yaw * 0.5), std::cos(yaw * 0.5)};
 
@@ -179,14 +177,15 @@ int main(){
                 g_pose.timestamp = odom.timestamp;
                 g_pose.translation = g_latest_translation_odom;
                 g_pose.quaternion = g_latest_quat_odom;
-                rerun_log_pose(&g_pose);
+                // rerun_log_pose(&g_pose);
+                rerun_log_pose_wheel(&g_pose);
             }
             // rerun_log_pose_wheel(&wheel_pose);
         }
     });
 
     // TODO: remove once autonomy control loop is closed
-    // controls::drive_forward_demo();
+    controls::drive_forward_demo();
 
     imu_thread.join();
     lidar_camera_thread.join();
