@@ -12,8 +12,8 @@ namespace mapping {
   constexpr int mapMaxPoints = 20000; // keep in sync with map.cpp
   constexpr int mapMaxPoses = 4096; // keep in sync with map.cpp
   constexpr float mapMaxRangeMeters = 1.8f;
-  constexpr float mapMinZ = 0.0f; // drop ground (world Z up)
-  constexpr float mapMaxZ = 0.15f; // drop ceiling/background
+  constexpr float mapMinZ = 0.1f; // drop ground (world Z up)
+  constexpr float mapMaxZ = 0.25f; // drop ceiling/background
   // Sensor height above world origin (meters). Use to convert sensor-relative Z to world Z.
   constexpr float sensorHeightMeters = 0.20f;
 
