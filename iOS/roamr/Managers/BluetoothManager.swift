@@ -26,6 +26,8 @@ class BluetoothManager: NSObject, ObservableObject {
     @Published var isConnected = false
     @Published var connectionStatus = "Not Connected"
     @Published var lastMessage = ""
+    @Published var lastSentCommand = ""
+    @Published var lastOdomInfo = ""
 
     private var centralManager: CBCentralManager!
     private var controlCharacteristic: CBCharacteristic?
@@ -91,6 +93,8 @@ class BluetoothManager: NSObject, ObservableObject {
     }
 
     func sendMessage(_ message: String) {
+        lastSentCommand = message
+
         guard let characteristic = controlCharacteristic,
               let device = connectedDevice,
               let data = message.data(using: .utf8) else {
@@ -274,7 +278,9 @@ class BluetoothManager: NSObject, ObservableObject {
             print("[BLE ODOM RX] frame seq=\(seq) n=0 queued=\(queuedCount)")
         }
 
-        lastMessage = "Odom seq=\(seq) n=\(sampleCount)"
+        let odomInfo = "Odom seq=\(seq) n=\(sampleCount)"
+        lastOdomInfo = odomInfo
+        lastMessage = odomInfo
     }
 
     private func decodeOdomStatus(_ data: Data) {
@@ -300,6 +306,7 @@ class BluetoothManager: NSObject, ObservableObject {
         }
 
         print("[BLE ODOM RX] status state=\(stateName) buffered=\(buffered) dropped=\(dropped) last_seq=\(lastSeq) dt_ms=\(samplePeriodMs)")
+        lastOdomInfo = "Odom \(stateName) buffered=\(buffered) dropped=\(dropped) dt=\(samplePeriodMs)ms"
     }
 }
 
@@ -336,6 +343,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
         odomCharacteristicsDiscoveryRequested = false
         lastOdomSeq = nil
         latestOdomSamplePeriodMs = 20
+        lastOdomInfo = ""
         clearWheelOdometrySamples()
         connectionStatus = "Connected to \(peripheral.name ?? "Unknown")"
         peripheral.delegate = self
@@ -351,6 +359,8 @@ extension BluetoothManager: CBCentralManagerDelegate {
         odomCharacteristicsDiscoveryRequested = false
         lastOdomSeq = nil
         latestOdomSamplePeriodMs = 20
+        lastSentCommand = ""
+        lastOdomInfo = ""
         clearWheelOdometrySamples()
         stopWheelOdometryStreaming()
         connectionStatus = "Disconnected"
