@@ -1,7 +1,9 @@
 #include "planning/planner_bridge.h"
 
 #include <algorithm>
+#include <cmath>
 #include <mutex>
+#include <vector>
 
 #include "mapping/map_api.h"
 #include "planning/planner.h"
@@ -21,6 +23,9 @@ struct PlannerGoalPixel {
 
 std::mutex g_planner_goal_mutex;
 PlannerGoalPixel g_planner_goal;
+std::mutex g_planned_path_mutex;
+std::vector<core::Vector3d> g_planned_path_world;
+uint64_t g_planned_path_revision = 0;
 
 PlannerConfig build_planner_config() {
   PlannerConfig cfg;
@@ -120,6 +125,32 @@ bool render_pixel_to_map_cell(
   return true;
 }
 
+bool same_path_world(
+    const std::vector<core::Vector3d>& a,
+    const std::vector<core::Vector3d>& b) {
+  if (a.size() != b.size()) {
+    return false;
+  }
+  constexpr double kEps = 1e-6;
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (std::abs(a[i].x - b[i].x) > kEps ||
+        std::abs(a[i].y - b[i].y) > kEps ||
+        std::abs(a[i].z - b[i].z) > kEps) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void update_cached_path_world(const std::vector<core::Vector3d>& path_world) {
+  std::lock_guard<std::mutex> lk(g_planned_path_mutex);
+  if (same_path_world(g_planned_path_world, path_world)) {
+    return;
+  }
+  g_planned_path_world = path_world;
+  ++g_planned_path_revision;
+}
+
 }  // namespace
 
 void set_goal_map_pixel(int32_t x, int32_t y) {
@@ -146,6 +177,7 @@ void update_plan_overlay(
 
   if (!goal.active) {
     mapping::clear_planned_path();
+    update_cached_path_world({});
     return;
   }
 
@@ -166,6 +198,7 @@ void update_plan_overlay(
           render_height,
           &goal_cell)) {
     mapping::clear_planned_path();
+    update_cached_path_world({});
     return;
   }
 
@@ -180,11 +213,13 @@ void update_plan_overlay(
           body_to_world.translation.x,
           body_to_world.translation.y,
           &start_cell)) {
+    update_cached_path_world({});
     return;
   }
 
   const PlanResult planned = g_planner.plan_to_grid(planner_map, start_cell, goal_cell);
   if (!planned.success || planned.path_grid.empty()) {
+    update_cached_path_world({});
     return;
   }
 
@@ -195,6 +230,15 @@ void update_plan_overlay(
     const GridCoord& c = planned.path_grid[static_cast<size_t>(i)];
     mapping::set_planned_path_cell(i, c.x, c.y);
   }
+  update_cached_path_world(planned.path_world);
+}
+
+uint64_t copy_latest_plan_world(std::vector<core::Vector3d>* out_path) {
+  std::lock_guard<std::mutex> lk(g_planned_path_mutex);
+  if (out_path) {
+    *out_path = g_planned_path_world;
+  }
+  return g_planned_path_revision;
 }
 
 }  // namespace planning::bridge
