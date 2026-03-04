@@ -227,9 +227,9 @@ class BluetoothManager: NSObject, ObservableObject {
         }
 
         if let first = samples.first {
-            print("[BLE ODOM RX] frame seq=\(seq) n=\(sampleCount) dt_ms=\(latestOdomSamplePeriodMs) first=(\(first.dlTicks),\(first.drTicks)) queued=\(queuedCount)")
+            // print("[BLE ODOM RX] frame seq=\(seq) n=\(sampleCount) dt_ms=\(latestOdomSamplePeriodMs) first=(\(first.dlTicks),\(first.drTicks)) queued=\(queuedCount)")
         } else {
-            print("[BLE ODOM RX] frame seq=\(seq) n=0 queued=\(queuedCount)")
+            // print("[BLE ODOM RX] frame seq=\(seq) n=0 queued=\(queuedCount)")
         }
 
         lastMessage = "Odom seq=\(seq) n=\(sampleCount)"

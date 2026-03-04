@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <math.h>
 #include <string.h>
+#include "map_api.h"
 
 
 	namespace mapping{
@@ -27,6 +28,14 @@
 	static const int32_t MAX_POINTS = 20000;
 	static float POINTS[2 * MAX_POINTS];
 	static int32_t POINTS_COUNT = 0;
+
+	// Planned path storage (grid cells in map coordinates).
+	static const int32_t MAX_PLANNED_PATH = 4096;
+	static int32_t PLANNED_PATH[2 * MAX_PLANNED_PATH];
+	static int32_t PLANNED_PATH_COUNT = 0;
+	static int32_t PLANNED_GOAL_ENABLED = 0;
+	static int32_t PLANNED_GOAL_X = 0;
+	static int32_t PLANNED_GOAL_Y = 0;
 
 	// Map parameters (mirroring the ROS node)
 	static const float GRID_RESOLUTION = 0.02f; // meters
@@ -69,6 +78,56 @@
 		MAP_ORIGIN_INITIALIZED = 0;
 		MAP_ORIGIN_OFFSET_X = 0.0f;
 		MAP_ORIGIN_OFFSET_Y = 0.0f;
+	}
+
+	int32_t get_occupancy_grid(int8_t* out_data, int32_t max_cells) {
+		const int32_t total = MAP_SIZE_X * MAP_SIZE_Y;
+		if (!out_data || max_cells < total) {
+			return 0;
+		}
+		for (int32_t gy = 0; gy < MAP_SIZE_Y; ++gy) {
+			for (int32_t gx = 0; gx < MAP_SIZE_X; ++gx) {
+				const int32_t idx = gx + gy * MAP_SIZE_X;
+				int8_t value = -1;
+				if (VISITED[idx]) {
+					value = CONFIRMED[idx] ? 100 : 0;
+				}
+				out_data[idx] = value;
+			}
+		}
+		return total;
+	}
+
+	int32_t get_occupancy_meta(OccupancyGridMeta* out_meta) {
+		if (!out_meta) return 0;
+		out_meta->width = MAP_SIZE_X;
+		out_meta->height = MAP_SIZE_Y;
+		out_meta->resolution_m = GRID_RESOLUTION;
+		out_meta->origin_x_m = -((double)MAP_SIZE_X * 0.5 * GRID_RESOLUTION) - MAP_ORIGIN_OFFSET_X;
+		out_meta->origin_y_m = -((double)MAP_SIZE_Y * 0.5 * GRID_RESOLUTION) - MAP_ORIGIN_OFFSET_Y;
+		out_meta->origin_initialized = MAP_ORIGIN_INITIALIZED ? 1 : 0;
+		return 1;
+	}
+
+	void clear_planned_path() {
+		PLANNED_PATH_COUNT = 0;
+		PLANNED_GOAL_ENABLED = 0;
+	}
+
+	void set_planned_path_cell(int32_t idx, int32_t gx, int32_t gy) {
+		if (idx < 0 || idx >= MAX_PLANNED_PATH) return;
+		int32_t base = idx * 2;
+		PLANNED_PATH[base + 0] = gx;
+		PLANNED_PATH[base + 1] = gy;
+		if (idx + 1 > PLANNED_PATH_COUNT) {
+			PLANNED_PATH_COUNT = idx + 1;
+		}
+	}
+
+	void set_planned_goal_cell(int32_t gx, int32_t gy, int32_t enabled) {
+		PLANNED_GOAL_X = gx;
+		PLANNED_GOAL_Y = gy;
+		PLANNED_GOAL_ENABLED = enabled ? 1 : 0;
 	}
 
 	void set_points_world(int32_t in_world) {
@@ -392,6 +451,35 @@
 					continue;
 				}
 				draw_line_pixel(px0, py0, px1, py1, 255, 0, 0, 255);
+			}
+		}
+
+		// Overlay planned path as a blue polyline.
+		if (PLANNED_PATH_COUNT > 1) {
+			for (int32_t i = 1; i < PLANNED_PATH_COUNT; ++i) {
+				const int32_t base0 = (i - 1) * 2;
+				const int32_t base1 = i * 2;
+				const int32_t gx0 = PLANNED_PATH[base0 + 0];
+				const int32_t gy0 = PLANNED_PATH[base0 + 1];
+				const int32_t gx1 = PLANNED_PATH[base1 + 0];
+				const int32_t gy1 = PLANNED_PATH[base1 + 1];
+				int32_t px0 = 0, py0 = 0, px1 = 0, py1 = 0;
+				if (!grid_to_pixel(gx0, gy0, scale, off_x, off_y, &px0, &py0) ||
+					!grid_to_pixel(gx1, gy1, scale, off_x, off_y, &px1, &py1)) {
+					continue;
+				}
+				draw_line_pixel(px0, py0, px1, py1, 0, 120, 255, 255);
+			}
+		}
+
+		// Blue goal marker.
+		if (PLANNED_GOAL_ENABLED) {
+			int32_t px = 0, py = 0;
+			if (grid_to_pixel(PLANNED_GOAL_X, PLANNED_GOAL_Y, scale, off_x, off_y, &px, &py)) {
+				for (int32_t d = -2; d <= 2; ++d) {
+					set_pixel(px + d, py, 0, 120, 255, 255);
+					set_pixel(px, py + d, 0, 120, 255, 255);
+				}
 			}
 		}
 
