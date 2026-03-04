@@ -9,9 +9,6 @@ extern "C" void __wrap_esp_log_write(esp_log_level_t level, const char *tag,
                                      const char *format, ...) {
   va_list args;
   va_start(args, format);
-  // Simple redirection to vprintf
-  // You might want to format it better if needed, e.g. adding level/tag
-  // printf("[%s] ", tag);
   vprintf(format, args);
   va_end(args);
 }
@@ -22,24 +19,8 @@ extern "C" void __wrap_esp_log_write(esp_log_level_t level, const char *tag,
 #include <SimpleFOC.h>
 #include <SimpleFOCDrivers.h>
 #include "drivers/drv8316/drv8316.h"
-
 #include "driver/gpio.h"
-#include "esp_bt.h"
-#include "esp_bt_main.h"
-#include "esp_gap_ble_api.h"
-#include "esp_gatts_api.h"
-#include "esp_log.h"
 #include "freertos/task.h"
-#include "nvs_flash.h"
-#include <stdarg.h>
-#include <stdio.h>
-#include <string.h>
-
-#define GATTS_TAG "BLE_DEMO"
-#define DEVICE_NAME "ESP32_S3"
-#define GATTS_SERVICE_UUID 0x00FF
-#define GATTS_CHAR_UUID 0xFF01
-#define GATTS_NUM_HANDLE 4
 
 constexpr int PIN_MOSI = 11;
 constexpr int PIN_SCLK = 12;
@@ -57,7 +38,6 @@ constexpr int PIN_DRIVER2_2 = 39;
 constexpr int PIN_DRIVER2_3 = 40;
 constexpr int PIN_DRIVER2_CS = 48;
 
-// Lower SPI frequency to 1MHz to avoid timing/signal issues
 SPISettings mySPISettings(1000000, MSBFIRST, SPI_MODE1);
 MagneticSensorAS5048A sensor1(PIN_CS1, false, mySPISettings);
 MagneticSensorAS5048A sensor2(PIN_CS2, false, mySPISettings);
@@ -71,192 +51,20 @@ Commander command = Commander(Serial);
 void doMotor1(char *cmd) { command.motor(&motor1, cmd); }
 void doMotor2(char *cmd) { command.motor(&motor2, cmd); }
 
-static uint8_t raw_adv_data[] = {0x02, 0x01, 0x06, 0x09, 0x09, 'E', 'S',
-                                 'P',  '3',  '2',  '_',  'C',  '6'};
 bool init_success = false;
 bool motor1_ready = false;
 bool motor2_ready = false;
 
-static esp_ble_adv_params_t adv_params = {
-    .adv_int_min = 0x20,
-    .adv_int_max = 0x40,
-    .adv_type = ADV_TYPE_IND,
-    .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
-    .channel_map = ADV_CHNL_ALL,
-    .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
-};
-
-static uint16_t gatts_handle_table[GATTS_NUM_HANDLE];
-
-static void gatts_event_handler(esp_gatts_cb_event_t event,
-                                esp_gatt_if_t gatts_if,
-                                esp_ble_gatts_cb_param_t *param) {
-  switch (event) {
-  case ESP_GATTS_REG_EVT: {
-    ESP_LOGI(GATTS_TAG, "GATT server registered");
-
-    esp_ble_gap_set_device_name(DEVICE_NAME);
-    esp_ble_gap_config_adv_data_raw(raw_adv_data, sizeof(raw_adv_data));
-
-    esp_gatt_srvc_id_t service_id;
-    service_id.is_primary = true;
-    service_id.id.inst_id = 0;
-    service_id.id.uuid.len = ESP_UUID_LEN_16;
-    service_id.id.uuid.uuid.uuid16 = GATTS_SERVICE_UUID;
-
-    esp_ble_gatts_create_service(gatts_if, &service_id, GATTS_NUM_HANDLE);
-    break;
-  }
-
-  case ESP_GATTS_CREATE_EVT: {
-    ESP_LOGI(GATTS_TAG, "Service created");
-    gatts_handle_table[0] = param->create.service_handle;
-    esp_ble_gatts_start_service(gatts_handle_table[0]);
-
-    esp_bt_uuid_t char_uuid;
-    char_uuid.len = ESP_UUID_LEN_16;
-    char_uuid.uuid.uuid16 = GATTS_CHAR_UUID;
-
-    esp_ble_gatts_add_char(gatts_handle_table[0], &char_uuid,
-                           ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
-                           ESP_GATT_CHAR_PROP_BIT_READ |
-                               ESP_GATT_CHAR_PROP_BIT_WRITE |
-                               ESP_GATT_CHAR_PROP_BIT_WRITE_NR,
-                           NULL, NULL);
-    break;
-  }
-
-  case ESP_GATTS_ADD_CHAR_EVT:
-    ESP_LOGI(GATTS_TAG, "Characteristic added, handle: %d",
-             param->add_char.attr_handle);
-    gatts_handle_table[1] = param->add_char.attr_handle;
-    break;
-
-  case ESP_GATTS_CONNECT_EVT:
-    ESP_LOGI(GATTS_TAG, "Device connected");
-    break;
-
-  case ESP_GATTS_DISCONNECT_EVT:
-    ESP_LOGI(GATTS_TAG, "Device disconnected");
-    esp_ble_gap_start_advertising(&adv_params);
-    break;
-
-  case ESP_GATTS_WRITE_EVT:
-    if (param->write.need_rsp) {
-      ESP_LOGI(GATTS_TAG, "Received message WITH response: %.*s",
-               param->write.len, param->write.value);
-
-      esp_gatt_rsp_t rsp;
-      memset(&rsp, 0, sizeof(esp_gatt_rsp_t));
-      rsp.attr_value.handle = param->write.handle;
-      rsp.attr_value.len = param->write.len;
-      memcpy(rsp.attr_value.value, param->write.value, param->write.len);
-
-      esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
-                                  param->write.trans_id, ESP_GATT_OK, &rsp);
-      ESP_LOGI(GATTS_TAG, "Response sent");
-    } else {
-      ESP_LOGI(GATTS_TAG, "Received message WITHOUT response: %.*s",
-               param->write.len, param->write.value);
-    }
-    // Handle SimpleFOC command
-    if (param->write.len > 0) {
-      // Use a fixed buffer or std::string to avoid VLA
-      char cmd[128];
-      int len = param->write.len;
-      if (len > 127)
-        len = 127;
-
-      memcpy(cmd, param->write.value, len);
-      cmd[len] = '\0';
-
-      // Parse "left right duration"
-      // Example: "50 -50 100"
-      int left_pct, right_pct, duration_ms;
-      if (sscanf(cmd, "%d %d %d", &left_pct, &right_pct, &duration_ms) == 3) {
-        // Map percentage (-100 to 100) to voltage (-12 to 12)
-        // Assuming 12V power supply as set in setup()
-        float left_voltage = -(left_pct / 100.0f) * 12.0f;
-        float right_voltage = (right_pct / 100.0f) * 12.0f;
-
-        motor1.target = left_voltage;
-        motor2.target = right_voltage;
-
-        // TODO: Implement duration/watchdog logic
-        // For now, we just set the target. The duration suggests we should
-        // stop after X ms. Since this is an event handler, we can't block. We
-        // should update a timestamp and check it in the loop() or a separate
-        // task. For simplicity in this step, we'll just set the target. Real
-        // implementation would need a global "last_command_time" and
-        // "command_duration".
-
-        ESP_LOGI(GATTS_TAG, "Motor Target: L=%.2fV, R=%.2fV", left_voltage,
-                 right_voltage);
-      } else {
-        // Fallback to Commander for other commands (e.g. "A10")
-        command.run(cmd);
-      }
-    }
-    break;
-
-  default:
-    break;
-  }
-}
-
-static void gap_event_handler(esp_gap_ble_cb_event_t event,
-                              esp_ble_gap_cb_param_t *param) {
-  switch (event) {
-  case ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT:
-    ESP_LOGI(GATTS_TAG, "Raw advertising data set, starting advertising");
-    esp_ble_gap_start_advertising(&adv_params);
-    break;
-  case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
-    if (param->adv_start_cmpl.status == ESP_BT_STATUS_SUCCESS) {
-      ESP_LOGI(GATTS_TAG, "Advertising started successfully");
-    } else {
-      ESP_LOGE(GATTS_TAG, "Advertising start failed: %d",
-               param->adv_start_cmpl.status);
-    }
-    break;
-  default:
-    break;
-  }
-}
-
 void setup() {
   Serial.begin(115200);
 
-  // BLE Setup
-  esp_err_t ret = nvs_flash_init();
-  if (ret == ESP_ERR_NVS_NO_FREE_PAGES ||
-      ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    ESP_ERROR_CHECK(nvs_flash_erase());
-    ret = nvs_flash_init();
-  }
-  ESP_ERROR_CHECK(ret);
-
-  ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
-
-  esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-  ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
-  ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
-  ESP_ERROR_CHECK(esp_bluedroid_init());
-  ESP_ERROR_CHECK(esp_bluedroid_enable());
-
-  esp_ble_gatts_register_callback(gatts_event_handler);
-  esp_ble_gap_register_callback(gap_event_handler);
-  esp_ble_gatts_app_register(0);
-
-  // SimpleFOC Setup
-  // Explicitly set CS pins high before SPI init to avoid bus contention
   pinMode(PIN_CS1, OUTPUT);
   digitalWrite(PIN_CS1, HIGH);
   pinMode(PIN_CS2, OUTPUT);
   digitalWrite(PIN_CS2, HIGH);
 
   SPI.begin(PIN_SCLK, PIN_MISO, PIN_MOSI);
-  gpio_pullup_en((gpio_num_t)PIN_MISO); // DRV8316 SDO is open-drain, needs pull-up without disturbing SPI pin mux
+  gpio_pullup_en((gpio_num_t)PIN_MISO);
 
   sensor1.init();
   sensor2.init();
@@ -270,15 +78,12 @@ void setup() {
   driver1.init(&SPI);
   driver2.init(&SPI);
 
-  // Re-apply PWM mode explicitly after full init, as BLDCDriver3PWM::init()
-  // may trigger DRV8316 protection events that reset the registers
   driver1.setRegistersLocked(false);
   driver2.setRegistersLocked(false);
   delayMicroseconds(10);
   driver1.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
   driver2.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
 
-  // Check DRV8316 status and PWM mode after init
   DRV8316Status s1 = driver1.getStatus();
   DRV8316Status s2 = driver2.getStatus();
   Serial.printf("DRV1: fault=%d ot=%d ocp=%d ovp=%d spi_flt=%d locked=%d pwm_mode=%d\n",
@@ -288,7 +93,6 @@ void setup() {
     s2.isFault(), s2.isOverTemperature(), s2.isOverCurrent(),
     s2.isOverVoltage(), s2.isSPIError(), (int)driver2.isRegistersLocked(), (int)driver2.getPWMMode());
 
-  // Check sensor readings before alignment
   sensor1.update(); sensor2.update();
   Serial.printf("Sensor1 angle: %.4f, Sensor2 angle: %.4f\n",
     sensor1.getAngle(), sensor2.getAngle());
@@ -316,29 +120,24 @@ void setup() {
 
   _delay(500);
 
-  if (m1_ready) {
-    if (!motor1.initFOC()) {
-      Serial.println("FOC 1 failed");
-      m1_ready = false;
-    }
+  if (!motor1.initFOC()) {
+    Serial.println("FOC 1 failed");
+    m1_ready = false;
   }
-
   _delay(500);
 
-  if (m2_ready) {
-    if (!motor2.initFOC()) {
-      Serial.println("FOC 2 failed");
-      m2_ready = false;
-    }
+  if (!motor2.initFOC()) {
+    Serial.println("FOC 2 failed");
+    m2_ready = false;
   }
-
-  motor1.target = 0.0; // Nm
-  motor2.target = 0.0; // Nm
+  motor1.enable();
+  motor2.enable();
+  motor1.target = 3.0; // V - constant spin
+  motor2.target = 3.0; // V - constant spin
 
   command.add('A', doMotor1, "Motor1");
   command.add('B', doMotor2, "Motor2");
-  Serial.println(F("Motor ready."));
-  Serial.println(F("Set the target with command A or B:"));
+  Serial.println("Motor ready.");
 
   init_success = true;
   motor1_ready = m1_ready;
@@ -348,23 +147,26 @@ void setup() {
 void loop() {
   if (!init_success)
     return;
-  if (motor1_ready) {
-    motor1.loopFOC();
-    motor1.move();
-  }
-  if (motor2_ready) {
-    motor2.loopFOC();
-    motor2.move();
-  }
+  // if (motor1_ready) {
+  motor1.loopFOC();
+  motor1.move();
+  // }
+  // if (motor2_ready) {
+  motor2.loopFOC();
+  motor2.move();
+  // }
   command.run();
 
   static uint32_t last_print = 0;
   if (millis() - last_print > 1000) {
     last_print = millis();
-    Serial.printf("M1: Target=%.2f V, Vel=%.2f | M2: Target=%.2f V, Vel=%.2f | "
-                  "Status: %d/%d\n",
+    Serial.printf("M1: Target=%.2f V, Vel=%.2f | M2: Target=%.2f V, Vel=%.2f | Status: %d/%d\n",
                   motor1.target, motor1.shaft_velocity, motor2.target,
                   motor2.shaft_velocity, motor1_ready, motor2_ready);
+
+    sensor1.update(); sensor2.update();
+    Serial.printf("Sensor1 angle: %.4f, Sensor2 angle: %.4f\n\n", sensor1.getAngle(), sensor2.getAngle());
+
   }
 }
 
@@ -373,6 +175,6 @@ extern "C" void app_main() {
   setup();
   while (true) {
     loop();
-    vTaskDelay(1); // Yield to feed WDT
+    vTaskDelay(1);
   }
 }

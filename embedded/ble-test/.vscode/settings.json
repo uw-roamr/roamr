@@ -13,7 +13,7 @@
     "--query-driver=/Users/oliviaye/.espressif/tools/riscv32-esp-elf/esp-14.2.0_20241119/riscv32-esp-elf/bin/riscv32-esp-elf-gcc",
     "--compile-commands-dir=/Users/oliviaye/roamr/embedded/blink/build"
   ],
-  "idf.port": "/dev/tty.usbserial-1410",
+  "idf.port": "/dev/tty.usbserial-1440",
   "idf.flashType": "UART",
   "idf.currentSetup": "/Users/oliviaye/esp/v5.5.1/esp-idf"
 }
