@@ -78,12 +78,6 @@ void setup() {
   driver1.init(&SPI);
   driver2.init(&SPI);
 
-  driver1.setRegistersLocked(false);
-  driver2.setRegistersLocked(false);
-  delayMicroseconds(10);
-  driver1.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
-  driver2.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
-
   DRV8316Status s1 = driver1.getStatus();
   DRV8316Status s2 = driver2.getStatus();
   Serial.printf("DRV1: fault=%d ot=%d ocp=%d ovp=%d spi_flt=%d locked=%d pwm_mode=%d\n",
@@ -117,6 +111,16 @@ void setup() {
     Serial.println("Motor 1 init failed");
   if (!m2_ready)
     Serial.println("Motor 2 init failed");
+
+  driver1.setRegistersLocked(false);
+  driver2.setRegistersLocked(false);
+  delayMicroseconds(10);
+  driver1.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
+  driver2.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
+  driver1.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
+  driver2.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
+  driver1.clearFault();
+  driver2.clearFault();
 
   _delay(500);
 
@@ -165,7 +169,16 @@ void loop() {
                   motor2.shaft_velocity, motor1_ready, motor2_ready);
 
     sensor1.update(); sensor2.update();
-    Serial.printf("Sensor1 angle: %.4f, Sensor2 angle: %.4f\n\n", sensor1.getAngle(), sensor2.getAngle());
+    Serial.printf("Sensor1 angle: %.4f, Sensor2 angle: %.4f\n", sensor1.getAngle(), sensor2.getAngle());
+
+    DRV8316Status s1 = driver1.getStatus();
+    DRV8316Status s2 = driver2.getStatus();
+    Serial.printf("DRV1: fault=%d ot=%d ocp=%d ovp=%d spi=%d locked=%d pwm_mode=%d\n",
+      s1.isFault(), s1.isOverTemperature(), s1.isOverCurrent(), s1.isOverVoltage(), s1.isSPIError(),
+      (int)driver1.isRegistersLocked(), (int)driver1.getPWMMode());
+    Serial.printf("DRV2: fault=%d ot=%d ocp=%d ovp=%d spi=%d locked=%d pwm_mode=%d\n\n",
+      s2.isFault(), s2.isOverTemperature(), s2.isOverCurrent(), s2.isOverVoltage(), s2.isSPIError(),
+      (int)driver2.isRegistersLocked(), (int)driver2.getPWMMode());
 
   }
 }
