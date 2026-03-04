@@ -6,12 +6,12 @@
 
 #include "controls/motors.h"
 #include "core/telemetry.h"
+#include "planning/planner_bridge.h"
 #include "sensors/calibration.h"
 #include "sensors/imu.h"
 #include "sensors/imu_preintegration.h"
 #include "sensors/lidar_camera.h"
 #include "sensors/wheel_odometry.h"
-#include "mapping/map_api.h"
 #include "mapping/map_update.h"
 
 static bool g_map_initialized = false;
@@ -43,6 +43,12 @@ enum class PoseSource{
 };
 static constexpr PoseSource pose_source = PoseSource::wheel_odom;
 
+// Tiny planner demo: set a fixed map-view pixel goal at startup.
+// Toggle off when using host-provided goal clicks.
+static constexpr bool kEnablePlannerDemoGoal = true;
+static constexpr int kPlannerDemoGoalPixelX = 160;
+static constexpr int kPlannerDemoGoalPixelY = 111;
+
 
 int main(){
     std::mutex m_imu;
@@ -54,6 +60,14 @@ int main(){
 
     init_camera(&g_cam_config);
     log_config(g_cam_config);
+
+    if (kEnablePlannerDemoGoal) {
+        planning::bridge::set_goal_map_pixel(
+            kPlannerDemoGoalPixelX,
+            kPlannerDemoGoalPixelY);
+    } else {
+        planning::bridge::clear_goal();
+    }
 
     std::thread imu_thread([&m_imu, &m_pose](){
         double g_last_logged_imu_timestamp = -1.0;
@@ -146,6 +160,11 @@ int main(){
             continue;
         }
         g_last_map_timestamp = map_timestamp;
+        planning::bridge::update_plan_overlay(
+            t_body_to_world,
+            g_map_frame.width,
+            g_map_frame.height);
+
         mapping::update_map_from_lidar(
             lc_data,
             g_map_frame,
@@ -195,7 +214,7 @@ int main(){
 
     // TODO: remove once autonomy control loop is closed
     // controls::drive_forward_demo();
-    controls::drive_twist_demo();
+    // controls::drive_twist_demo();7
 
     imu_thread.join();
     lidar_camera_thread.join();

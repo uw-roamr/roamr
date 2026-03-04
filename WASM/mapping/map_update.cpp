@@ -171,7 +171,7 @@ namespace mapping {
       rerun_out->colors_size = static_cast<size_t>(used_points_rerun * 3);
     }
 
-    if (!update_map || used_points <= 0) return;
+    if (!update_map) return;
 
     if (lc_data.timestamp - g_last_map_log_ts < kMapLogIntervalSec) {
       return;
