@@ -107,7 +107,6 @@ int main(){
                 g_lc_ready_idx.store(write_idx, std::memory_order_release);
                 write_idx = 1 - write_idx;
             }
-            // log_lc(m_lc, g_lc_data, g_last_logged_lc_timestamp);
         }
     });
 
