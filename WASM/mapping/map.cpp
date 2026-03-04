@@ -372,7 +372,7 @@
 			}
 		}
 
-		// Overlay wheel-odometry path as a red polyline.
+		// Overlay wheel-odometry path as a purple polyline.
 		if (poseCount > 1) {
 			for (int32_t i = 1; i < poseCount; ++i) {
 				const int32_t base0 = (i - 1) * 3;
@@ -391,7 +391,36 @@
 					!grid_to_pixel(gx1, gy1, scale, off_x, off_y, &px1, &py1)) {
 					continue;
 				}
-				draw_line_pixel(px0, py0, px1, py1, 255, 0, 0, 255);
+				draw_line_pixel(px0, py0, px1, py1, 128, 0, 128, 255);
+			}
+		}
+
+		// Overlay planned path as a purple polyline.
+		if (PLANNED_PATH_COUNT > 1) {
+			for (int32_t i = 1; i < PLANNED_PATH_COUNT; ++i) {
+				const int32_t base0 = (i - 1) * 2;
+				const int32_t base1 = i * 2;
+				const int32_t gx0 = PLANNED_PATH[base0 + 0];
+				const int32_t gy0 = PLANNED_PATH[base0 + 1];
+				const int32_t gx1 = PLANNED_PATH[base1 + 0];
+				const int32_t gy1 = PLANNED_PATH[base1 + 1];
+				int32_t px0 = 0, py0 = 0, px1 = 0, py1 = 0;
+				if (!grid_to_pixel(gx0, gy0, scale, off_x, off_y, &px0, &py0) ||
+					!grid_to_pixel(gx1, gy1, scale, off_x, off_y, &px1, &py1)) {
+					continue;
+				}
+				draw_line_pixel(px0, py0, px1, py1, 128, 0, 128, 255);
+			}
+		}
+
+		// Blue goal marker.
+		if (PLANNED_GOAL_ENABLED) {
+			int32_t px = 0, py = 0;
+			if (grid_to_pixel(PLANNED_GOAL_X, PLANNED_GOAL_Y, scale, off_x, off_y, &px, &py)) {
+				for (int32_t d = -2; d <= 2; ++d) {
+					set_pixel(px + d, py, 0, 120, 255, 255);
+					set_pixel(px, py + d, 0, 120, 255, 255);
+				}
 			}
 		}
 
@@ -421,23 +450,35 @@
 			}
 		}
 
-		// Heading indicator for the most recent pose (green line).
+		// Pose axes for the most recent pose: forward=red, left=green.
 		if (poseCount > 0) {
-			const double heading_len_m = 0.5;
+			const double axis_len_m = 0.5;
 			const int32_t base = (poseCount - 1) * 3;
 			const double px_world = POSES[base + 0];
 			const double py_world = POSES[base + 1];
 			const double theta = POSES[base + 2];
-			const double hx_world = px_world + cos(theta) * heading_len_m;
-			const double hy_world = py_world + sin(theta) * heading_len_m;
+			const double fx_world = px_world + cos(theta) * axis_len_m;
+			const double fy_world = py_world + sin(theta) * axis_len_m;
+			const double lx_world = px_world - sin(theta) * axis_len_m;
+			const double ly_world = py_world + cos(theta) * axis_len_m;
 
-			int32_t gx0 = 0, gy0 = 0, gx1 = 0, gy1 = 0;
+			int32_t gx0 = 0, gy0 = 0, gfx = 0, gfy = 0;
 			if (world_to_grid(px_world, py_world, &gx0, &gy0) &&
-				world_to_grid(hx_world, hy_world, &gx1, &gy1)) {
-				int32_t px0 = 0, py0 = 0, px1 = 0, py1 = 0;
+				world_to_grid(fx_world, fy_world, &gfx, &gfy)) {
+				int32_t px0 = 0, py0 = 0, pfx = 0, pfy = 0;
 				if (grid_to_pixel(gx0, gy0, scale, off_x, off_y, &px0, &py0) &&
-					grid_to_pixel(gx1, gy1, scale, off_x, off_y, &px1, &py1)) {
-					draw_line_pixel(px0, py0, px1, py1, 0, 255, 0, 255);
+					grid_to_pixel(gfx, gfy, scale, off_x, off_y, &pfx, &pfy)) {
+					draw_line_pixel(px0, py0, pfx, pfy, 255, 0, 0, 255);
+				}
+			}
+
+			int32_t glx = 0, gly = 0;
+			if (world_to_grid(px_world, py_world, &gx0, &gy0) &&
+				world_to_grid(lx_world, ly_world, &glx, &gly)) {
+				int32_t px0 = 0, py0 = 0, plx = 0, ply = 0;
+				if (grid_to_pixel(gx0, gy0, scale, off_x, off_y, &px0, &py0) &&
+					grid_to_pixel(glx, gly, scale, off_x, off_y, &plx, &ply)) {
+					draw_line_pixel(px0, py0, plx, ply, 0, 255, 0, 255);
 				}
 			}
 		}
