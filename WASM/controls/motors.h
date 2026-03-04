@@ -43,6 +43,14 @@ namespace controls{
         double integral_limit_percent = 10.0;
     };
 
+    struct TurnInPlaceConfig {
+        // Outer-loop yaw controller that commands angular velocity from yaw error.
+        double kp_omega_per_rad = 2.0;
+        double max_omega_rad_s = 0.9 * kMaxAngularSpeedRadPerSec;
+        double min_omega_rad_s = 0.2;
+        double yaw_tolerance_rad = 3.0 * core::pi / 180.0;
+    };
+
     inline TwistCommand clamp_twist_command(const TwistCommand& cmd) {
         return TwistCommand{
             std::clamp(cmd.v_mps, -kMaxLinearSpeedMps, kMaxLinearSpeedMps),
@@ -159,6 +167,41 @@ namespace controls{
             const MotorCommand motor_cmd =
                 wheel_speed_controller_.compute(desired, measured, cmd.hold_ms);
             write_motors(&motor_cmd);
+        }
+
+        // One step of an outer-loop "turn to yaw" controller.
+        // Uses unwrapped yaw values (do not angle-wrap in caller).
+        // Returns true when the target is reached within tolerance.
+        bool drive_turn_to_yaw(
+            double current_yaw_rad,
+            double target_yaw_rad,
+            const sensors::WheelOdometryData& odom,
+            const TurnInPlaceConfig& cfg = {},
+            int hold_ms = 120) {
+            const double yaw_error = target_yaw_rad - current_yaw_rad;
+            const double yaw_tolerance = std::max(1e-6, cfg.yaw_tolerance_rad);
+            if (std::abs(yaw_error) <= yaw_tolerance) {
+                stop();
+                return true;
+            }
+
+            const double kp = std::max(0.0, cfg.kp_omega_per_rad);
+            const double max_omega =
+                std::clamp(std::abs(cfg.max_omega_rad_s), 0.0, kMaxAngularSpeedRadPerSec);
+            if (max_omega <= 0.0) {
+                stop();
+                return false;
+            }
+            const double min_omega = std::clamp(std::abs(cfg.min_omega_rad_s), 0.0, max_omega);
+
+            double omega_cmd = kp * yaw_error;
+            omega_cmd = std::clamp(omega_cmd, -max_omega, max_omega);
+            if (std::abs(omega_cmd) < min_omega) {
+                omega_cmd = std::copysign(min_omega, yaw_error);
+            }
+
+            drive_twist(0.0, omega_cmd, odom, hold_ms);
+            return false;
         }
 
         // Blocking twist helper: repeatedly closes loop on wheel odometry for duration_ms.

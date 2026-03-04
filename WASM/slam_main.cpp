@@ -42,6 +42,12 @@ enum class PoseSource{
     // todo: fused, ideally prioritizing wheel_odom for translation and IMU for rotation
 };
 static constexpr PoseSource pose_source = PoseSource::wheel_odom;
+static constexpr bool kEnableOdomTurnDemo = false;
+static constexpr double kOdomTurnDeltaYawRad = sensors::kTwoPi;
+static constexpr int32_t kOdomTurnDirection = 1;  // +1 CCW, -1 CW
+static constexpr int32_t kOdomTurnHoldMs = 120;
+static constexpr int32_t kOdomTurnSettledSamples = 3;
+static constexpr int32_t kOdomTurnTimeoutMs = 15000;
 
 
 int main(){
@@ -161,11 +167,17 @@ int main(){
       }
     });
 
-    std::thread wheel_odom_thread([&m_pose](){
+    std::thread wheel_odom_thread([&m_pose, &motors](){
         sensors::WheelOdometryData odom = {};
         double x = 0.0;
         double y = 0.0;
         double yaw = 0.0;
+        bool turn_active = false;
+        bool turn_done = !kEnableOdomTurnDemo;
+        double turn_target_yaw = 0.0;
+        int settled_samples = 0;
+        auto turn_start = std::chrono::steady_clock::now();
+        controls::TurnInPlaceConfig turn_cfg{};
 
         while(true){
             read_wheel_odometry(&odom);
@@ -177,6 +189,44 @@ int main(){
             sensors::integrate_wheel_odometry(odom, &x, &y, &yaw);
             g_latest_translation_odom = {x, y, 0.0};
             g_latest_quat_odom = {0.0, 0.0, std::sin(yaw * 0.5), std::cos(yaw * 0.5)};
+
+            if (!turn_done) {
+                if (!turn_active) {
+                    const double sign = (kOdomTurnDirection >= 0) ? 1.0 : -1.0;
+                    turn_target_yaw = yaw + (sign * kOdomTurnDeltaYawRad);
+                    turn_active = true;
+                    settled_samples = 0;
+                    turn_start = std::chrono::steady_clock::now();
+                    motors.reset_twist_controller();
+                }
+
+                const bool reached = motors.drive_turn_to_yaw(
+                    yaw,
+                    turn_target_yaw,
+                    odom,
+                    turn_cfg,
+                    kOdomTurnHoldMs);
+                if (reached) {
+                    settled_samples += 1;
+                    if (settled_samples >= kOdomTurnSettledSamples) {
+                        turn_done = true;
+                        turn_active = false;
+                        motors.stop();
+                        motors.reset_twist_controller();
+                    }
+                } else {
+                    settled_samples = 0;
+                }
+
+                const int64_t elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - turn_start).count();
+                if (turn_active && elapsed_ms > kOdomTurnTimeoutMs) {
+                    turn_done = true;
+                    turn_active = false;
+                    motors.stop();
+                    motors.reset_twist_controller();
+                }
+            }
 
             if (pose_source == PoseSource::wheel_odom){
                 std::lock_guard<std::mutex> lk(m_pose);
@@ -192,7 +242,7 @@ int main(){
 
     // TODO: remove once autonomy control loop is closed
     // controls::drive_forward_demo();
-    controls::drive_twist_demo();
+    // controls::drive_twist_demo();
 
     imu_thread.join();
     lidar_camera_thread.join();
