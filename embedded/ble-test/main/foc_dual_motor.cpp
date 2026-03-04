@@ -21,7 +21,9 @@ extern "C" void __wrap_esp_log_write(esp_log_level_t level, const char *tag,
 #include <SPI.h>
 #include <SimpleFOC.h>
 #include <SimpleFOCDrivers.h>
+#include "drivers/drv8316/drv8316.h"
 
+#include "driver/gpio.h"
 #include "esp_bt.h"
 #include "esp_bt_main.h"
 #include "esp_gap_ble_api.h"
@@ -34,36 +36,34 @@ extern "C" void __wrap_esp_log_write(esp_log_level_t level, const char *tag,
 #include <string.h>
 
 #define GATTS_TAG "BLE_DEMO"
-#define DEVICE_NAME "ESP32_C6"
+#define DEVICE_NAME "ESP32_S3"
 #define GATTS_SERVICE_UUID 0x00FF
 #define GATTS_CHAR_UUID 0xFF01
 #define GATTS_NUM_HANDLE 4
 
-constexpr int PIN_MOSI = 4;
-constexpr int PIN_SCLK = 5;
-constexpr int PIN_MISO = 6;
-constexpr int PIN_CS1 = 7;
-constexpr int PIN_CS2 = 15;
+constexpr int PIN_MOSI = 11;
+constexpr int PIN_SCLK = 12;
+constexpr int PIN_MISO = 13;
+constexpr int PIN_CS1 = 17;
+constexpr int PIN_CS2 = 18;
 
-constexpr int PIN_DRIVER1_1 = 0;
-constexpr int PIN_DRIVER1_2 = 1;
-constexpr int PIN_DRIVER1_3 = 8;
-constexpr int PIN_DRIVER1_EN = 10;
+constexpr int PIN_DRIVER1_1 = 41;
+constexpr int PIN_DRIVER1_2 = 42;
+constexpr int PIN_DRIVER1_3 = 45;
+constexpr int PIN_DRIVER1_CS = 47;
 
-constexpr int PIN_DRIVER2_1 = 23;
-constexpr int PIN_DRIVER2_2 = 22;
-constexpr int PIN_DRIVER2_3 = 21;
-constexpr int PIN_DRIVER2_EN = 20;
+constexpr int PIN_DRIVER2_1 = 38;
+constexpr int PIN_DRIVER2_2 = 39;
+constexpr int PIN_DRIVER2_3 = 40;
+constexpr int PIN_DRIVER2_CS = 48;
 
 // Lower SPI frequency to 1MHz to avoid timing/signal issues
 SPISettings mySPISettings(1000000, MSBFIRST, SPI_MODE1);
 MagneticSensorAS5048A sensor1(PIN_CS1, false, mySPISettings);
 MagneticSensorAS5048A sensor2(PIN_CS2, false, mySPISettings);
 
-BLDCDriver3PWM driver1(PIN_DRIVER1_1, PIN_DRIVER1_2, PIN_DRIVER1_3,
-                       PIN_DRIVER1_EN);
-BLDCDriver3PWM driver2(PIN_DRIVER2_1, PIN_DRIVER2_2, PIN_DRIVER2_3,
-                       PIN_DRIVER2_EN);
+DRV8316Driver3PWM driver1(PIN_DRIVER1_1, PIN_DRIVER1_2, PIN_DRIVER1_3, PIN_DRIVER1_CS);
+DRV8316Driver3PWM driver2(PIN_DRIVER2_1, PIN_DRIVER2_2, PIN_DRIVER2_3, PIN_DRIVER2_CS);
 BLDCMotor motor1(7);
 BLDCMotor motor2(7);
 Commander command = Commander(Serial);
@@ -256,6 +256,7 @@ void setup() {
   digitalWrite(PIN_CS2, HIGH);
 
   SPI.begin(PIN_SCLK, PIN_MISO, PIN_MOSI);
+  gpio_pullup_en((gpio_num_t)PIN_MISO); // DRV8316 SDO is open-drain, needs pull-up without disturbing SPI pin mux
 
   sensor1.init();
   sensor2.init();
@@ -266,14 +267,32 @@ void setup() {
   driver2.voltage_power_supply = 12;
   driver1.voltage_limit = 12;
   driver2.voltage_limit = 12;
-  if (!driver1.init()) {
-    Serial.println("Driver 1 failed");
-    return;
-  }
-  if (!driver2.init()) {
-    Serial.println("Driver 2 failed");
-    return;
-  }
+  driver1.init(&SPI);
+  driver2.init(&SPI);
+
+  // Re-apply PWM mode explicitly after full init, as BLDCDriver3PWM::init()
+  // may trigger DRV8316 protection events that reset the registers
+  driver1.setRegistersLocked(false);
+  driver2.setRegistersLocked(false);
+  delayMicroseconds(10);
+  driver1.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
+  driver2.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
+
+  // Check DRV8316 status and PWM mode after init
+  DRV8316Status s1 = driver1.getStatus();
+  DRV8316Status s2 = driver2.getStatus();
+  Serial.printf("DRV1: fault=%d ot=%d ocp=%d ovp=%d spi_flt=%d locked=%d pwm_mode=%d\n",
+    s1.isFault(), s1.isOverTemperature(), s1.isOverCurrent(),
+    s1.isOverVoltage(), s1.isSPIError(), (int)driver1.isRegistersLocked(), (int)driver1.getPWMMode());
+  Serial.printf("DRV2: fault=%d ot=%d ocp=%d ovp=%d spi_flt=%d locked=%d pwm_mode=%d\n",
+    s2.isFault(), s2.isOverTemperature(), s2.isOverCurrent(),
+    s2.isOverVoltage(), s2.isSPIError(), (int)driver2.isRegistersLocked(), (int)driver2.getPWMMode());
+
+  // Check sensor readings before alignment
+  sensor1.update(); sensor2.update();
+  Serial.printf("Sensor1 angle: %.4f, Sensor2 angle: %.4f\n",
+    sensor1.getAngle(), sensor2.getAngle());
+
   motor1.linkDriver(&driver1);
   motor2.linkDriver(&driver2);
 
