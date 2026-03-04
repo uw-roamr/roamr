@@ -127,7 +127,6 @@ int main(){
                 g_lc_ready_idx.store(write_idx, std::memory_order_release);
                 write_idx = 1 - write_idx;
             }
-            // log_lc(m_lc, g_lc_data, g_last_logged_lc_timestamp);
         }
     });
 
@@ -153,12 +152,11 @@ int main(){
       }
       while(true){
 
-        static core::Vector4d q_body_to_world = {0.0, 0.0, 0.0, 1.0};
-        static core::Vector3d t_body_to_world = {0.0, 0.0, 0.0};
-        if (m_pose.try_lock()) {
-            q_body_to_world = g_pose.quaternion;
-            t_body_to_world = g_pose.translation;
-            m_pose.unlock();
+        core::PoseSE3d body_to_world;
+        {
+            std::lock_guard<std::mutex> lk(m_pose);
+            body_to_world.quaternion = g_pose.quaternion;
+            body_to_world.translation = g_pose.translation;
         }
 
         const int ready_idx = g_lc_ready_idx.exchange(-1, std::memory_order_acq_rel);
@@ -178,6 +176,28 @@ int main(){
         mapping::build_rerun_frame_from_lidar(lc_data, g_rerun_lc);
         const auto rerun_build_end = Clock::now();
         perf_rerun_build_ms_sum += elapsed_ms(rerun_build_start, rerun_build_end);
+        map_timestamp = lc_data.timestamp;
+        const bool do_map_update = (map_timestamp - g_last_map_timestamp >= mapping::mapMinInterval);
+        if (!do_map_update) {
+            g_lc_in_use_idx.store(-1, std::memory_order_release);
+            continue;
+        }
+        g_last_map_timestamp = map_timestamp;
+        const auto map_update_start = Clock::now();
+        mapping::update_map_from_lidar(
+            lc_data,
+            g_map_frame,
+            g_map_initialized,
+            body_to_world
+        );
+        const auto map_update_end = Clock::now();
+        perf_map_update_ms_sum += elapsed_ms(map_update_start, map_update_end);
+        perf_map_updates += 1;
+        planning::bridge::update_plan_overlay(
+            body_to_world,
+            g_map_frame.width,
+            g_map_frame.height);
+        g_lc_in_use_idx.store(-1, std::memory_order_release);
 
         if (g_rerun_lc.points_size > 0) {
             const auto rerun_log_start = Clock::now();
@@ -186,28 +206,6 @@ int main(){
             perf_rerun_log_ms_sum += elapsed_ms(rerun_log_start, rerun_log_end);
             perf_rerun_emits += 1;
         }
-
-        map_timestamp = lc_data.timestamp;
-        const bool do_map_update = (map_timestamp - g_last_map_timestamp >= mapping::mapMinInterval);
-        if (do_map_update) {
-            g_last_map_timestamp = map_timestamp;
-            planning::bridge::update_plan_overlay(
-                t_body_to_world,
-                g_map_frame.width,
-                g_map_frame.height);
-            const auto map_update_start = Clock::now();
-            mapping::update_map_from_lidar(
-                lc_data,
-                g_map_frame,
-                g_map_initialized,
-                q_body_to_world,
-                t_body_to_world
-            );
-            const auto map_update_end = Clock::now();
-            perf_map_update_ms_sum += elapsed_ms(map_update_start, map_update_end);
-            perf_map_updates += 1;
-        }
-        g_lc_in_use_idx.store(-1, std::memory_order_release);
 
         const auto now = Clock::now();
         const double window_sec = std::chrono::duration<double>(now - perf_window_start).count();

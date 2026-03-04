@@ -24,25 +24,3 @@ void log_imu(std::mutex& m_imu, const sensors::IMUData& imu_copy, double& last_i
   // << "T:" << imu_copy.timestamp << " gyro:" << imu_copy.gyro_x << "," << imu_copy.gyro_y << "," << imu_copy.gyro_z <<
   // std::endl;
 }
-
-// log sensors without significant delays in processing
-void log_lc(std::mutex& m_lc, const sensors::LidarCameraData& lc_data, double& last_lc_timestamp){
-  std::cout << std::fixed << std::setprecision(5);
-    
-  // very expensive to copy everything!
-  {
-    std::lock_guard<std::mutex> lk(m_lc);
-    const double lc_timestamp = lc_data.timestamp;
-    if (lc_timestamp <= last_lc_timestamp){
-      std::this_thread::yield();
-      return;
-    }
-    if (lc_timestamp - last_lc_timestamp < kLidarLogIntervalSec) {
-      return;
-    }
-    last_lc_timestamp = lc_timestamp;
-
-  }
-
-
-};

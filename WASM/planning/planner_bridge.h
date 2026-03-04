@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-#include "core/math_utils.h"
+#include "core/coordinate_frames.h"
 
 namespace planning::bridge {
 
@@ -11,9 +11,8 @@ void clear_goal();
 
 // Updates planner state and pushes the planned path overlay into map.cpp state.
 void update_plan_overlay(
-    const core::Vector3d& robot_translation_world,
+    const core::PoseSE3d& body_to_world,
     int32_t render_width,
     int32_t render_height);
 
 }  // namespace planning::bridge
-

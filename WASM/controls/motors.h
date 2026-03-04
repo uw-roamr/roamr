@@ -7,6 +7,7 @@
 #include <chrono>
 
 #include "core/wasm_utils.h"
+#include "core/math_utils.h"
 #include "sensors/wheel_odometry.h"
 
 namespace controls{
@@ -27,7 +28,7 @@ namespace controls{
     };
 
     constexpr double kMaxLinearSpeedMps = 0.3;
-    constexpr double kMaxAngularSpeedRadPerSec = 3.14159265358979323846;
+    constexpr double kMaxAngularSpeedRadPerSec = core::pi;
 
     struct WheelSpeedSetpoint {
         double left_mps;

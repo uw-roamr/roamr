@@ -161,9 +161,7 @@ namespace mapping {
   void update_map_from_lidar(const sensors::LidarCameraData& lc_data,
                              MapFrame& map_frame,
                              bool& map_initialized,
-                             const core::Vector4d& q_body_to_world_in,
-                             const core::Vector3d& t_body_to_world_in
-                            //  const core::PoseSE3d& pose,
+                             const core::PoseSE3d& body_to_world
                             //  const bool rotation_only_bc_imu_drifts
                             ) {
     const auto call_start = std::chrono::steady_clock::now();
@@ -179,8 +177,8 @@ namespace mapping {
       map_initialized = true;
     }
 
-    const core::Vector4d q_body_to_world = core::quat_normalize(q_body_to_world_in);
-    const core::Vector3d t_body_to_world = t_body_to_world_in;
+    const core::Vector4d& q_body_to_world = core::quat_normalize(body_to_world.quaternion);
+    const core::Vector3d& t_body_to_world = body_to_world.translation;
     const bool points_rdf =
         lc_data.points_frame_id == static_cast<core::CoordinateFrameId_t>(core::CoordinateFrameId::kRDF);
 

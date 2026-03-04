@@ -135,7 +135,7 @@ void clear_goal() {
 }
 
 void update_plan_overlay(
-    const core::Vector3d& robot_translation_world,
+    const core::PoseSE3d& body_to_world,
     int32_t render_width,
     int32_t render_height) {
   PlannerGoalPixel goal{};
@@ -177,8 +177,8 @@ void update_plan_overlay(
   if (!load_planner_grid(&planner_map) ||
       !world_to_grid(
           planner_map,
-          robot_translation_world.x,
-          robot_translation_world.y,
+          body_to_world.translation.x,
+          body_to_world.translation.y,
           &start_cell)) {
     return;
   }
@@ -208,4 +208,3 @@ extern "C" __attribute__((export_name("clear_planner_goal_map_pixel")))
 void clear_planner_goal_map_pixel() {
   planning::bridge::clear_goal();
 }
-

@@ -20,4 +20,3 @@ WASM_IMPORT("host", "rerun_log_pose_wheel") void rerun_log_pose_wheel(const sens
 void log_config(const sensors::CameraConfig& cam_config);
 
 void log_imu(std::mutex& m_imu, const sensors::IMUData& imu_data, double& last_imu_timestamp);
-void log_lc(std::mutex& m_lc, const sensors::LidarCameraData& lc_data, double& last_lc_timestamp);
