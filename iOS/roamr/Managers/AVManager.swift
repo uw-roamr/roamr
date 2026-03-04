@@ -446,7 +446,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let needsPointColors = includePointColorsForWasm
         let needsImagePayload = includeImageInWasmPayload
         let needsUIImage = needsPreviewVideo || isStreaming
-        let needsRGBFrame = needsPointColors || needsImagePayload || needsUIImage
+        let needsRGBFrame = needsImagePayload || needsUIImage
 
         let imageResolution = frame.camera.imageResolution
         let fallbackLayout = portraitLayout(
@@ -470,14 +470,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             depthMap: depthData.depthMap,
             confidenceMap: depthData.confidenceMap,
             frame: frame,
-            colorSource: {
-                guard needsPointColors, let rgbFrame = rgbFrame else { return nil }
-                return RGBColorSource(
-                    bytes: rgbFrame.rawBytes,
-                    width: rgbFrame.rawWidth,
-                    height: rgbFrame.rawHeight
-                )
-            }()
+            colorSource: nil,
+            colorPixelBuffer: needsPointColors ? frame.capturedImage : nil
         )
 
         if let image = rgbFrame?.uiImage {
@@ -670,7 +664,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         depthMap: CVPixelBuffer,
         confidenceMap: CVPixelBuffer?,
         frame: ARFrame,
-        colorSource: RGBColorSource?
+        colorSource: RGBColorSource?,
+        colorPixelBuffer: CVPixelBuffer?
     ) -> PointCloudExportData? {
         guard CVPixelBufferGetPixelFormatType(depthMap) == kCVPixelFormatType_DepthFloat32 else {
             return nil
@@ -720,18 +715,56 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             colorScaleY = 0
         }
 
+        var yPlanePointer: UnsafeMutablePointer<UInt8>?
+        var yPlaneBytesPerRow = 0
+        var yPlaneWidth = 0
+        var yPlaneHeight = 0
+        var uvPlanePointer: UnsafeMutablePointer<UInt8>?
+        var uvPlaneBytesPerRow = 0
+        var yuvFullRange = true
+
+        if colorSource == nil, let colorPixelBuffer = colorPixelBuffer {
+            let pixelFormat = CVPixelBufferGetPixelFormatType(colorPixelBuffer)
+            let supportsYCbCr = pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                || pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+            if supportsYCbCr, CVPixelBufferGetPlaneCount(colorPixelBuffer) >= 2 {
+                CVPixelBufferLockBaseAddress(colorPixelBuffer, .readOnly)
+                defer { CVPixelBufferUnlockBaseAddress(colorPixelBuffer, .readOnly) }
+                yPlanePointer = CVPixelBufferGetBaseAddressOfPlane(colorPixelBuffer, 0)?.assumingMemoryBound(to: UInt8.self)
+                yPlaneBytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(colorPixelBuffer, 0)
+                yPlaneWidth = CVPixelBufferGetWidthOfPlane(colorPixelBuffer, 0)
+                yPlaneHeight = CVPixelBufferGetHeightOfPlane(colorPixelBuffer, 0)
+                uvPlanePointer = CVPixelBufferGetBaseAddressOfPlane(colorPixelBuffer, 1)?.assumingMemoryBound(to: UInt8.self)
+                uvPlaneBytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(colorPixelBuffer, 1)
+                yuvFullRange = pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+            }
+        }
+
         let pointStride = max(1, LidarCameraConstants.pointSubsampleStride)
         let maxPointCount = LidarCameraConstants.maxPointsPerScan
         let estimatedPoints = min(maxPointCount, max(1, (depthWidth * depthHeight) / pointStride))
         let maxFloatCount = maxPointCount * LidarCameraConstants.floatsPerPoint
+        let invFx = 1.0 as Float / fx
+        let invFy = 1.0 as Float / fy
+        let hasRgbColorSource = colorSource != nil
+        let hasYuvColorSource = !hasRgbColorSource
+            && yPlanePointer != nil
+            && uvPlanePointer != nil
+            && yPlaneWidth > 0
+            && yPlaneHeight > 0
 
-        var points: [Float32] = []
-        points.reserveCapacity(estimatedPoints * LidarCameraConstants.floatsPerPoint)
-
-        var colors: [UInt8] = []
-        colors.reserveCapacity(estimatedPoints * LidarCameraConstants.colorsPerPoint)
+        var points = [Float32](
+            repeating: 0,
+            count: estimatedPoints * LidarCameraConstants.floatsPerPoint
+        )
+        var colors = [UInt8](
+            repeating: 0,
+            count: estimatedPoints * LidarCameraConstants.colorsPerPoint
+        )
 
         var reachedPointLimit = false
+        var pointCount = 0
+        var colorCount = 0
         for y in 0..<depthHeight {
             if reachedPointLimit { break }
             let depthRowPtr = depthPointer.advanced(by: y * depthStride)
@@ -740,50 +773,117 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             let startX = y % pointStride
             var x = startX
             while x < depthWidth {
-                defer { x += pointStride }
-
                 let depth = depthRowPtr[x]
-                guard depth > 0, depth.isFinite else { continue }
+                guard depth > 0, depth.isFinite else {
+                    x += pointStride
+                    continue
+                }
 
                 if let confidenceRowPtr = confidenceRowPtr {
                     // Keep medium/high confidence samples.
                     let confidence = confidenceRowPtr[x]
-                    guard confidence >= minimumConfidence else { continue }
+                    guard confidence >= minimumConfidence else {
+                        x += pointStride
+                        continue
+                    }
                 }
 
                 let imageU = (Float(x) + 0.5) * intrinsicsScaleX
                 let imageV = (Float(y) + 0.5) * intrinsicsScaleY
 
-                let cameraX = (imageU - cx) * depth / fx
-                let cameraY = (imageV - cy) * depth / fy
+                let cameraX = (imageU - cx) * depth * invFx
+                let cameraY = (imageV - cy) * depth * invFy
 
-                let pointRdf = SIMD3<Float>(cameraX, cameraY, depth)
-                let pointFlu = CoordinateFrames.cameraRdfToFlu(pointRdf)
-                points.append(pointFlu.x)
-                points.append(pointFlu.y)
-                points.append(pointFlu.z)
+                let outBase = pointCount * LidarCameraConstants.floatsPerPoint
+                // RDF -> FLU: (x, y, z) -> (z, -x, -y)
+                points[outBase + 0] = depth
+                points[outBase + 1] = -cameraX
+                points[outBase + 2] = -cameraY
+                pointCount += 1
 
-                if let colorSource = colorSource {
+                if hasRgbColorSource, let colorSource = colorSource {
                     let colorX = min(colorSource.width - 1, max(0, Int(round(Float(x) * colorScaleX))))
                     let colorY = min(colorSource.height - 1, max(0, Int(round(Float(y) * colorScaleY))))
                     let colorIndex = (colorY * colorSource.width + colorX) * LidarCameraConstants.colorsPerPoint
 
-                    if colorIndex + 2 < colorSource.bytes.count {
-                        colors.append(colorSource.bytes[colorIndex])
-                        colors.append(colorSource.bytes[colorIndex + 1])
-                        colors.append(colorSource.bytes[colorIndex + 2])
+                    let colorOutBase = colorCount * LidarCameraConstants.colorsPerPoint
+                    if colorIndex + 2 < colorSource.bytes.count,
+                       colorOutBase + 2 < colors.count {
+                        colors[colorOutBase + 0] = colorSource.bytes[colorIndex]
+                        colors[colorOutBase + 1] = colorSource.bytes[colorIndex + 1]
+                        colors[colorOutBase + 2] = colorSource.bytes[colorIndex + 2]
                     }
+                    colorCount += 1
+                } else if hasYuvColorSource,
+                          let yPlanePointer = yPlanePointer,
+                          let uvPlanePointer = uvPlanePointer {
+                    let colorX = min(yPlaneWidth - 1, max(0, Int(imageU.rounded())))
+                    let colorY = min(yPlaneHeight - 1, max(0, Int(imageV.rounded())))
+                    let yIndex = colorY * yPlaneBytesPerRow + colorX
+                    let uvIndex = (colorY >> 1) * uvPlaneBytesPerRow + ((colorX >> 1) << 1)
+
+                    let yValue = Float(yPlanePointer[yIndex])
+                    let cbValue = Float(uvPlanePointer[uvIndex])
+                    let crValue = Float(uvPlanePointer[uvIndex + 1])
+                    let (r, g, b) = yCbCrToRgb(
+                        y: yValue,
+                        cb: cbValue,
+                        cr: crValue,
+                        fullRange: yuvFullRange
+                    )
+                    let colorOutBase = colorCount * LidarCameraConstants.colorsPerPoint
+                    if colorOutBase + 2 < colors.count {
+                        colors[colorOutBase + 0] = r
+                        colors[colorOutBase + 1] = g
+                        colors[colorOutBase + 2] = b
+                    }
+                    colorCount += 1
                 }
 
-                if points.count >= maxFloatCount {
+                if pointCount * LidarCameraConstants.floatsPerPoint >= maxFloatCount
+                    || pointCount >= estimatedPoints {
                     reachedPointLimit = true
                     break
                 }
+                x += pointStride
             }
         }
 
-        let pointCount = points.count / LidarCameraConstants.floatsPerPoint
+        let usedFloatCount = pointCount * LidarCameraConstants.floatsPerPoint
+        if usedFloatCount < points.count {
+            points.removeLast(points.count - usedFloatCount)
+        }
+
+        let usedColorCount = min(colorCount, pointCount) * LidarCameraConstants.colorsPerPoint
+        if usedColorCount < colors.count {
+            colors.removeLast(colors.count - usedColorCount)
+        }
+
         return PointCloudExportData(points: points, colors: colors, pointCount: pointCount)
+    }
+
+    private func yCbCrToRgb(y: Float, cb: Float, cr: Float, fullRange: Bool) -> (UInt8, UInt8, UInt8) {
+        let cbShift = cb - 128.0
+        let crShift = cr - 128.0
+
+        let red: Float
+        let green: Float
+        let blue: Float
+        if fullRange {
+            red = y + (1.4020 * crShift)
+            green = y - (0.344136 * cbShift) - (0.714136 * crShift)
+            blue = y + (1.7720 * cbShift)
+        } else {
+            let luma = max(0, y - 16.0) * 1.164383
+            red = luma + (1.596027 * crShift)
+            green = luma - (0.391762 * cbShift) - (0.812968 * crShift)
+            blue = luma + (2.017232 * cbShift)
+        }
+        return (clampToUInt8(red), clampToUInt8(green), clampToUInt8(blue))
+    }
+
+    private func clampToUInt8(_ value: Float) -> UInt8 {
+        UInt8(max(0, min(255, Int(value.rounded()))))
     }
 
     private func depthMapToUIImage(depthMap: CVPixelBuffer) -> UIImage? {

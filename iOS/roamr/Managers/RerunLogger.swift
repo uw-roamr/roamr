@@ -151,16 +151,20 @@ private final class RGBJpegEncoder {
 private final class WasmRerunTelemetryBridge {
     static let shared = WasmRerunTelemetryBridge()
 
-    private let maxPointsToSend = 6_000
     private let videoMinInterval = 1.0 / 10.0
     private let processingLock = NSLock()
     private let stateLock = NSLock()
     private let jpegEncoder = RGBJpegEncoder(quality: 0.55)
 
+    private let perfReportIntervalSec = 2.0
+    private var perfWindowStartSec = CFAbsoluteTimeGetCurrent()
+    private var perfFrameCount = 0
+    private var perfDecodeTotalMs = 0.0
+    private var perfPointEmitTotalMs = 0.0
+    private var perfFrameTotalMs = 0.0
+
     private var lastVideoSentTimestamp: Double = 0.0
     private var warnedImageSizeZero = false
-    private var sampledPoints: [Float] = []
-    private var sampledColors: [UInt8] = []
 
     private init() {}
 
@@ -168,11 +172,21 @@ private final class WasmRerunTelemetryBridge {
         processingLock.lock()
         defer { processingLock.unlock() }
 
+        let frameStartSec = CFAbsoluteTimeGetCurrent()
         guard let frame = decodeFrame(execEnv: execEnv, payloadPointer: payloadPointer) else {
             return
         }
+        let decodedSec = CFAbsoluteTimeGetCurrent()
         logPointCloud(frame)
+        let pointEmittedSec = CFAbsoluteTimeGetCurrent()
         logCameraImage(frame)
+        let frameDoneSec = CFAbsoluteTimeGetCurrent()
+
+        recordPerf(
+            decodeMs: (decodedSec - frameStartSec) * 1000.0,
+            pointEmitMs: (pointEmittedSec - decodedSec) * 1000.0,
+            frameTotalMs: (frameDoneSec - frameStartSec) * 1000.0
+        )
     }
 
     private func decodeFrame(
@@ -272,53 +286,20 @@ private final class WasmRerunTelemetryBridge {
     }
 
     private func logPointCloud(_ frame: WasmLidarFrameView) {
-        let totalPoints = frame.pointsCount / 3
-        guard totalPoints > 0 else { return }
+        let packedPointCount = (frame.pointsCount / LidarCameraConstants.floatsPerPoint)
+            * LidarCameraConstants.floatsPerPoint
+        guard packedPointCount >= LidarCameraConstants.floatsPerPoint else { return }
 
-        let targetPoints = min(totalPoints, maxPointsToSend)
-        let stride = max(1, totalPoints / max(1, targetPoints))
+        let pointCount = packedPointCount / LidarCameraConstants.floatsPerPoint
+        let requiredColorCount = pointCount * LidarCameraConstants.colorsPerPoint
+        let hasUsableColors = frame.colorsCount >= requiredColorCount
 
-        sampledPoints.removeAll(keepingCapacity: true)
-        sampledPoints.reserveCapacity(targetPoints * 3)
-
-        var pointIndex = 0
-        var sampledPointCount = 0
-        while pointIndex < totalPoints && sampledPointCount < targetPoints {
-            let src = pointIndex * 3
-            sampledPoints.append(frame.pointsPointer[src])
-            sampledPoints.append(frame.pointsPointer[src + 1])
-            sampledPoints.append(frame.pointsPointer[src + 2])
-            pointIndex += stride
-            sampledPointCount += 1
-        }
-
-        var outputColors: [UInt8]?
-        if frame.colorsCount > 0 {
-            sampledColors.removeAll(keepingCapacity: true)
-            sampledColors.reserveCapacity(sampledPointCount * 3)
-
-            var colorPointIndex = 0
-            var sampledColorCount = 0
-            while colorPointIndex < totalPoints && sampledColorCount < sampledPointCount {
-                let colorIndex = colorPointIndex * LidarCameraConstants.colorsPerPoint
-                if colorIndex + 2 < frame.colorsCount {
-                    sampledColors.append(frame.colorsPointer[colorIndex + 0])
-                    sampledColors.append(frame.colorsPointer[colorIndex + 1])
-                    sampledColors.append(frame.colorsPointer[colorIndex + 2])
-                }
-                colorPointIndex += stride
-                sampledColorCount += 1
-            }
-
-            if !sampledColors.isEmpty {
-                outputColors = sampledColors
-            }
-        }
-
-        RerunWebSocketClient.shared.logPoints(
+        RerunWebSocketClient.shared.logPointsFromWasm(
             timestamp: frame.timestamp,
-            points: sampledPoints,
-            colors: outputColors
+            pointsPointer: UnsafePointer(frame.pointsPointer),
+            pointCount: pointCount,
+            colorsPointer: hasUsableColors ? UnsafePointer(frame.colorsPointer) : nil,
+            colorsCount: hasUsableColors ? requiredColorCount : 0
         )
     }
 
@@ -369,6 +350,38 @@ private final class WasmRerunTelemetryBridge {
         if warnedImageSizeZero { return }
         warnedImageSizeZero = true
         print("rerun_log_lidar_frame_impl: image_size is 0 in WASM payload; skipping camera/image logging")
+    }
+
+    private func recordPerf(decodeMs: Double, pointEmitMs: Double, frameTotalMs: Double) {
+        perfFrameCount += 1
+        perfDecodeTotalMs += decodeMs
+        perfPointEmitTotalMs += pointEmitMs
+        perfFrameTotalMs += frameTotalMs
+
+        let nowSec = CFAbsoluteTimeGetCurrent()
+        let elapsedSec = nowSec - perfWindowStartSec
+        guard elapsedSec >= perfReportIntervalSec else { return }
+
+        let frameCount = max(1, perfFrameCount)
+        let fps = Double(perfFrameCount) / max(elapsedSec, 0.001)
+        let avgDecodeMs = perfDecodeTotalMs / Double(frameCount)
+        let avgPointEmitMs = perfPointEmitTotalMs / Double(frameCount)
+        let avgFrameMs = perfFrameTotalMs / Double(frameCount)
+        print(
+            String(
+                format: "[rerun][ios][bridge] fps=%.1f decode=%.3fms point_emit=%.3fms frame=%.3fms",
+                fps,
+                avgDecodeMs,
+                avgPointEmitMs,
+                avgFrameMs
+            )
+        )
+
+        perfWindowStartSec = nowSec
+        perfFrameCount = 0
+        perfDecodeTotalMs = 0.0
+        perfPointEmitTotalMs = 0.0
+        perfFrameTotalMs = 0.0
     }
 }
 
@@ -539,6 +552,16 @@ private enum RerunMessage: Encodable {
     }
 }
 
+private enum RerunBinaryPointsProtocol {
+    static let magic: [UInt8] = [0x52, 0x52, 0x42, 0x31]  // "RRB1"
+    static let messageTypePoints: UInt8 = 1
+    static let flagsOffset = 5
+    static let timestampOffset = 8
+    static let pointCountOffset = 16
+    static let headerSize = 20
+    static let hasColorsFlag: UInt8 = 1
+}
+
 final class RerunWebSocketClient {
     static let shared = RerunWebSocketClient()
 
@@ -552,6 +575,16 @@ final class RerunWebSocketClient {
     private let maxPending = 2
 
     private let encoder = JSONEncoder()
+    private let useBinaryPointCloudTransport = true
+
+    private let perfReportIntervalSec = 2.0
+    private var perfWindowStartSec = CFAbsoluteTimeGetCurrent()
+    private var perfBinaryEnqueued = 0
+    private var perfBinaryDropped = 0
+    private var perfBinaryBytes = 0
+    private var perfBinarySendCount = 0
+    private var perfBinarySendTotalMs = 0.0
+    private var perfPendingHighWatermark = 0
 
     var serverURLString = RerunWebSocketClient.defaultServerURLString
 
@@ -564,7 +597,49 @@ final class RerunWebSocketClient {
 
     func logPoints(timestamp: Double, points: [Float], colors: [UInt8]?) {
         guard !points.isEmpty else { return }
+        if useBinaryPointCloudTransport,
+           let binaryPayload = makeBinaryPointCloudPayload(
+            timestamp: timestamp,
+            points: points,
+            colors: colors
+           ) {
+            enqueueBinaryPointCloud(binaryPayload)
+            return
+        }
         enqueue(.points(timestamp: timestamp, points: points, colors: colors))
+    }
+
+    func logPointsFromWasm(
+        timestamp: Double,
+        pointsPointer: UnsafePointer<Float32>,
+        pointCount: Int,
+        colorsPointer: UnsafePointer<UInt8>?,
+        colorsCount: Int
+    ) {
+        guard pointCount > 0 else { return }
+        if useBinaryPointCloudTransport,
+           let binaryPayload = makeBinaryPointCloudPayload(
+            timestamp: timestamp,
+            pointsPointer: pointsPointer,
+            pointCount: pointCount,
+            colorsPointer: colorsPointer,
+            colorsCount: colorsCount
+           ) {
+            enqueueBinaryPointCloud(binaryPayload)
+            return
+        }
+
+        let floatCount = pointCount * LidarCameraConstants.floatsPerPoint
+        let fallbackPoints = Array(
+            UnsafeBufferPointer(start: pointsPointer, count: floatCount)
+        )
+        var fallbackColors: [UInt8]? = nil
+        if let colorsPointer, colorsCount >= floatCount {
+            fallbackColors = Array(
+                UnsafeBufferPointer(start: colorsPointer, count: floatCount)
+            )
+        }
+        enqueue(.points(timestamp: timestamp, points: fallbackPoints, colors: fallbackColors))
     }
 
     func logPose(timestamp: Double, quaternion: [Double]) {
@@ -612,6 +687,24 @@ final class RerunWebSocketClient {
         }
     }
 
+    private func enqueueBinaryPointCloud(_ payload: Data) {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            guard !self.shouldDropPointCloud() else {
+                self.perfBinaryDropped += 1
+                self.maybeReportBinaryPerf()
+                return
+            }
+            self.pendingCount += 1
+            self.perfBinaryEnqueued += 1
+            self.perfBinaryBytes += payload.count
+            self.perfPendingHighWatermark = max(self.perfPendingHighWatermark, self.pendingCount)
+            self.maybeReportBinaryPerf()
+            self.connectIfNeeded()
+            self.sendBinary(payload)
+        }
+    }
+
     private func connectIfNeeded() {
         if isConnected { return }
         let normalized = normalizeURLString(serverURLString)
@@ -642,6 +735,31 @@ final class RerunWebSocketClient {
         task.send(.string(payloadString)) { [weak self] error in
             self?.queue.async { [weak self] in
                 self?.decrementPending()
+            }
+            if let error = error {
+                print("Rerun websocket send error: \(error)")
+                self?.markDisconnected()
+            }
+        }
+    }
+
+    private func sendBinary(_ payload: Data) {
+        let sendStartSec = CFAbsoluteTimeGetCurrent()
+        guard let task = task else {
+            queue.async { [weak self] in
+                self?.decrementPending()
+                self?.maybeReportBinaryPerf()
+            }
+            return
+        }
+
+        task.send(.data(payload)) { [weak self] error in
+            let sendDurationMs = (CFAbsoluteTimeGetCurrent() - sendStartSec) * 1000.0
+            self?.queue.async { [weak self] in
+                self?.decrementPending()
+                self?.perfBinarySendCount += 1
+                self?.perfBinarySendTotalMs += sendDurationMs
+                self?.maybeReportBinaryPerf()
             }
             if let error = error {
                 print("Rerun websocket send error: \(error)")
@@ -684,6 +802,200 @@ final class RerunWebSocketClient {
         default:
             return true
         }
+    }
+
+    private func shouldDropPointCloud() -> Bool {
+        pendingCount >= maxPending
+    }
+
+    private func makeBinaryPointCloudPayload(
+        timestamp: Double,
+        points: [Float],
+        colors: [UInt8]?
+    ) -> Data? {
+        guard points.count >= 3 else { return nil }
+        let pointCount = points.count / 3
+        let packedPointCount = pointCount * 3
+        guard packedPointCount > 0 else { return nil }
+
+        let pointsByteCount = packedPointCount * MemoryLayout<Float32>.size
+        let hasColors = (colors?.count ?? 0) >= packedPointCount
+        let colorsByteCount = hasColors ? packedPointCount : 0
+        let totalByteCount = RerunBinaryPointsProtocol.headerSize + pointsByteCount + colorsByteCount
+
+        var payload = Data(count: totalByteCount)
+        payload.withUnsafeMutableBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else { return }
+            let rawPointer = baseAddress.assumingMemoryBound(to: UInt8.self)
+
+            RerunBinaryPointsProtocol.magic.withUnsafeBytes { magicBytes in
+                if let magicBase = magicBytes.baseAddress {
+                    memcpy(rawPointer, magicBase, RerunBinaryPointsProtocol.magic.count)
+                }
+            }
+
+            rawPointer[4] = RerunBinaryPointsProtocol.messageTypePoints
+            rawPointer[RerunBinaryPointsProtocol.flagsOffset] = hasColors
+                ? RerunBinaryPointsProtocol.hasColorsFlag
+                : 0
+            var reserved: UInt16 = 0
+            withUnsafeBytes(of: &reserved) { bytes in
+                if let src = bytes.baseAddress {
+                    memcpy(rawPointer.advanced(by: 6), src, MemoryLayout<UInt16>.size)
+                }
+            }
+            var timestampBits = timestamp.bitPattern.littleEndian
+            withUnsafeBytes(of: &timestampBits) { bytes in
+                if let src = bytes.baseAddress {
+                    memcpy(
+                        rawPointer.advanced(by: RerunBinaryPointsProtocol.timestampOffset),
+                        src,
+                        MemoryLayout<UInt64>.size
+                    )
+                }
+            }
+            var pointCountLE = UInt32(pointCount).littleEndian
+            withUnsafeBytes(of: &pointCountLE) { bytes in
+                if let src = bytes.baseAddress {
+                    memcpy(
+                        rawPointer.advanced(by: RerunBinaryPointsProtocol.pointCountOffset),
+                        src,
+                        MemoryLayout<UInt32>.size
+                    )
+                }
+            }
+
+            points.withUnsafeBytes { pointBytes in
+                if let pointsBase = pointBytes.baseAddress {
+                    memcpy(
+                        rawPointer.advanced(by: RerunBinaryPointsProtocol.headerSize),
+                        pointsBase,
+                        pointsByteCount
+                    )
+                }
+            }
+
+            if hasColors, let colors {
+                colors.withUnsafeBytes { colorBytes in
+                    if let colorsBase = colorBytes.baseAddress {
+                        memcpy(
+                            rawPointer.advanced(by: RerunBinaryPointsProtocol.headerSize + pointsByteCount),
+                            colorsBase,
+                            colorsByteCount
+                        )
+                    }
+                }
+            }
+        }
+        return payload
+    }
+
+    private func makeBinaryPointCloudPayload(
+        timestamp: Double,
+        pointsPointer: UnsafePointer<Float32>,
+        pointCount: Int,
+        colorsPointer: UnsafePointer<UInt8>?,
+        colorsCount: Int
+    ) -> Data? {
+        guard pointCount > 0 else { return nil }
+        let packedPointCount = pointCount * LidarCameraConstants.floatsPerPoint
+        guard packedPointCount > 0 else { return nil }
+
+        let pointsByteCount = packedPointCount * MemoryLayout<Float32>.size
+        let hasColors = colorsPointer != nil && colorsCount >= packedPointCount
+        let colorsByteCount = hasColors ? packedPointCount : 0
+        let totalByteCount = RerunBinaryPointsProtocol.headerSize + pointsByteCount + colorsByteCount
+
+        var payload = Data(count: totalByteCount)
+        payload.withUnsafeMutableBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else { return }
+            let rawPointer = baseAddress.assumingMemoryBound(to: UInt8.self)
+
+            RerunBinaryPointsProtocol.magic.withUnsafeBytes { magicBytes in
+                if let magicBase = magicBytes.baseAddress {
+                    memcpy(rawPointer, magicBase, RerunBinaryPointsProtocol.magic.count)
+                }
+            }
+
+            rawPointer[4] = RerunBinaryPointsProtocol.messageTypePoints
+            rawPointer[RerunBinaryPointsProtocol.flagsOffset] = hasColors
+                ? RerunBinaryPointsProtocol.hasColorsFlag
+                : 0
+            var reserved: UInt16 = 0
+            withUnsafeBytes(of: &reserved) { bytes in
+                if let src = bytes.baseAddress {
+                    memcpy(rawPointer.advanced(by: 6), src, MemoryLayout<UInt16>.size)
+                }
+            }
+            var timestampBits = timestamp.bitPattern.littleEndian
+            withUnsafeBytes(of: &timestampBits) { bytes in
+                if let src = bytes.baseAddress {
+                    memcpy(
+                        rawPointer.advanced(by: RerunBinaryPointsProtocol.timestampOffset),
+                        src,
+                        MemoryLayout<UInt64>.size
+                    )
+                }
+            }
+            var pointCountLE = UInt32(pointCount).littleEndian
+            withUnsafeBytes(of: &pointCountLE) { bytes in
+                if let src = bytes.baseAddress {
+                    memcpy(
+                        rawPointer.advanced(by: RerunBinaryPointsProtocol.pointCountOffset),
+                        src,
+                        MemoryLayout<UInt32>.size
+                    )
+                }
+            }
+
+            memcpy(
+                rawPointer.advanced(by: RerunBinaryPointsProtocol.headerSize),
+                pointsPointer,
+                pointsByteCount
+            )
+
+            if hasColors, let colorsPointer {
+                memcpy(
+                    rawPointer.advanced(by: RerunBinaryPointsProtocol.headerSize + pointsByteCount),
+                    colorsPointer,
+                    colorsByteCount
+                )
+            }
+        }
+        return payload
+    }
+
+    private func maybeReportBinaryPerf() {
+        let nowSec = CFAbsoluteTimeGetCurrent()
+        let elapsedSec = nowSec - perfWindowStartSec
+        guard elapsedSec >= perfReportIntervalSec else { return }
+
+        let enqueueRate = Double(perfBinaryEnqueued) / max(elapsedSec, 0.001)
+        let txMBps = Double(perfBinaryBytes) / max(elapsedSec, 0.001) / 1_000_000.0
+        let avgSendMs: Double
+        if perfBinarySendCount > 0 {
+            avgSendMs = perfBinarySendTotalMs / Double(perfBinarySendCount)
+        } else {
+            avgSendMs = 0.0
+        }
+        print(
+            String(
+                format: "[rerun][ios][ws] enqueue=%.1f/s dropped=%d tx=%.2fMB/s send=%.3fms pending_hw=%d",
+                enqueueRate,
+                perfBinaryDropped,
+                txMBps,
+                avgSendMs,
+                perfPendingHighWatermark
+            )
+        )
+
+        perfWindowStartSec = nowSec
+        perfBinaryEnqueued = 0
+        perfBinaryDropped = 0
+        perfBinaryBytes = 0
+        perfBinarySendCount = 0
+        perfBinarySendTotalMs = 0.0
+        perfPendingHighWatermark = pendingCount
     }
 }
 
