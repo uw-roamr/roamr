@@ -3,6 +3,7 @@ bazel-*
 iOS/.DS_Store
 iOS/roamr.xcodeproj/xcuserdata/
 iOS/roamr.xcodeproj/project.xcworkspace/xcuserdata/
+iOS/roamr.xcodeproj/project.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
 embedded/ble-test/build/
 .vscode/
 

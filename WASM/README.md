@@ -21,7 +21,7 @@ Examples:
 
 ## Motor control
 
-Two helper APIs currently exist in C++ (see `WASM/motors.h`):
+Motor helper APIs exist in C++ (see `WASM/controls/motors.h`):
 
 - `drive_percent(left_pct, right_pct, hold_ms)`
   - Sends an immediate command. Percent is clamped to [-100, 100].
@@ -30,7 +30,17 @@ Two helper APIs currently exist in C++ (see `WASM/motors.h`):
 - `drive_for(left_pct, right_pct, duration_ms, stop_after = true)`
   - Convenience wrapper that calls `drive_percent`, then sleeps the calling thread for `duration_ms`, and optionally issues an explicit stop. Use this when you want a blocking “run then pause” pattern from C++ without managing sleeps yourself.
 
-Summary: use `drive_percent` for non‑blocking, rapid updates (e.g., control loops); use `drive_for` when you need a timed motion with a guaranteed dwell before the next command.
+- `drive_twist(v_mps, omega_rad_s, odom, hold_ms)`
+  - Converts body twist `(v, omega)` into left/right wheel speed setpoints and runs a closed-loop wheel-speed controller.
+  - Inputs are clamped to `|v| <= 0.3 m/s` and `|omega| <= pi rad/s`.
+  - Wheel speed feedback is computed from wheel odometry deltas `(dl_ticks, dr_ticks, sample_period_ms)` and mapped back to motor percent outputs.
+  - Call it once per fresh odometry sample for stable control updates.
+
+- `drive_twist_for(v_mps, omega_rad_s, duration_ms, stop_after = true)`
+  - Blocking twist helper that internally polls wheel odometry and repeatedly calls `drive_twist`.
+  - Use this for simple motion demos that should resemble `drive_for(...)`.
+
+Summary: use `drive_percent` for direct open-loop commands, `drive_twist` for per-sample closed-loop updates, and `drive_for` / `drive_twist_for` for simple blocking demo motions.
 
 ## Wheel odometry POC
 

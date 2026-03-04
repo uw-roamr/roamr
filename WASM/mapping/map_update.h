@@ -10,5 +10,5 @@ namespace mapping{
                                sensors::LidarCameraData* rerun_out,
                                bool update_map,
                                bool& map_initialized,
-                               const core::Vector4d& q_body_to_world);
+                               const core::PoseSE3d& body_to_world);
 };

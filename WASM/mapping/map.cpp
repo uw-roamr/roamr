@@ -14,7 +14,7 @@
 
 	// Pose storage
 	static const int32_t MAX_POSES = 4096;
-	static float POSES[3 * MAX_POSES]; // x,y,theta triples
+	static double POSES[3 * MAX_POSES]; // x,y,theta triples
 
 	// Image buffer (RGBA8888)
 	static const int32_t MAX_W = 512;
@@ -51,7 +51,7 @@
 
 	void reset_poses() {
 		for (int32_t i = 0; i < 3 * MAX_POSES; ++i) {
-			POSES[i] = 0.0f;
+			POSES[i] = 0.0;
 		}
 	}
 
@@ -76,7 +76,7 @@
 	}
 
 	// Set a single pose at index (0-based). Extra indices are ignored.
-	void set_pose(int32_t idx, float x, float y, float theta) {
+	void set_pose(int32_t idx, double x, double y, double theta) {
 		if (idx < 0 || idx >= MAX_POSES) return;
 		int32_t base = idx * 3;
 		POSES[base + 0] = x;
@@ -85,11 +85,11 @@
 	}
 
 	// Set a single LiDAR point at index (0-based).
-	void set_point(int32_t idx, float x, float y) {
+	void set_point(int32_t idx, double x, double y) {
 		if (idx < 0 || idx >= MAX_POINTS) return;
 		int32_t base = idx * 2;
-		POINTS[base + 0] = x;
-		POINTS[base + 1] = y;
+		POINTS[base + 0] = static_cast<float>(x);
+		POINTS[base + 1] = static_cast<float>(y);
 		if (idx + 1 > POINTS_COUNT) POINTS_COUNT = idx + 1;
 	}
 
@@ -105,7 +105,7 @@
 		return gx + gy * MAP_SIZE_X;
 	}
 
-	static inline int32_t world_to_grid(float x, float y, int32_t *gx, int32_t *gy) {
+	static inline int32_t world_to_grid(double x, double y, int32_t *gx, int32_t *gy) {
 		if (MAP_ORIGIN_INITIALIZED) {
 			x += MAP_ORIGIN_OFFSET_X;
 			y += MAP_ORIGIN_OFFSET_Y;
@@ -120,10 +120,10 @@
 		return 1;
 	}
 
-	static inline void maybe_init_origin(float x, float y) {
+	static inline void maybe_init_origin(double x, double y) {
 		if (!MAP_ORIGIN_INITIALIZED) {
-			MAP_ORIGIN_OFFSET_X = x;
-			MAP_ORIGIN_OFFSET_Y = y;
+			MAP_ORIGIN_OFFSET_X = static_cast<float>(x);
+			MAP_ORIGIN_OFFSET_Y = static_cast<float>(y);
 			MAP_ORIGIN_INITIALIZED = 1;
 		}
 	}
@@ -170,7 +170,7 @@
 		}
 	}
 
-	static void integrate_scan(float pose_x, float pose_y, float pose_theta, int32_t pointCount, int32_t points_in_world) {
+	static void integrate_scan(double pose_x, double pose_y, double pose_theta, int32_t pointCount, int32_t points_in_world) {
 		if (pointCount <= 0) return;
 		maybe_init_origin(pose_x, pose_y);
 
@@ -180,9 +180,9 @@
 			return;
 		}
 
-		const float min_range2 = MIN_RANGE * MIN_RANGE;
-		const float c = cosf(pose_theta);
-		const float s = sinf(pose_theta);
+		const double min_range2 = static_cast<double>(MIN_RANGE) * static_cast<double>(MIN_RANGE);
+		const double c = cos(pose_theta);
+		const double s = sin(pose_theta);
 
 		for (int32_t i = 0; i < pointCount; ++i) {
 			int32_t base = i * 2;
@@ -190,15 +190,15 @@
 			float ly = POINTS[base + 1];
 			if (!is_finite(lx) || !is_finite(ly)) continue;
 
-			float wx = lx;
-			float wy = ly;
+			double wx = lx;
+			double wy = ly;
 			if (!points_in_world) {
 				wx = pose_x + c * lx - s * ly;
 				wy = pose_y + s * lx + c * ly;
 			}
 
-			float dx = wx - pose_x;
-			float dy = wy - pose_y;
+			const double dx = wx - pose_x;
+			const double dy = wy - pose_y;
 			if ((dx * dx + dy * dy) < min_range2) continue;
 
 			int32_t end_x = 0;
@@ -278,9 +278,9 @@
 		int32_t used_points = pointCount;
 		if (used_points > POINTS_COUNT) used_points = POINTS_COUNT;
 
-		float pose_x = 0.0f;
-		float pose_y = 0.0f;
-		float pose_theta = 0.0f;
+		double pose_x = 0.0;
+		double pose_y = 0.0;
+		double pose_theta = 0.0;
 		if (poseCount > 0) {
 			int32_t base = (poseCount - 1) * 3;
 			pose_x = POSES[base + 0];
@@ -347,16 +347,16 @@
 
 		// Overlay points (red) for debugging.
 		if (used_points > 0 && (POINTS_IN_WORLD || poseCount > 0)) {
-			const float c = cosf(pose_theta);
-			const float s = sinf(pose_theta);
+			const double c = cos(pose_theta);
+			const double s = sin(pose_theta);
 			for (int32_t i = 0; i < used_points; ++i) {
 				int32_t base = i * 2;
 				float lx = POINTS[base + 0];
 				float ly = POINTS[base + 1];
 				if (!is_finite(lx) || !is_finite(ly)) continue;
 
-				float wx = lx;
-				float wy = ly;
+				double wx = lx;
+				double wy = ly;
 				if (!POINTS_IN_WORLD) {
 					wx = pose_x + c * lx - s * ly;
 					wy = pose_y + s * lx + c * ly;
@@ -368,43 +368,68 @@
 				int32_t px = 0;
 				int32_t py = 0;
 				if (!grid_to_pixel(gx, gy, scale, off_x, off_y, &px, &py)) continue;
-				set_pixel(px, py, 255, 0, 0, 255);
+				set_pixel(px, py, 255, 0, 255, 255);
 			}
 		}
 
-		// Overlay poses as 3x3 white dots.
-		for (int32_t i = 0; i < poseCount; ++i) {
-			int32_t base = i * 3;
-			float px_world = POSES[base + 0];
-			float py_world = POSES[base + 1];
+		// Overlay wheel-odometry path as a red polyline.
+		if (poseCount > 1) {
+			for (int32_t i = 1; i < poseCount; ++i) {
+				const int32_t base0 = (i - 1) * 3;
+				const int32_t base1 = i * 3;
+				const double x0_world = POSES[base0 + 0];
+				const double y0_world = POSES[base0 + 1];
+				const double x1_world = POSES[base1 + 0];
+				const double y1_world = POSES[base1 + 1];
+				int32_t gx0 = 0, gy0 = 0, gx1 = 0, gy1 = 0;
+				if (!world_to_grid(x0_world, y0_world, &gx0, &gy0) ||
+					!world_to_grid(x1_world, y1_world, &gx1, &gy1)) {
+					continue;
+				}
+				int32_t px0 = 0, py0 = 0, px1 = 0, py1 = 0;
+				if (!grid_to_pixel(gx0, gy0, scale, off_x, off_y, &px0, &py0) ||
+					!grid_to_pixel(gx1, gy1, scale, off_x, off_y, &px1, &py1)) {
+					continue;
+				}
+				draw_line_pixel(px0, py0, px1, py1, 255, 0, 0, 255);
+			}
+		}
+
+		// Overlay only the latest pose as a 3x3 white dot.
+		if (poseCount > 0) {
+			int32_t base = (poseCount - 1) * 3;
+			const double px_world = POSES[base + 0];
+			const double py_world = POSES[base + 1];
 			int32_t gx = 0;
 			int32_t gy = 0;
-			if (!world_to_grid(px_world, py_world, &gx, &gy)) continue;
-			int32_t px = 0;
-			int32_t py = 0;
-			if (!grid_to_pixel(gx, gy, scale, off_x, off_y, &px, &py)) continue;
-			for (int dy = -1; dy <= 1; ++dy) {
-				for (int dx = -1; dx <= 1; ++dx) {
-					int32_t x = clampi(px + dx, 0, CUR_W - 1);
-					int32_t y = clampi(py + dy, 0, CUR_H - 1);
-					int32_t o = (y * CUR_W + x) * 4;
-					IMAGE[o + 0] = 255;
-					IMAGE[o + 1] = 255;
-					IMAGE[o + 2] = 255;
-					IMAGE[o + 3] = 255;
+			if (world_to_grid(px_world, py_world, &gx, &gy)) {
+				int32_t px = 0;
+				int32_t py = 0;
+				if (grid_to_pixel(gx, gy, scale, off_x, off_y, &px, &py)) {
+					for (int dy = -1; dy <= 1; ++dy) {
+						for (int dx = -1; dx <= 1; ++dx) {
+							int32_t x = clampi(px + dx, 0, CUR_W - 1);
+							int32_t y = clampi(py + dy, 0, CUR_H - 1);
+							int32_t o = (y * CUR_W + x) * 4;
+							IMAGE[o + 0] = 255;
+							IMAGE[o + 1] = 255;
+							IMAGE[o + 2] = 255;
+							IMAGE[o + 3] = 255;
+						}
+					}
 				}
 			}
 		}
 
 		// Heading indicator for the most recent pose (green line).
 		if (poseCount > 0) {
-			const float heading_len_m = 0.5f;
+			const double heading_len_m = 0.5;
 			const int32_t base = (poseCount - 1) * 3;
-			const float px_world = POSES[base + 0];
-			const float py_world = POSES[base + 1];
-			const float theta = POSES[base + 2];
-			const float hx_world = px_world + cosf(theta) * heading_len_m;
-			const float hy_world = py_world + sinf(theta) * heading_len_m;
+			const double px_world = POSES[base + 0];
+			const double py_world = POSES[base + 1];
+			const double theta = POSES[base + 2];
+			const double hx_world = px_world + cos(theta) * heading_len_m;
+			const double hy_world = py_world + sin(theta) * heading_len_m;
 
 			int32_t gx0 = 0, gy0 = 0, gx1 = 0, gy1 = 0;
 			if (world_to_grid(px_world, py_world, &gx0, &gy0) &&
