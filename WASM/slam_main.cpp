@@ -5,16 +5,18 @@
 #include <iostream>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include "controls/motors.h"
+#include "controls/path_following.h"
 #include "core/telemetry.h"
+#include "mapping/map_update.h"
 #include "planning/planner_bridge.h"
 #include "sensors/calibration.h"
 #include "sensors/imu.h"
 #include "sensors/imu_preintegration.h"
 #include "sensors/lidar_camera.h"
 #include "sensors/wheel_odometry.h"
-#include "mapping/map_update.h"
 
 static bool g_map_initialized = false;
 static mapping::MapFrame g_map_frame;
@@ -49,7 +51,7 @@ static constexpr PoseSource pose_source = PoseSource::wheel_odom;
 // Toggle off when using host-provided goal clicks.
 static constexpr bool kEnablePlannerDemoGoal = true;
 static constexpr int kPlannerDemoGoalPixelX = 160;
-static constexpr int kPlannerDemoGoalPixelY = 111;
+static constexpr int kPlannerDemoGoalPixelY = 128;
 
 
 int main(){
@@ -242,11 +244,15 @@ int main(){
       }
     });
 
-    std::thread wheel_odom_thread([&m_pose](){
+    std::thread wheel_odom_thread([&m_pose, &motors](){
         sensors::WheelOdometryData odom = {};
+        controls::PathFollower path_follower;
+        std::vector<core::Vector3d> planned_path_world;
+        uint64_t planned_path_revision = 0;
         double x = 0.0;
         double y = 0.0;
         double yaw = 0.0;
+        bool was_following_path = false;
 
         while(true){
             read_wheel_odometry(&odom);
@@ -258,6 +264,41 @@ int main(){
             sensors::integrate_wheel_odometry(odom, &x, &y, &yaw);
             g_latest_translation_odom = {x, y, 0.0};
             g_latest_quat_odom = {0.0, 0.0, std::sin(yaw * 0.5), std::cos(yaw * 0.5)};
+
+            const uint64_t latest_revision =
+                planning::bridge::copy_latest_plan_world(nullptr);
+            if (latest_revision != planned_path_revision) {
+                planned_path_revision =
+                    planning::bridge::copy_latest_plan_world(&planned_path_world);
+                if (planned_path_world.empty()) {
+                    path_follower.clear_path();
+                } else {
+                    path_follower.set_path(planned_path_world);
+                }
+            }
+
+            if (path_follower.has_path()) {
+                const int hold_ms = (odom.sample_period_ms > 0) ? odom.sample_period_ms : 100;
+                const double dt_seconds =
+                    std::max(1e-3, static_cast<double>(hold_ms) * 1e-3);
+                const controls::PathFollowerStatus status =
+                    path_follower.update(
+                        controls::Pose2D{x, y, yaw},
+                        dt_seconds,
+                        hold_ms);
+                if (status.goal_reached) {
+                    path_follower.clear_path();
+                    planning::bridge::clear_goal();
+                    motors.stop();
+                    was_following_path = false;
+                } else {
+                    motors.drive_twist(status.command, odom);
+                    was_following_path = true;
+                }
+            } else if (was_following_path) {
+                motors.stop();
+                was_following_path = false;
+            }
 
             if (pose_source == PoseSource::wheel_odom){
                 sensors::PoseLog pose_copy = {};
