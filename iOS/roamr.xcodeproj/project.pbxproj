@@ -34,7 +34,6 @@
 				WASM/core/telemetry.cpp,
 				WASM/mapping/map_update.cpp,
 				WASM/mapping/map.cpp,
-				WASM/planning/planner_bridge.cpp,
 				WASM/sensors/imu_calibration.cpp,
 				WASM/sensors/imu_preintegration.cpp,
 				WASM/slam_main.cpp,
