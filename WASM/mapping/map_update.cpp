@@ -34,9 +34,7 @@ namespace mapping {
                              sensors::LidarCameraData* rerun_out,
                              bool update_map,
                              bool& map_initialized,
-                             const core::Vector4d& q_body_to_world_in,
-                             const core::Vector3d& t_body_to_world_in
-                            //  const core::PoseSE3d& pose,
+                             const core::PoseSE3d& body_to_world
                             //  const bool rotation_only_bc_imu_drifts
                             ) {
     const int total_points = static_cast<int>(lc_data.points_size / 3);
@@ -51,8 +49,8 @@ namespace mapping {
       map_initialized = true;
     }
 
-    const core::Vector4d q_body_to_world = core::quat_normalize(q_body_to_world_in);
-    const core::Vector3d t_body_to_world = t_body_to_world_in;
+    const core::Vector4d& q_body_to_world = core::quat_normalize(body_to_world.quaternion);
+    const core::Vector3d& t_body_to_world = body_to_world.translation;
     const bool points_rdf =
         lc_data.points_frame_id == static_cast<core::CoordinateFrameId_t>(core::CoordinateFrameId::kRDF);
 

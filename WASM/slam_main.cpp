@@ -120,12 +120,11 @@ int main(){
       }
       while(true){
 
-        core::Vector4d q_body_to_world = {0.0, 0.0, 0.0, 1.0};
-        core::Vector3d t_body_to_world = {0.0, 0.0, 0.0};
+        core::PoseSE3d body_to_world;
         {
             std::lock_guard<std::mutex> lk(m_pose);
-            q_body_to_world = g_pose.quaternion;
-            t_body_to_world = g_pose.translation;
+            body_to_world.quaternion = g_pose.quaternion;
+            body_to_world.translation = g_pose.translation;
         }
 
         const int ready_idx = g_lc_ready_idx.exchange(-1, std::memory_order_acq_rel);
@@ -152,8 +151,7 @@ int main(){
             &g_rerun_lc,
             do_map_update,
             g_map_initialized,
-            q_body_to_world,
-            t_body_to_world
+            body_to_world
         );
         g_lc_in_use_idx.store(-1, std::memory_order_release);
 
