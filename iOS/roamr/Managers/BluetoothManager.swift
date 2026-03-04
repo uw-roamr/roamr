@@ -45,6 +45,7 @@ class BluetoothManager: NSObject, ObservableObject {
     private let odomQueueLock = NSLock()
     private var pendingOdomSamples: [WheelOdometrySample] = []
     private let maxPendingOdomSamples = 12_000
+    private let preferredDeviceNameSubstring = "ESP32_C6"
 
     // UUIDs matching ESP32 firmware
     private let serviceUUID = CBUUID(string: "00FF")
@@ -91,8 +92,6 @@ class BluetoothManager: NSObject, ObservableObject {
     }
 
     func sendMessage(_ message: String) {
-        lastSentCommand = message
-
         guard let characteristic = controlCharacteristic,
               let device = connectedDevice,
               let data = message.data(using: .utf8) else {
@@ -233,9 +232,12 @@ class BluetoothManager: NSObject, ObservableObject {
             print("[BLE ODOM RX] frame seq=\(seq) n=0 queued=\(queuedCount)")
         }
 
-        let odomInfo = "Odom seq=\(seq) n=\(sampleCount)"
-        lastOdomInfo = odomInfo
-        lastMessage = odomInfo
+        lastMessage = "Odom seq=\(seq) n=\(sampleCount)"
+    }
+
+    private func isPreferredPeripheral(_ peripheral: CBPeripheral) -> Bool {
+        guard let name = peripheral.name else { return false }
+        return name.localizedCaseInsensitiveContains(preferredDeviceNameSubstring)
     }
 }
 
@@ -261,7 +263,13 @@ extension BluetoothManager: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         if !discoveredDevices.contains(where: { $0.identifier == peripheral.identifier }) {
-            discoveredDevices.append(peripheral)
+            if isPreferredPeripheral(peripheral) {
+                let firstNonPreferredIndex =
+                    discoveredDevices.firstIndex(where: { !isPreferredPeripheral($0) }) ?? discoveredDevices.count
+                discoveredDevices.insert(peripheral, at: firstNonPreferredIndex)
+            } else {
+                discoveredDevices.append(peripheral)
+            }
         }
     }
 
