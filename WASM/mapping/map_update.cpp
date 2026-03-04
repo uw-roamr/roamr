@@ -21,6 +21,8 @@ namespace mapping {
   constexpr bool kRerunIncludeImage = false;
   // Rerun logging: highlight filtered points in bright pink.
   constexpr bool kRerunHighlightFiltered = true;
+  // Keep rerun point payload bounded to reduce JSON encode + websocket pressure.
+  constexpr int kRerunMaxPoints = 4000;
   constexpr double kMapLogIntervalSec = 0.1;
 
 
@@ -59,8 +61,10 @@ namespace mapping {
     // Use the phone-facing axis (camera forward) as +X for mapping.
     const core::Vector3d forward_flu = {1.0, 0.0, 0.0};
 
-    // currently, this does nothing so we can comment it out safely. in the future, we may want to compensate for mounting errors.
-    const core::Vector4d q_point_to_body = core::quat_identity();
+    // Correct camera-to-body mounting by +90 deg roll:
+    // (x, y, z) -> (x, -z, y)
+    // Applying here guarantees map, z filtering, and rerun all use the same corrected geometry.
+    const core::Vector4d q_point_to_body = core::quat_from_euler_zyx(core::pi * 0.5, 0.0, 0.0);
     const core::Vector3d forward_flu_body = core::quat_rotate(q_point_to_body, forward_flu);
 
     const core::Vector3d forward_flu_world = core::quat_rotate(q_body_to_world, forward_flu_body);
@@ -87,6 +91,7 @@ namespace mapping {
     if (total_points > mapMaxPoints) {
       stride = std::max(1, total_points / mapMaxPoints);
     }
+    const int rerun_stride = std::max(1, total_points / std::max(1, kRerunMaxPoints));
 
     const float max_range2 = mapMaxRangeMeters * mapMaxRangeMeters;
     int used_points = 0;
@@ -130,9 +135,8 @@ namespace mapping {
       const bool in_range = (r2 <= max_range2);
       const bool filtered = keep && in_range;
 
-      if (rerun_out && used_points_rerun < sensors::max_points_per_scan) {
+      if (rerun_out && used_points_rerun < sensors::max_points_per_scan && (i % rerun_stride == 0)) {
         const int out_base = used_points_rerun * 3;
-
         rerun_out->points[out_base + 0] = wp.x;
         rerun_out->points[out_base + 1] = wp.y;
         rerun_out->points[out_base + 2] = wp.z;

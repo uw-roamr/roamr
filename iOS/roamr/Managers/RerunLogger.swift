@@ -151,7 +151,7 @@ private final class RGBJpegEncoder {
 private final class WasmRerunTelemetryBridge {
     static let shared = WasmRerunTelemetryBridge()
 
-    private let maxPointsToSend = 15_000
+    private let maxPointsToSend = 6_000
     private let videoMinInterval = 1.0 / 10.0
     private let processingLock = NSLock()
     private let stateLock = NSLock()

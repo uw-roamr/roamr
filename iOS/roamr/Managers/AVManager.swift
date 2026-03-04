@@ -47,6 +47,19 @@ struct DepthPixelData {
     var count: Int
 }
 
+struct PointCloudExportData {
+    var points: [Float32]  // FLU frame packed as xyzxyz...
+    var colors: [UInt8]    // RGB per point
+    var pointCount: Int
+}
+
+enum AVPreviewMode {
+    case none
+    case video
+    case depth
+    case point
+}
+
 // Equivalent to C++ constants.
 enum LidarCameraConstants {
     static let maxPointsPerScan = 100000
@@ -64,6 +77,14 @@ enum LidarCameraConstants {
 
 final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     static let shared = AVManager()
+
+    // Keep compute cost bounded for WASM/Rerun telemetry.
+    private let processingTargetFPS: Double = 20.0
+    private let previewTargetFPS: Double = 12.0
+    private let rgbDownsampleFactor: Int = 2
+    private let depthPixelSubsampleStride: Int = 2
+    private let includePointColorsForWasm: Bool = true
+    private let includeImageInWasmPayload: Bool = false
 
     @Published var isActive = false
     @Published var depthMapImage: UIImage?
@@ -88,6 +109,9 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     private var currentFrame: ARFrame?
     private var hasNewFrame = false
     private var isProcessingFrame = false
+    private var lastProcessedFrameTimestamp: TimeInterval = 0
+    private var lastPreviewFrameTimestamp: TimeInterval = 0
+    private var previewMode: AVPreviewMode = .none
 
     var isDataDirty = false
 
@@ -121,9 +145,33 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let uiImage: UIImage?
     }
 
+    private struct RGBColorSource {
+        let bytes: [UInt8]
+        let width: Int
+        let height: Int
+    }
+
     private override init() {
         super.init()
         session.delegate = self
+    }
+
+    func setPreviewMode(_ mode: AVPreviewMode) {
+        lock.lock()
+        previewMode = mode
+        if mode == .none {
+            lastPreviewFrameTimestamp = 0
+        }
+        lock.unlock()
+
+        if mode == .none {
+            DispatchQueue.main.async {
+                self.depthMapImage = nil
+                self.cameraImage = nil
+                self.pointCloud = nil
+                self.depthPixels = nil
+            }
+        }
     }
 
     private func portraitLayout(width: Int, height: Int) -> (width: Int, height: Int, rotate: Bool) {
@@ -193,6 +241,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             self.currentFrame = nil
             self.hasNewFrame = false
             self.isProcessingFrame = false
+            self.lastProcessedFrameTimestamp = 0
+            self.lastPreviewFrameTimestamp = 0
             self.lock.unlock()
 
             DispatchQueue.main.async {
@@ -361,83 +411,114 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     // MARK: - Frame Processing
 
     private func processFrame(_ frame: ARFrame) {
+        let processInterval = 1.0 / processingTargetFPS
+        if lastProcessedFrameTimestamp > 0,
+           frame.timestamp - lastProcessedFrameTimestamp < processInterval {
+            return
+        }
+        lastProcessedFrameTimestamp = frame.timestamp
+
         guard let depthData = frame.smoothedSceneDepth ?? frame.sceneDepth else { return }
 
-        guard let rgbFrameData = rgbFrameData(from: frame.capturedImage) else { return }
+        lock.lock()
+        let localPreviewMode = previewMode
+        lock.unlock()
+
+        let previewIsEnabled = localPreviewMode != .none
+        let shouldUpdatePreview: Bool
+        if previewIsEnabled {
+            if lastPreviewFrameTimestamp == 0 {
+                shouldUpdatePreview = true
+                lastPreviewFrameTimestamp = frame.timestamp
+            } else if frame.timestamp - lastPreviewFrameTimestamp >= (1.0 / previewTargetFPS) {
+                shouldUpdatePreview = true
+                lastPreviewFrameTimestamp = frame.timestamp
+            } else {
+                shouldUpdatePreview = false
+            }
+        } else {
+            shouldUpdatePreview = false
+        }
+
+        let needsPreviewVideo = shouldUpdatePreview && localPreviewMode == .video
+        let needsPreviewDepth = shouldUpdatePreview && localPreviewMode == .depth
+        let needsPreviewPoint = shouldUpdatePreview && localPreviewMode == .point
+        let needsPointColors = includePointColorsForWasm
+        let needsImagePayload = includeImageInWasmPayload
+        let needsUIImage = needsPreviewVideo || isStreaming
+        let needsRGBFrame = needsPointColors || needsImagePayload || needsUIImage
+
+        let imageResolution = frame.camera.imageResolution
+        let fallbackLayout = portraitLayout(
+            width: Int(imageResolution.width),
+            height: Int(imageResolution.height)
+        )
+
+        let rgbFrame: RGBFrameData?
+        if needsRGBFrame {
+            rgbFrame = rgbFrameData(
+                from: frame.capturedImage,
+                downsampleFactor: rgbDownsampleFactor,
+                includeUIImage: needsUIImage,
+                includePortraitBytes: needsImagePayload
+            )
+        } else {
+            rgbFrame = nil
+        }
 
         let pointCloudData = depthDataToPointCloud(
             depthMap: depthData.depthMap,
             confidenceMap: depthData.confidenceMap,
             frame: frame,
-            colorRGB: rgbFrameData.rawBytes,
-            colorWidth: rgbFrameData.rawWidth,
-            colorHeight: rgbFrameData.rawHeight
+            colorSource: {
+                guard needsPointColors, let rgbFrame = rgbFrame else { return nil }
+                return RGBColorSource(
+                    bytes: rgbFrame.rawBytes,
+                    width: rgbFrame.rawWidth,
+                    height: rgbFrame.rawHeight
+                )
+            }()
         )
 
-        let depthPixelData = depthDataToPixels(
-            depthMap: depthData.depthMap,
-            outputWidth: rgbFrameData.portraitWidth,
-            outputHeight: rgbFrameData.portraitHeight
-        )
-
-        let depthImage = depthMapToUIImage(depthMap: depthData.depthMap)
-        let camImage = rgbFrameData.uiImage
-
-        if let image = camImage {
+        if let image = rgbFrame?.uiImage {
             streamFrame(image: image)
         }
 
-        var pointsFloats: [Float32] = []
-        var colorsBytes: [UInt8] = []
+        if shouldUpdatePreview {
+            let previewWidth = rgbFrame?.portraitWidth ?? fallbackLayout.width
+            let previewHeight = rgbFrame?.portraitHeight ?? fallbackLayout.height
 
-        if let pointCloudData = pointCloudData {
-            let totalPoints = pointCloudData.count
-            let pointCount = min(totalPoints, LidarCameraConstants.maxPointsPerScan)
-            let sampleStride = max(1, totalPoints / max(1, pointCount))
+            let depthPixelData = needsPreviewPoint ? depthDataToPixels(
+                depthMap: depthData.depthMap,
+                outputWidth: previewWidth,
+                outputHeight: previewHeight,
+                sampleStride: depthPixelSubsampleStride
+            ) : nil
+            let depthImage = needsPreviewDepth ? depthMapToUIImage(depthMap: depthData.depthMap) : nil
+            let camImage = needsPreviewVideo ? rgbFrame?.uiImage : nil
 
-            pointsFloats.reserveCapacity(pointCount * LidarCameraConstants.floatsPerPoint)
-            colorsBytes.reserveCapacity(pointCount * LidarCameraConstants.colorsPerPoint)
-
-            var i = 0
-            var written = 0
-            while i < totalPoints && written < pointCount {
-                let p = pointCloudData.points[i]
-                pointsFloats.append(p.x)
-                pointsFloats.append(p.y)
-                pointsFloats.append(p.z)
-
-                let colorIndex = i * LidarCameraConstants.colorsPerPoint
-                if colorIndex + 2 < pointCloudData.colors.count {
-                    colorsBytes.append(pointCloudData.colors[colorIndex])
-                    colorsBytes.append(pointCloudData.colors[colorIndex + 1])
-                    colorsBytes.append(pointCloudData.colors[colorIndex + 2])
-                }
-
-                i += sampleStride
-                written += 1
+            DispatchQueue.main.async {
+                self.depthMapImage = depthImage
+                self.cameraImage = camImage
+                self.pointCloud = nil
+                self.depthPixels = depthPixelData
             }
         }
 
-        DispatchQueue.main.async {
-            self.depthMapImage = depthImage
-            self.cameraImage = camImage
-            self.pointCloud = pointCloudData
-            self.depthPixels = depthPixelData
-        }
-
         lock.lock()
-        currentImageWidth = Int32(rgbFrameData.portraitWidth)
-        currentImageHeight = Int32(rgbFrameData.portraitHeight)
+        currentImageWidth = Int32(rgbFrame?.portraitWidth ?? fallbackLayout.width)
+        currentImageHeight = Int32(rgbFrame?.portraitHeight ?? fallbackLayout.height)
         currentImageChannels = 3
 
+        let imageBytes = needsImagePayload ? (rgbFrame?.portraitBytes ?? []) : []
         currentData = LidarCameraData(
             timestamp: frame.timestamp,
-            points: pointsFloats,
-            points_size: Int32(pointsFloats.count),
-            colors: colorsBytes,
-            colors_size: Int32(colorsBytes.count),
-            image: rgbFrameData.portraitBytes,
-            image_size: Int32(rgbFrameData.portraitBytes.count),
+            points: pointCloudData?.points ?? [],
+            points_size: Int32((pointCloudData?.pointCount ?? 0) * LidarCameraConstants.floatsPerPoint),
+            colors: pointCloudData?.colors ?? [],
+            colors_size: Int32(pointCloudData?.colors.count ?? 0),
+            image: imageBytes,
+            image_size: Int32(imageBytes.count),
             points_frame_id: CoordinateFrameId.FLU.rawValue,
             image_frame_id: CoordinateFrameId.RDF.rawValue
         )
@@ -447,14 +528,23 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
 
     // MARK: - Camera / Image Conversion
 
-    private func rgbFrameData(from pixelBuffer: CVPixelBuffer) -> RGBFrameData? {
-        let width = CVPixelBufferGetWidth(pixelBuffer)
-        let height = CVPixelBufferGetHeight(pixelBuffer)
+    private func rgbFrameData(
+        from pixelBuffer: CVPixelBuffer,
+        downsampleFactor: Int,
+        includeUIImage: Bool,
+        includePortraitBytes: Bool
+    ) -> RGBFrameData? {
+        let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
+        let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
+        let factor = max(1, downsampleFactor)
+        let width = max(1, sourceWidth / factor)
+        let height = max(1, sourceHeight / factor)
 
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let rect = CGRect(x: 0, y: 0, width: width, height: height)
+        let sourceRect = CGRect(x: 0, y: 0, width: sourceWidth, height: sourceHeight)
+        let outputRect = CGRect(x: 0, y: 0, width: width, height: height)
 
-        guard let cgImage = ciContext.createCGImage(ciImage, from: rect) else {
+        guard let cgImage = ciContext.createCGImage(ciImage, from: sourceRect) else {
             return nil
         }
 
@@ -471,7 +561,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             return nil
         }
 
-        context.draw(cgImage, in: rect)
+        context.draw(cgImage, in: outputRect)
 
         var rgbBytes = [UInt8](repeating: 0, count: width * height * 3)
         var srcIndex = 0
@@ -486,13 +576,22 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
 
         let layout = portraitLayout(width: width, height: height)
         let portraitBytes: [UInt8]
-        if layout.rotate {
-            portraitBytes = rotateBytes90CW(rgbBytes, width: width, height: height, channels: 3)
+        if includePortraitBytes {
+            if layout.rotate {
+                portraitBytes = rotateBytes90CW(rgbBytes, width: width, height: height, channels: 3)
+            } else {
+                portraitBytes = rgbBytes
+            }
         } else {
-            portraitBytes = rgbBytes
+            portraitBytes = []
         }
 
-        let uiImage = UIImage(cgImage: cgImage, scale: 1.0, orientation: layout.rotate ? .right : .up)
+        let uiImage: UIImage?
+        if includeUIImage, let scaledCGImage = context.makeImage() {
+            uiImage = UIImage(cgImage: scaledCGImage, scale: 1.0, orientation: layout.rotate ? .right : .up)
+        } else {
+            uiImage = nil
+        }
 
         return RGBFrameData(
             rawBytes: rgbBytes,
@@ -507,7 +606,12 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
 
     // MARK: - Depth Conversion
 
-    private func depthDataToPixels(depthMap: CVPixelBuffer, outputWidth: Int, outputHeight: Int) -> DepthPixelData? {
+    private func depthDataToPixels(
+        depthMap: CVPixelBuffer,
+        outputWidth: Int,
+        outputHeight: Int,
+        sampleStride: Int
+    ) -> DepthPixelData? {
         guard CVPixelBufferGetPixelFormatType(depthMap) == kCVPixelFormatType_DepthFloat32 else {
             return nil
         }
@@ -527,13 +631,14 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let layout = portraitLayout(width: width, height: height)
         let scaleX = Float(outputWidth) / Float(max(1, layout.width))
         let scaleY = Float(outputHeight) / Float(max(1, layout.height))
+        let strideStep = max(1, sampleStride)
 
         var pixels: [(x: Int, y: Int, depth: Float)] = []
-        pixels.reserveCapacity(width * height / 4)
+        pixels.reserveCapacity((width * height) / (strideStep * strideStep))
 
-        for y in 0..<height {
+        for y in Swift.stride(from: 0, to: height, by: strideStep) {
             let rowPtr = depthPointer.advanced(by: y * stride)
-            for x in 0..<width {
+            for x in Swift.stride(from: 0, to: width, by: strideStep) {
                 let depth = rowPtr[x]
                 guard depth > 0, depth.isFinite else { continue }
 
@@ -565,10 +670,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         depthMap: CVPixelBuffer,
         confidenceMap: CVPixelBuffer?,
         frame: ARFrame,
-        colorRGB: [UInt8],
-        colorWidth: Int,
-        colorHeight: Int
-    ) -> PointCloudData? {
+        colorSource: RGBColorSource?
+    ) -> PointCloudExportData? {
         guard CVPixelBufferGetPixelFormatType(depthMap) == kCVPixelFormatType_DepthFloat32 else {
             return nil
         }
@@ -607,19 +710,30 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let intrinsicsScaleX = Float(imageResolution.width) / Float(max(1, depthWidth))
         let intrinsicsScaleY = Float(imageResolution.height) / Float(max(1, depthHeight))
 
-        let colorScaleX = Float(colorWidth) / Float(max(1, depthWidth))
-        let colorScaleY = Float(colorHeight) / Float(max(1, depthHeight))
+        let colorScaleX: Float
+        let colorScaleY: Float
+        if let colorSource = colorSource {
+            colorScaleX = Float(colorSource.width) / Float(max(1, depthWidth))
+            colorScaleY = Float(colorSource.height) / Float(max(1, depthHeight))
+        } else {
+            colorScaleX = 0
+            colorScaleY = 0
+        }
 
         let pointStride = max(1, LidarCameraConstants.pointSubsampleStride)
-        let estimatedPoints = max(1, (depthWidth * depthHeight) / pointStride)
+        let maxPointCount = LidarCameraConstants.maxPointsPerScan
+        let estimatedPoints = min(maxPointCount, max(1, (depthWidth * depthHeight) / pointStride))
+        let maxFloatCount = maxPointCount * LidarCameraConstants.floatsPerPoint
 
-        var points: [SIMD3<Float>] = []
-        points.reserveCapacity(estimatedPoints)
+        var points: [Float32] = []
+        points.reserveCapacity(estimatedPoints * LidarCameraConstants.floatsPerPoint)
 
         var colors: [UInt8] = []
         colors.reserveCapacity(estimatedPoints * LidarCameraConstants.colorsPerPoint)
 
+        var reachedPointLimit = false
         for y in 0..<depthHeight {
+            if reachedPointLimit { break }
             let depthRowPtr = depthPointer.advanced(by: y * depthStride)
             let confidenceRowPtr = confidencePointer?.advanced(by: y * confidenceStride)
 
@@ -645,21 +759,31 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
 
                 let pointRdf = SIMD3<Float>(cameraX, cameraY, depth)
                 let pointFlu = CoordinateFrames.cameraRdfToFlu(pointRdf)
-                points.append(pointFlu)
+                points.append(pointFlu.x)
+                points.append(pointFlu.y)
+                points.append(pointFlu.z)
 
-                let colorX = min(colorWidth - 1, max(0, Int(round(Float(x) * colorScaleX))))
-                let colorY = min(colorHeight - 1, max(0, Int(round(Float(y) * colorScaleY))))
-                let colorIndex = (colorY * colorWidth + colorX) * LidarCameraConstants.colorsPerPoint
+                if let colorSource = colorSource {
+                    let colorX = min(colorSource.width - 1, max(0, Int(round(Float(x) * colorScaleX))))
+                    let colorY = min(colorSource.height - 1, max(0, Int(round(Float(y) * colorScaleY))))
+                    let colorIndex = (colorY * colorSource.width + colorX) * LidarCameraConstants.colorsPerPoint
 
-                if colorIndex + 2 < colorRGB.count {
-                    colors.append(colorRGB[colorIndex])
-                    colors.append(colorRGB[colorIndex + 1])
-                    colors.append(colorRGB[colorIndex + 2])
+                    if colorIndex + 2 < colorSource.bytes.count {
+                        colors.append(colorSource.bytes[colorIndex])
+                        colors.append(colorSource.bytes[colorIndex + 1])
+                        colors.append(colorSource.bytes[colorIndex + 2])
+                    }
+                }
+
+                if points.count >= maxFloatCount {
+                    reachedPointLimit = true
+                    break
                 }
             }
         }
 
-        return PointCloudData(points: points, colors: colors, count: points.count)
+        let pointCount = points.count / LidarCameraConstants.floatsPerPoint
+        return PointCloudExportData(points: points, colors: colors, pointCount: pointCount)
     }
 
     private func depthMapToUIImage(depthMap: CVPixelBuffer) -> UIImage? {
