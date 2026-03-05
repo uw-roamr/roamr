@@ -283,7 +283,7 @@ static void addControlCharacteristic() {
 
   esp_attr_value_t control_attr = {};
   control_attr.attr_max_len = sizeof(g_control_char_value);
-  control_attr.attr_len = 0;
+  control_attr.attr_len = 1;
   control_attr.attr_value = g_control_char_value;
 
   esp_ble_gatts_add_char(g_service_handle, &char_uuid, ESP_GATT_PERM_WRITE,
@@ -299,7 +299,7 @@ static void addDataCharacteristic() {
 
   esp_attr_value_t data_attr = {};
   data_attr.attr_max_len = sizeof(g_data_char_value);
-  data_attr.attr_len = 0;
+  data_attr.attr_len = 1;
   data_attr.attr_value = g_data_char_value;
 
   esp_ble_gatts_add_char(g_service_handle, &char_uuid, ESP_GATT_PERM_READ,
@@ -558,11 +558,6 @@ static void setupMotors() {
   pinMode(PIN_DRIVER2_CS, OUTPUT);
   digitalWrite(PIN_DRIVER2_CS, HIGH);
 
-  SPI.begin(PIN_SCLK, PIN_MISO, PIN_MOSI);
-  gpio_pullup_en((gpio_num_t)PIN_MISO);
-
-  g_driver_left.setBuckPowerSequencingEnabled(false);
-  g_driver_right.setBuckPowerSequencingEnabled(false);
 
   g_sensor_left.init();
   g_sensor_right.init();
@@ -576,6 +571,15 @@ static void setupMotors() {
 
   g_driver_left.init(&SPI);
   g_driver_right.init(&SPI);
+
+  SPI.begin(PIN_SCLK, PIN_MISO, PIN_MOSI);
+  gpio_pullup_en((gpio_num_t)PIN_MISO);
+
+  g_driver_left.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
+  g_driver_right.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
+
+  g_driver_left.setBuckPowerSequencingEnabled(false);
+  g_driver_right.setBuckPowerSequencingEnabled(false);
 
   g_motor_left.linkDriver(&g_driver_left);
   g_motor_right.linkDriver(&g_driver_right);
@@ -591,13 +595,9 @@ static void setupMotors() {
   bool left_ready = g_motor_left.init();
   bool right_ready = g_motor_right.init();
 
-  delay(500);
-
   if (left_ready) {
     left_ready = g_motor_left.initFOC();
   }
-
-  delay(500);
 
   if (right_ready) {
     right_ready = g_motor_right.initFOC();
