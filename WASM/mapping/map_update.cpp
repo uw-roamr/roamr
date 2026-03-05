@@ -22,6 +22,8 @@ namespace mapping {
   constexpr bool kRerunIncludeImage = false;
   // Keep rerun point payload bounded to reduce JSON encode + websocket pressure.
   constexpr int kRerunMaxPoints = 4000;
+  // Color map-eligible 3D points in rerun for fast filter debugging.
+  constexpr bool kRerunHighlightFiltered = true;
   constexpr double kMapLogIntervalSec = 0.1;
   constexpr double kPerfLogIntervalSec = 2.0;
   constexpr bool kLogYawDebug = false;
@@ -95,7 +97,8 @@ namespace mapping {
 
 
   void build_rerun_frame_from_lidar(const sensors::LidarCameraData& lc_data,
-                                    sensors::LidarCameraData& rerun_out) {
+                                    sensors::LidarCameraData& rerun_out,
+                                    const core::PoseSE3d& body_to_world) {
     const int total_points = static_cast<int>(lc_data.points_size / 3);
     rerun_out.timestamp = lc_data.timestamp;
     rerun_out.points_size = 0;
@@ -118,6 +121,11 @@ namespace mapping {
     const int rerun_stride = std::max(1, total_points / max_rerun_points);
     const bool points_rdf =
         lc_data.points_frame_id == static_cast<core::CoordinateFrameId_t>(core::CoordinateFrameId::kRDF);
+    const core::Vector4d q_body_to_world = core::quat_normalize(body_to_world.quaternion);
+    const core::Vector3d& t_body_to_world = body_to_world.translation;
+    const core::Vector4d q_point_to_body = core::quat_from_euler_zyx(core::pi * 0.5, 0.0, 0.0);
+    const core::Vector4d q_point_to_world = core::quat_mul(q_body_to_world, q_point_to_body);
+    const float max_range2 = mapMaxRangeMeters * mapMaxRangeMeters;
 
     int used_points_rerun = 0;
     for (int i = 0; i < total_points && used_points_rerun < sensors::max_points_per_scan; i += rerun_stride) {
@@ -141,12 +149,28 @@ namespace mapping {
       rerun_out.points[out_base + 1] = corrected_y;
       rerun_out.points[out_base + 2] = corrected_z;
 
+      const core::Vector3d sensor_point = {x, y, z};
+      core::Vector3d world_point = core::quat_rotate(q_point_to_world, sensor_point);
+      world_point.x += t_body_to_world.x;
+      world_point.y += t_body_to_world.y;
+      world_point.z += t_body_to_world.z;
+      const float z_world = world_point.z + sensorHeightMeters;
+      const bool keep = !(z_world < mapMinZ || z_world > mapMaxZ);
+      const float r2 = world_point.x * world_point.x + world_point.y * world_point.y;
+      const bool in_range = (r2 <= max_range2);
+      const bool filtered = keep && in_range;
+
       uint8_t r = 200, g = 200, b = 200;
       const int color_base = i * 3;
       if (lc_data.colors_size >= static_cast<size_t>(color_base + 3)) {
         r = lc_data.colors[color_base + 0];
         g = lc_data.colors[color_base + 1];
         b = lc_data.colors[color_base + 2];
+      }
+      if (kRerunHighlightFiltered && filtered) {
+        r = 255;
+        g = 0;
+        b = 255;
       }
       rerun_out.colors[out_base + 0] = r;
       rerun_out.colors[out_base + 1] = g;
