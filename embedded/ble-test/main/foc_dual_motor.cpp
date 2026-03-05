@@ -75,17 +75,21 @@ void setup() {
   driver2.voltage_power_supply = 12;
   driver1.voltage_limit = 12;
   driver2.voltage_limit = 12;
+  // driver.init() calls spi->begin() internally with no pin args, which resets
+  // to default ESP32 SPI pins. Restore our custom pins immediately after.
   driver1.init(&SPI);
   driver2.init(&SPI);
 
   DRV8316Status s1 = driver1.getStatus();
   DRV8316Status s2 = driver2.getStatus();
-  Serial.printf("DRV1: fault=%d ot=%d ocp=%d ovp=%d spi_flt=%d locked=%d pwm_mode=%d\n",
-    s1.isFault(), s1.isOverTemperature(), s1.isOverCurrent(),
-    s1.isOverVoltage(), s1.isSPIError(), (int)driver1.isRegistersLocked(), (int)driver1.getPWMMode());
-  Serial.printf("DRV2: fault=%d ot=%d ocp=%d ovp=%d spi_flt=%d locked=%d pwm_mode=%d\n",
-    s2.isFault(), s2.isOverTemperature(), s2.isOverCurrent(),
-    s2.isOverVoltage(), s2.isSPIError(), (int)driver2.isRegistersLocked(), (int)driver2.getPWMMode());
+  Serial.printf("DRV1: fault=%d ot=%d ocp=%d ovp=%d spi=%d bk=%d npor=%d vcp_uv=%d locked=%d pwm_mode=%d\n",
+    s1.isFault(), s1.isOverTemperature(), s1.isOverCurrent(), s1.isOverVoltage(),
+    s1.isSPIError(), s1.isBuckError(), s1.isPowerOnReset(), s1.isChargePumpUnderVoltage(),
+    (int)driver1.isRegistersLocked(), (int)driver1.getPWMMode());
+  Serial.printf("DRV2: fault=%d ot=%d ocp=%d ovp=%d spi=%d bk=%d npor=%d vcp_uv=%d locked=%d pwm_mode=%d\n",
+    s2.isFault(), s2.isOverTemperature(), s2.isOverCurrent(), s2.isOverVoltage(),
+    s2.isSPIError(), s2.isBuckError(), s2.isPowerOnReset(), s2.isChargePumpUnderVoltage(),
+    (int)driver2.isRegistersLocked(), (int)driver2.getPWMMode());
 
   sensor1.update(); sensor2.update();
   Serial.printf("Sensor1 angle: %.4f, Sensor2 angle: %.4f\n",
@@ -119,6 +123,8 @@ void setup() {
   driver2.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
   driver1.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
   driver2.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
+  driver1.setBuckEnabled(false);
+  driver2.setBuckEnabled(false);
   driver1.clearFault();
   driver2.clearFault();
 
@@ -171,13 +177,17 @@ void loop() {
     sensor1.update(); sensor2.update();
     Serial.printf("Sensor1 angle: %.4f, Sensor2 angle: %.4f\n", sensor1.getAngle(), sensor2.getAngle());
 
+    driver1.clearFault();
+    driver2.clearFault();
     DRV8316Status s1 = driver1.getStatus();
     DRV8316Status s2 = driver2.getStatus();
-    Serial.printf("DRV1: fault=%d ot=%d ocp=%d ovp=%d spi=%d locked=%d pwm_mode=%d\n",
-      s1.isFault(), s1.isOverTemperature(), s1.isOverCurrent(), s1.isOverVoltage(), s1.isSPIError(),
+    Serial.printf("DRV1: fault=%d ot=%d ocp=%d ovp=%d spi=%d bk=%d npor=%d vcp_uv=%d locked=%d pwm_mode=%d\n",
+      s1.isFault(), s1.isOverTemperature(), s1.isOverCurrent(), s1.isOverVoltage(),
+      s1.isSPIError(), s1.isBuckError(), s1.isPowerOnReset(), s1.isChargePumpUnderVoltage(),
       (int)driver1.isRegistersLocked(), (int)driver1.getPWMMode());
-    Serial.printf("DRV2: fault=%d ot=%d ocp=%d ovp=%d spi=%d locked=%d pwm_mode=%d\n\n",
-      s2.isFault(), s2.isOverTemperature(), s2.isOverCurrent(), s2.isOverVoltage(), s2.isSPIError(),
+    Serial.printf("DRV2: fault=%d ot=%d ocp=%d ovp=%d spi=%d bk=%d npor=%d vcp_uv=%d locked=%d pwm_mode=%d\n\n",
+      s2.isFault(), s2.isOverTemperature(), s2.isOverCurrent(), s2.isOverVoltage(),
+      s2.isSPIError(), s2.isBuckError(), s2.isPowerOnReset(), s2.isChargePumpUnderVoltage(),
       (int)driver2.isRegistersLocked(), (int)driver2.getPWMMode());
 
   }
