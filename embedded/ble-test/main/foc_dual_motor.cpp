@@ -2,6 +2,7 @@
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 
 #include "encoders/as5048a/MagneticSensorAS5048A.h"
+#include "drivers/drv8316/drv8316.h"
 #include <Arduino.h>
 #include <SPI.h>
 #include <SimpleFOC.h>
@@ -15,6 +16,8 @@
 #include "esp_gap_ble_api.h"
 #include "esp_gatt_common_api.h"
 #include "esp_gatts_api.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
@@ -39,31 +42,34 @@ constexpr uint8_t ODOM_SAMPLE_SIZE = 4;       // dl:int16 + dr:int16
 constexpr uint8_t MAX_NOTIFY_FRAMES_PER_LOOP = 4;
 constexpr size_t CONTROL_CMD_MAX_LEN = 127;
 
-constexpr int PIN_MOSI = 4;
-constexpr int PIN_SCLK = 5;
-constexpr int PIN_MISO = 6;
-constexpr int PIN_CS1 = 7;
-constexpr int PIN_CS2 = 15;
+// constexpr int PIN_MOSI = 4;
+// constexpr int PIN_SCLK = 5;
+// constexpr int PIN_MISO = 6;
+// constexpr int PIN_CS1 = 7;
+// constexpr int PIN_CS2 = 15;
+constexpr int PIN_MOSI = 11;
+constexpr int PIN_SCLK = 12;
+constexpr int PIN_MISO = 13;
+constexpr int PIN_CS1 = 17;
+constexpr int PIN_CS2 = 18;
 
-constexpr int PIN_DRIVER1_1 = 0;
-constexpr int PIN_DRIVER1_2 = 1;
-constexpr int PIN_DRIVER1_3 = 8;
-constexpr int PIN_DRIVER1_EN = 10;
+// constexpr int PIN_DRIVER1_1 = 0;
+// constexpr int PIN_DRIVER1_2 = 1;
+// constexpr int PIN_DRIVER1_3 = 8;
+// constexpr int PIN_DRIVER1_EN = 10;
+constexpr int PIN_DRIVER1_1 = 41;
+constexpr int PIN_DRIVER1_2 = 42;
+constexpr int PIN_DRIVER1_3 = 45;
+constexpr int PIN_DRIVER1_CS = 47;
 
-constexpr int PIN_DRIVER2_1 = 23;
-constexpr int PIN_DRIVER2_2 = 22;
-constexpr int PIN_DRIVER2_3 = 21;
-constexpr int PIN_DRIVER2_EN = 20;
-
-extern "C" void __wrap_esp_log_write(esp_log_level_t level, const char *tag,
-                                     const char *format, ...) {
-  (void)level;
-  (void)tag;
-  va_list args;
-  va_start(args, format);
-  vprintf(format, args);
-  va_end(args);
-}
+// constexpr int PIN_DRIVER2_1 = 23;
+// constexpr int PIN_DRIVER2_2 = 22;
+// constexpr int PIN_DRIVER2_3 = 21;
+// constexpr int PIN_DRIVER2_EN = 20;
+constexpr int PIN_DRIVER2_1 = 38;
+constexpr int PIN_DRIVER2_2 = 39;
+constexpr int PIN_DRIVER2_3 = 40;
+constexpr int PIN_DRIVER2_CS = 48;
 
 struct OdomSample {
   int16_t dl_ticks;
@@ -86,10 +92,10 @@ SPISettings g_spi_settings(1000000, MSBFIRST, SPI_MODE1);
 MagneticSensorAS5048A g_sensor_left(PIN_CS1, false, g_spi_settings);
 MagneticSensorAS5048A g_sensor_right(PIN_CS2, false, g_spi_settings);
 
-BLDCDriver3PWM g_driver_left(PIN_DRIVER1_1, PIN_DRIVER1_2, PIN_DRIVER1_3,
-                             PIN_DRIVER1_EN);
-BLDCDriver3PWM g_driver_right(PIN_DRIVER2_1, PIN_DRIVER2_2, PIN_DRIVER2_3,
-                              PIN_DRIVER2_EN);
+DRV8316Driver3PWM g_driver_left(PIN_DRIVER1_1, PIN_DRIVER1_2, PIN_DRIVER1_3,
+                                PIN_DRIVER1_CS);
+DRV8316Driver3PWM g_driver_right(PIN_DRIVER2_1, PIN_DRIVER2_2, PIN_DRIVER2_3,
+                                 PIN_DRIVER2_CS);
 BLDCMotor g_motor_left(7);
 BLDCMotor g_motor_right(7);
 
@@ -122,6 +128,18 @@ static uint8_t g_data_cccd_value[2] = {0, 0};
 
 static bool g_motor_left_ready = false;
 static bool g_motor_right_ready = false;
+static const char *kDiagTag = "BOOT_DIAG";
+
+static void logHeapAndStack(const char *stage) {
+  const size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  const size_t min_free_heap = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
+  const size_t largest_block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  const UBaseType_t stack_hw = uxTaskGetStackHighWaterMark(nullptr);
+  ESP_LOGI(kDiagTag,
+           "%s free=%u min_free=%u largest=%u stack_hw_words=%u",
+           stage, static_cast<unsigned>(free_heap), static_cast<unsigned>(min_free_heap),
+           static_cast<unsigned>(largest_block), static_cast<unsigned>(stack_hw));
+}
 
 static int clampPercent(int value) {
   if (value < -100) {
@@ -265,7 +283,7 @@ static void addControlCharacteristic() {
 
   esp_attr_value_t control_attr = {};
   control_attr.attr_max_len = sizeof(g_control_char_value);
-  control_attr.attr_len = 0;
+  control_attr.attr_len = 1;
   control_attr.attr_value = g_control_char_value;
 
   esp_ble_gatts_add_char(g_service_handle, &char_uuid, ESP_GATT_PERM_WRITE,
@@ -281,7 +299,7 @@ static void addDataCharacteristic() {
 
   esp_attr_value_t data_attr = {};
   data_attr.attr_max_len = sizeof(g_data_char_value);
-  data_attr.attr_len = 0;
+  data_attr.attr_len = 1;
   data_attr.attr_value = g_data_char_value;
 
   esp_ble_gatts_add_char(g_service_handle, &char_uuid, ESP_GATT_PERM_READ,
@@ -537,6 +555,7 @@ static void setupMotors() {
   digitalWrite(PIN_CS2, HIGH);
 
   SPI.begin(PIN_SCLK, PIN_MISO, PIN_MOSI);
+  gpio_pullup_en((gpio_num_t)PIN_MISO);
 
   g_sensor_left.init();
   g_sensor_right.init();
@@ -548,11 +567,23 @@ static void setupMotors() {
   g_driver_left.voltage_limit = 12;
   g_driver_right.voltage_limit = 12;
 
-  if (!g_driver_left.init() || !g_driver_right.init()) {
-    g_motor_left_ready = false;
-    g_motor_right_ready = false;
-    return;
-  }
+  g_driver_left.init(&SPI);
+  g_driver_right.init(&SPI);
+
+  SPI.begin(PIN_SCLK, PIN_MISO, PIN_MOSI);
+  gpio_pullup_en((gpio_num_t)PIN_MISO);
+
+  g_driver_left.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
+  g_driver_right.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
+  delayMicroseconds(1);
+  g_driver_left.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
+  g_driver_right.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
+
+  g_driver_left.setBuckPowerSequencingEnabled(false);
+  g_driver_right.setBuckPowerSequencingEnabled(false);
+  delayMicroseconds(1);
+  g_driver_left.setBuckEnabled(false);
+  g_driver_right.setBuckEnabled(false);
 
   g_motor_left.linkDriver(&g_driver_left);
   g_motor_right.linkDriver(&g_driver_right);
@@ -568,16 +599,18 @@ static void setupMotors() {
   bool left_ready = g_motor_left.init();
   bool right_ready = g_motor_right.init();
 
-  delay(500);
-
   if (left_ready) {
     left_ready = g_motor_left.initFOC();
   }
-
-  delay(500);
+  else{
+    Serial.println("left init failed");
+  }
 
   if (right_ready) {
     right_ready = g_motor_right.initFOC();
+  }
+  else{
+    Serial.println("right init failed");
   }
 
   g_motor_left.target = 0.0f;
@@ -587,8 +620,8 @@ static void setupMotors() {
   g_motor_right_ready = right_ready;
 }
 
-void setup() {
-  Serial.begin(115200);
+static void initBleStack() {
+  logHeapAndStack("ble:init:start");
 
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -596,20 +629,46 @@ void setup() {
     ret = nvs_flash_init();
   }
   ESP_ERROR_CHECK(ret);
+  logHeapAndStack("ble:init:after_nvs");
 
-  ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
+  if (!heap_caps_check_integrity_all(true)) {
+    ESP_LOGE(kDiagTag, "Heap integrity check failed before BT init");
+    abort();
+  }
 
   esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+  logHeapAndStack("ble:init:before_bt_controller_init");
   ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
   ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
   ESP_ERROR_CHECK(esp_bluedroid_init());
   ESP_ERROR_CHECK(esp_bluedroid_enable());
+  logHeapAndStack("ble:init:after_bluedroid_enable");
 
   esp_ble_gatts_register_callback(gattsEventHandler);
   esp_ble_gap_register_callback(gapEventHandler);
   esp_ble_gatts_app_register(0);
+}
+
+void setup() {
+  Serial.begin(115200);
+  logHeapAndStack("setup:after_serial");
 
   setupMotors();
+
+  DRV8316Status s1 = g_driver_right.getStatus();
+  DRV8316Status s2 = g_driver_left.getStatus();
+
+  Serial.printf("DRV1: fault=%d ot=%d ocp=%d ovp=%d spi=%d bk=%d npor=%d vcp_uv=%d locked=%d pwm_mode=%d\n",
+    s1.isFault(), s1.isOverTemperature(), s1.isOverCurrent(), s1.isOverVoltage(),
+    s1.isSPIError(), s1.isBuckError(), s1.isPowerOnReset(), s1.isChargePumpUnderVoltage(),
+    (int)g_driver_left.isRegistersLocked(), (int)g_driver_right.getPWMMode());
+  Serial.printf("DRV1 Status2: buck_uv=%d buck_ocp=%d\n", s1.isBuckUnderVoltage(), s1.isBuckOverCurrent());
+  Serial.printf("DRV2: fault=%d ot=%d ocp=%d ovp=%d spi=%d bk=%d npor=%d vcp_uv=%d locked=%d pwm_mode=%d\n",
+    s2.isFault(), s2.isOverTemperature(), s2.isOverCurrent(), s2.isOverVoltage(),
+    s2.isSPIError(), s2.isBuckError(), s2.isPowerOnReset(), s2.isChargePumpUnderVoltage(),
+    (int)g_driver_left.isRegistersLocked(), (int)g_driver_left.getPWMMode());
+  Serial.printf("DRV2 Status2: buck_uv=%d buck_ocp=%d\n", s2.isBuckUnderVoltage(), s2.isBuckOverCurrent());
+
 }
 
 void loop() {
@@ -628,7 +687,16 @@ void loop() {
 }
 
 extern "C" void app_main() {
+  logHeapAndStack("app_main:entry");
+  initBleStack();
+  logHeapAndStack("app_main:after_ble_init");
+
   initArduino();
+  logHeapAndStack("app_main:after_initArduino");
+  if (!heap_caps_check_integrity_all(true)) {
+    ESP_LOGE(kDiagTag, "Heap integrity check failed after initArduino");
+    abort();
+  }
   setup();
   while (true) {
     loop();
