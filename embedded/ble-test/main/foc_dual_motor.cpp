@@ -16,6 +16,8 @@
 #include "esp_gap_ble_api.h"
 #include "esp_gatt_common_api.h"
 #include "esp_gatts_api.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
@@ -126,6 +128,18 @@ static uint8_t g_data_cccd_value[2] = {0, 0};
 
 static bool g_motor_left_ready = false;
 static bool g_motor_right_ready = false;
+static const char *kDiagTag = "BOOT_DIAG";
+
+static void logHeapAndStack(const char *stage) {
+  const size_t free_heap = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+  const size_t min_free_heap = heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT);
+  const size_t largest_block = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+  const UBaseType_t stack_hw = uxTaskGetStackHighWaterMark(nullptr);
+  ESP_LOGI(kDiagTag,
+           "%s free=%u min_free=%u largest=%u stack_hw_words=%u",
+           stage, static_cast<unsigned>(free_heap), static_cast<unsigned>(min_free_heap),
+           static_cast<unsigned>(largest_block), static_cast<unsigned>(stack_hw));
+}
 
 static int clampPercent(int value) {
   if (value < -100) {
@@ -539,8 +553,13 @@ static void setupMotors() {
   digitalWrite(PIN_CS1, HIGH);
   pinMode(PIN_CS2, OUTPUT);
   digitalWrite(PIN_CS2, HIGH);
+  pinMode(PIN_DRIVER1_CS, OUTPUT);
+  digitalWrite(PIN_DRIVER1_CS, HIGH);
+  pinMode(PIN_DRIVER2_CS, OUTPUT);
+  digitalWrite(PIN_DRIVER2_CS, HIGH);
 
   SPI.begin(PIN_SCLK, PIN_MISO, PIN_MOSI);
+  gpio_pullup_en((gpio_num_t)PIN_MISO);
 
   g_driver_left.setBuckPowerSequencingEnabled(false);
   g_driver_right.setBuckPowerSequencingEnabled(false);
@@ -555,8 +574,8 @@ static void setupMotors() {
   g_driver_left.voltage_limit = 12;
   g_driver_right.voltage_limit = 12;
 
-  g_driver_left.init();
-  g_driver_right.init();
+  g_driver_left.init(&SPI);
+  g_driver_right.init(&SPI);
 
   g_motor_left.linkDriver(&g_driver_left);
   g_motor_right.linkDriver(&g_driver_right);
@@ -591,8 +610,8 @@ static void setupMotors() {
   g_motor_right_ready = right_ready;
 }
 
-void setup() {
-  Serial.begin(115200);
+static void initBleStack() {
+  logHeapAndStack("ble:init:start");
 
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -600,18 +619,29 @@ void setup() {
     ret = nvs_flash_init();
   }
   ESP_ERROR_CHECK(ret);
+  logHeapAndStack("ble:init:after_nvs");
+
+  if (!heap_caps_check_integrity_all(true)) {
+    ESP_LOGE(kDiagTag, "Heap integrity check failed before BT init");
+    abort();
+  }
 
   esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-  // Single GATT server/connection use-case: keep controller allocations minimal.
-  bt_cfg.ble_max_act = 1;
+  logHeapAndStack("ble:init:before_bt_controller_init");
   ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
   ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
   ESP_ERROR_CHECK(esp_bluedroid_init());
   ESP_ERROR_CHECK(esp_bluedroid_enable());
+  logHeapAndStack("ble:init:after_bluedroid_enable");
 
   esp_ble_gatts_register_callback(gattsEventHandler);
   esp_ble_gap_register_callback(gapEventHandler);
   esp_ble_gatts_app_register(0);
+}
+
+void setup() {
+  Serial.begin(115200);
+  logHeapAndStack("setup:after_serial");
 
   setupMotors();
 }
@@ -632,7 +662,16 @@ void loop() {
 }
 
 extern "C" void app_main() {
+  logHeapAndStack("app_main:entry");
+  initBleStack();
+  logHeapAndStack("app_main:after_ble_init");
+
   initArduino();
+  logHeapAndStack("app_main:after_initArduino");
+  if (!heap_caps_check_integrity_all(true)) {
+    ESP_LOGE(kDiagTag, "Heap integrity check failed after initArduino");
+    abort();
+  }
   setup();
   while (true) {
     loop();
