@@ -6,7 +6,8 @@
 
 namespace mapping{
     void build_rerun_frame_from_lidar(const sensors::LidarCameraData& lc_data,
-                                      sensors::LidarCameraData& rerun_out);
+                                      sensors::LidarCameraData& rerun_out,
+                                      const core::PoseSE3d& body_to_world);
 
     void update_map_from_lidar(const sensors::LidarCameraData& lc_data,
                                MapFrame& map_frame,

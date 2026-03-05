@@ -181,7 +181,7 @@ int main(){
         perf_frames_with_points += 1;
 
         const auto rerun_build_start = Clock::now();
-        mapping::build_rerun_frame_from_lidar(lc_data, g_rerun_lc);
+        mapping::build_rerun_frame_from_lidar(lc_data, g_rerun_lc, body_to_world);
         const auto rerun_build_end = Clock::now();
         perf_rerun_build_ms_sum += elapsed_ms(rerun_build_start, rerun_build_end);
         map_timestamp = lc_data.timestamp;
