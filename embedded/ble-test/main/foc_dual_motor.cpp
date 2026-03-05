@@ -269,16 +269,20 @@ void setup() {
   driver2.voltage_limit = 12;
   driver1.init(&SPI);
   driver2.init(&SPI);
+  SPI.begin(PIN_SCLK, PIN_MISO, PIN_MOSI);
 
-  // Re-apply PWM mode explicitly after full init, as BLDCDriver3PWM::init()
-  // may trigger DRV8316 protection events that reset the registers
   driver1.setRegistersLocked(false);
   driver2.setRegistersLocked(false);
   delayMicroseconds(10);
   driver1.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
   driver2.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
+  driver1.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
+  driver2.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
+  driver1.setBuckEnabled(false);
+  driver2.setBuckEnabled(false);
+  driver1.clearFault();
+  driver2.clearFault();
 
-  // Check DRV8316 status and PWM mode after init
   DRV8316Status s1 = driver1.getStatus();
   DRV8316Status s2 = driver2.getStatus();
   Serial.printf("DRV1: fault=%d ot=%d ocp=%d ovp=%d spi_flt=%d locked=%d pwm_mode=%d\n",
