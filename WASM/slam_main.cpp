@@ -46,6 +46,12 @@ enum class PoseSource{
     // todo: fused, ideally prioritizing wheel_odom for translation and IMU for rotation
 };
 static constexpr PoseSource pose_source = PoseSource::wheel_odom;
+static constexpr bool kEnableOdomTurnDemo = false;
+static constexpr double kOdomTurnDeltaYawRad = sensors::kTwoPi;
+static constexpr int32_t kOdomTurnDirection = 1;  // +1 CCW, -1 CW
+static constexpr int32_t kOdomTurnHoldMs = 120;
+static constexpr int32_t kOdomTurnSettledSamples = 3;
+static constexpr int32_t kOdomTurnTimeoutMs = 15000;
 
 // Tiny planner demo: set a fixed map-view pixel goal at startup.
 // Toggle off when using host-provided goal clicks.
@@ -252,7 +258,12 @@ int main(){
         double x = 0.0;
         double y = 0.0;
         double yaw = 0.0;
-        bool was_following_path = false;
+        bool turn_active = false;
+        bool turn_done = !kEnableOdomTurnDemo;
+        double turn_target_yaw = 0.0;
+        int settled_samples = 0;
+        auto turn_start = std::chrono::steady_clock::now();
+        controls::TurnInPlaceConfig turn_cfg{};
 
         while(true){
             read_wheel_odometry(&odom);
@@ -265,39 +276,42 @@ int main(){
             g_latest_translation_odom = {x, y, 0.0};
             g_latest_quat_odom = {0.0, 0.0, std::sin(yaw * 0.5), std::cos(yaw * 0.5)};
 
-            const uint64_t latest_revision =
-                planning::bridge::copy_latest_plan_world(nullptr);
-            if (latest_revision != planned_path_revision) {
-                planned_path_revision =
-                    planning::bridge::copy_latest_plan_world(&planned_path_world);
-                if (planned_path_world.empty()) {
-                    path_follower.clear_path();
-                } else {
-                    path_follower.set_path(planned_path_world);
+            if (!turn_done) {
+                if (!turn_active) {
+                    const double sign = (kOdomTurnDirection >= 0) ? 1.0 : -1.0;
+                    turn_target_yaw = yaw + (sign * kOdomTurnDeltaYawRad);
+                    turn_active = true;
+                    settled_samples = 0;
+                    turn_start = std::chrono::steady_clock::now();
+                    motors.reset_twist_controller();
                 }
-            }
 
-            if (path_follower.has_path()) {
-                const int hold_ms = (odom.sample_period_ms > 0) ? odom.sample_period_ms : 100;
-                const double dt_seconds =
-                    std::max(1e-3, static_cast<double>(hold_ms) * 1e-3);
-                const controls::PathFollowerStatus status =
-                    path_follower.update(
-                        controls::Pose2D{x, y, yaw},
-                        dt_seconds,
-                        hold_ms);
-                if (status.goal_reached) {
-                    path_follower.clear_path();
-                    planning::bridge::clear_goal();
-                    motors.stop();
-                    was_following_path = false;
+                const bool reached = motors.drive_turn_to_yaw(
+                    yaw,
+                    turn_target_yaw,
+                    odom,
+                    turn_cfg,
+                    kOdomTurnHoldMs);
+                if (reached) {
+                    settled_samples += 1;
+                    if (settled_samples >= kOdomTurnSettledSamples) {
+                        turn_done = true;
+                        turn_active = false;
+                        motors.stop();
+                        motors.reset_twist_controller();
+                    }
                 } else {
-                    motors.drive_twist(status.command, odom);
-                    was_following_path = true;
+                    settled_samples = 0;
                 }
-            } else if (was_following_path) {
-                motors.stop();
-                was_following_path = false;
+
+                const int64_t elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - turn_start).count();
+                if (turn_active && elapsed_ms > kOdomTurnTimeoutMs) {
+                    turn_done = true;
+                    turn_active = false;
+                    motors.stop();
+                    motors.reset_twist_controller();
+                }
             }
 
             if (pose_source == PoseSource::wheel_odom){

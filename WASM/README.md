@@ -5,16 +5,7 @@
 
 2. (Recommended) Use the pre-built Docker image to build a WASM file
 
-Build any C++ file with:
-```sh
-docker run -v `pwd`:/src -w /src ghcr.io/webassembly/wasi-sdk /opt/wasi-sdk/bin/clang \
---target=wasm32-wasi \
--o <out-filename> \
-<filename>
-```
-The `--target=wasm32-wasi` flag adds support for I/O functionality. Alternatively, the `--target=wasm32-wasip1-threads` enables experimental threading.
-
-Examples:
+Build the C++ project with:
 ```sh
 ./build_wasm.sh
 ```
@@ -57,5 +48,6 @@ The host side buffers incoming BLE samples and only pops them when WASM asks, so
 TODO: Measure nominal extrinsics for sensors
 
 - mapping
+- planning
+- controls
 - localization
-- planning/control
