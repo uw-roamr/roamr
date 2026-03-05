@@ -88,6 +88,15 @@ void setup() {
   driver2.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
   driver1.setBuckEnabled(false);
   driver2.setBuckEnabled(false);
+  delayMicroseconds(100);
+  for (int i = 0; i < 5 && driver2.isBuckEnabled(); i++) {
+    Serial.printf("DRV2 buck still enabled, retry %d\n", i + 1);
+    delayMicroseconds(500);
+    driver2.setBuckEnabled(false);
+    delayMicroseconds(100);
+  }
+  Serial.printf("Buck enabled readback: drv1=%d drv2=%d (expect 0)\n",
+    driver1.isBuckEnabled(), driver2.isBuckEnabled());
   driver1.setOCPMode(DRV8316_OCPMode::ReportOnly);
   driver2.setOCPMode(DRV8316_OCPMode::ReportOnly);
   driver1.clearFault();
@@ -100,10 +109,12 @@ void setup() {
     s1.isFault(), s1.isOverTemperature(), s1.isOverCurrent(), s1.isOverVoltage(),
     s1.isSPIError(), s1.isBuckError(), s1.isPowerOnReset(), s1.isChargePumpUnderVoltage(),
     (int)driver1.isRegistersLocked(), (int)driver1.getPWMMode());
+  Serial.printf("DRV1 Status2: buck_uv=%d buck_ocp=%d\n", s1.isBuckUnderVoltage(), s1.isBuckOverCurrent());
   Serial.printf("DRV2: fault=%d ot=%d ocp=%d ovp=%d spi=%d bk=%d npor=%d vcp_uv=%d locked=%d pwm_mode=%d\n",
     s2.isFault(), s2.isOverTemperature(), s2.isOverCurrent(), s2.isOverVoltage(),
     s2.isSPIError(), s2.isBuckError(), s2.isPowerOnReset(), s2.isChargePumpUnderVoltage(),
     (int)driver2.isRegistersLocked(), (int)driver2.getPWMMode());
+  Serial.printf("DRV2 Status2: buck_uv=%d buck_ocp=%d\n", s2.isBuckUnderVoltage(), s2.isBuckOverCurrent());
 
   sensor1.update(); sensor2.update();
   Serial.printf("Sensor1 angle: %.4f, Sensor2 angle: %.4f\n",
