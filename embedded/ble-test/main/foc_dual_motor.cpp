@@ -2,6 +2,7 @@
 #pragma GCC diagnostic ignored "-Wmissing-field-initializers"
 
 #include "encoders/as5048a/MagneticSensorAS5048A.h"
+#include "drivers/drv8316/drv8316.h"
 #include <Arduino.h>
 #include <SPI.h>
 #include <SimpleFOC.h>
@@ -39,31 +40,34 @@ constexpr uint8_t ODOM_SAMPLE_SIZE = 4;       // dl:int16 + dr:int16
 constexpr uint8_t MAX_NOTIFY_FRAMES_PER_LOOP = 4;
 constexpr size_t CONTROL_CMD_MAX_LEN = 127;
 
-constexpr int PIN_MOSI = 4;
-constexpr int PIN_SCLK = 5;
-constexpr int PIN_MISO = 6;
-constexpr int PIN_CS1 = 7;
-constexpr int PIN_CS2 = 15;
+// constexpr int PIN_MOSI = 4;
+// constexpr int PIN_SCLK = 5;
+// constexpr int PIN_MISO = 6;
+// constexpr int PIN_CS1 = 7;
+// constexpr int PIN_CS2 = 15;
+constexpr int PIN_MOSI = 11;
+constexpr int PIN_SCLK = 12;
+constexpr int PIN_MISO = 13;
+constexpr int PIN_CS1 = 17;
+constexpr int PIN_CS2 = 18;
 
-constexpr int PIN_DRIVER1_1 = 0;
-constexpr int PIN_DRIVER1_2 = 1;
-constexpr int PIN_DRIVER1_3 = 8;
-constexpr int PIN_DRIVER1_EN = 10;
+// constexpr int PIN_DRIVER1_1 = 0;
+// constexpr int PIN_DRIVER1_2 = 1;
+// constexpr int PIN_DRIVER1_3 = 8;
+// constexpr int PIN_DRIVER1_EN = 10;
+constexpr int PIN_DRIVER1_1 = 41;
+constexpr int PIN_DRIVER1_2 = 42;
+constexpr int PIN_DRIVER1_3 = 45;
+constexpr int PIN_DRIVER1_CS = 47;
 
-constexpr int PIN_DRIVER2_1 = 23;
-constexpr int PIN_DRIVER2_2 = 22;
-constexpr int PIN_DRIVER2_3 = 21;
-constexpr int PIN_DRIVER2_EN = 20;
-
-extern "C" void __wrap_esp_log_write(esp_log_level_t level, const char *tag,
-                                     const char *format, ...) {
-  (void)level;
-  (void)tag;
-  va_list args;
-  va_start(args, format);
-  vprintf(format, args);
-  va_end(args);
-}
+// constexpr int PIN_DRIVER2_1 = 23;
+// constexpr int PIN_DRIVER2_2 = 22;
+// constexpr int PIN_DRIVER2_3 = 21;
+// constexpr int PIN_DRIVER2_EN = 20;
+constexpr int PIN_DRIVER2_1 = 38;
+constexpr int PIN_DRIVER2_2 = 39;
+constexpr int PIN_DRIVER2_3 = 40;
+constexpr int PIN_DRIVER2_CS = 48;
 
 struct OdomSample {
   int16_t dl_ticks;
@@ -86,10 +90,10 @@ SPISettings g_spi_settings(1000000, MSBFIRST, SPI_MODE1);
 MagneticSensorAS5048A g_sensor_left(PIN_CS1, false, g_spi_settings);
 MagneticSensorAS5048A g_sensor_right(PIN_CS2, false, g_spi_settings);
 
-BLDCDriver3PWM g_driver_left(PIN_DRIVER1_1, PIN_DRIVER1_2, PIN_DRIVER1_3,
-                             PIN_DRIVER1_EN);
-BLDCDriver3PWM g_driver_right(PIN_DRIVER2_1, PIN_DRIVER2_2, PIN_DRIVER2_3,
-                              PIN_DRIVER2_EN);
+DRV8316Driver3PWM g_driver_left(PIN_DRIVER1_1, PIN_DRIVER1_2, PIN_DRIVER1_3,
+                                PIN_DRIVER1_CS);
+DRV8316Driver3PWM g_driver_right(PIN_DRIVER2_1, PIN_DRIVER2_2, PIN_DRIVER2_3,
+                                 PIN_DRIVER2_CS);
 BLDCMotor g_motor_left(7);
 BLDCMotor g_motor_right(7);
 
@@ -538,6 +542,9 @@ static void setupMotors() {
 
   SPI.begin(PIN_SCLK, PIN_MISO, PIN_MOSI);
 
+  g_driver_left.setBuckPowerSequencingEnabled(false);
+  g_driver_right.setBuckPowerSequencingEnabled(false);
+
   g_sensor_left.init();
   g_sensor_right.init();
   g_motor_left.linkSensor(&g_sensor_left);
@@ -548,11 +555,8 @@ static void setupMotors() {
   g_driver_left.voltage_limit = 12;
   g_driver_right.voltage_limit = 12;
 
-  if (!g_driver_left.init() || !g_driver_right.init()) {
-    g_motor_left_ready = false;
-    g_motor_right_ready = false;
-    return;
-  }
+  g_driver_left.init();
+  g_driver_right.init();
 
   g_motor_left.linkDriver(&g_driver_left);
   g_motor_right.linkDriver(&g_driver_right);
@@ -597,9 +601,9 @@ void setup() {
   }
   ESP_ERROR_CHECK(ret);
 
-  ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT));
-
   esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+  // Single GATT server/connection use-case: keep controller allocations minimal.
+  bt_cfg.ble_max_act = 1;
   ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
   ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
   ESP_ERROR_CHECK(esp_bluedroid_init());
