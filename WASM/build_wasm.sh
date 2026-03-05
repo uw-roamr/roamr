@@ -5,6 +5,8 @@ echo "building $filename"
 docker run -v `pwd`:/src -w /src ghcr.io/webassembly/wasi-sdk /opt/wasi-sdk/bin/clang++ \
 --target=wasm32-wasip1-threads \
 -pthread \
+-fno-exceptions \
+-fno-rtti \
 -Wl,--import-memory \
 -Wl,--export-memory \
 -Wl,--shared-memory \
@@ -14,4 +16,5 @@ docker run -v `pwd`:/src -w /src ghcr.io/webassembly/wasi-sdk /opt/wasi-sdk/bin/
 $filename \
 core/telemetry.cpp \
 mapping/map.cpp mapping/map_update.cpp \
+planning/planner_bridge.cpp \
 sensors/imu_calibration.cpp sensors/imu_preintegration.cpp

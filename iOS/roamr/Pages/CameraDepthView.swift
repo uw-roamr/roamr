@@ -72,6 +72,26 @@ struct CameraDepthView: View {
             .padding(.top, safeAreaInsets.top)
             .frame(maxHeight: .infinity, alignment: .top)
         }
+        .onAppear {
+            syncPreviewMode()
+        }
+        .onChange(of: viewMode) { _ in
+            syncPreviewMode()
+        }
+        .onDisappear {
+            avManager.setPreviewMode(.none)
+        }
+    }
+
+    private func syncPreviewMode() {
+        switch viewMode {
+        case .video:
+            avManager.setPreviewMode(.video)
+        case .depth:
+            avManager.setPreviewMode(.depth)
+        case .point:
+            avManager.setPreviewMode(.point)
+        }
     }
 
     @ViewBuilder

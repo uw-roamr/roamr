@@ -3,6 +3,7 @@
 #include "map_api.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 
@@ -19,28 +20,155 @@ namespace mapping {
 
   // Rerun logging: include camera image in the filtered lidar frame (expensive copy).
   constexpr bool kRerunIncludeImage = false;
-  // Rerun logging: highlight filtered points in bright pink.
-  constexpr bool kRerunHighlightFiltered = true;
+  // Keep rerun point payload bounded to reduce JSON encode + websocket pressure.
+  constexpr int kRerunMaxPoints = 4000;
   constexpr double kMapLogIntervalSec = 0.1;
+  constexpr double kPerfLogIntervalSec = 2.0;
+  constexpr bool kLogYawDebug = false;
 
 
   static double g_last_yaw_log_ts = -1.0;
   static double g_last_map_log_ts = -1.0;
   static int g_pose_history_count = 0;
 
+  struct MapPerfWindow {
+    std::chrono::steady_clock::time_point window_start = std::chrono::steady_clock::now();
+    int calls = 0;
+    int total_points_sum = 0;
+    int used_points_sum = 0;
+    double point_loop_ms_sum = 0.0;
+    double draw_ms_sum = 0.0;
+    double total_ms_sum = 0.0;
+  };
+
+  static MapPerfWindow g_map_perf_window;
+
+  inline double elapsed_ms(const std::chrono::steady_clock::time_point& start,
+                           const std::chrono::steady_clock::time_point& end) {
+    return std::chrono::duration<double, std::milli>(end - start).count();
+  }
+
+  void observe_map_perf(int total_points,
+                        int used_points,
+                        double point_loop_ms,
+                        double draw_ms,
+                        double total_ms) {
+    g_map_perf_window.calls += 1;
+    g_map_perf_window.total_points_sum += total_points;
+    g_map_perf_window.used_points_sum += used_points;
+    g_map_perf_window.point_loop_ms_sum += point_loop_ms;
+    g_map_perf_window.draw_ms_sum += draw_ms;
+    g_map_perf_window.total_ms_sum += total_ms;
+
+    const auto now = std::chrono::steady_clock::now();
+    const double elapsed_sec =
+        std::chrono::duration<double>(now - g_map_perf_window.window_start).count();
+    if (elapsed_sec < kPerfLogIntervalSec) {
+      return;
+    }
+
+    const int calls = std::max(1, g_map_perf_window.calls);
+    const double call_rate_hz = static_cast<double>(g_map_perf_window.calls) / std::max(1e-6, elapsed_sec);
+    const double avg_total_points = static_cast<double>(g_map_perf_window.total_points_sum) / calls;
+    const double avg_used_points = static_cast<double>(g_map_perf_window.used_points_sum) / calls;
+    const double avg_point_loop_ms = g_map_perf_window.point_loop_ms_sum / calls;
+    const double avg_draw_ms = g_map_perf_window.draw_ms_sum / calls;
+    const double avg_total_ms = g_map_perf_window.total_ms_sum / calls;
+
+    std::cout << "[mapping][map_update] "
+              << "rate=" << call_rate_hz << "/s"
+              << " total_pts=" << avg_total_points
+              << " used_pts=" << avg_used_points
+              << " point_loop_ms=" << avg_point_loop_ms
+              << " draw_ms=" << avg_draw_ms
+              << " total_ms=" << avg_total_ms
+              << std::endl;
+
+    g_map_perf_window.window_start = now;
+    g_map_perf_window.calls = 0;
+    g_map_perf_window.total_points_sum = 0;
+    g_map_perf_window.used_points_sum = 0;
+    g_map_perf_window.point_loop_ms_sum = 0.0;
+    g_map_perf_window.draw_ms_sum = 0.0;
+    g_map_perf_window.total_ms_sum = 0.0;
+  }
+
+
+  void build_rerun_frame_from_lidar(const sensors::LidarCameraData& lc_data,
+                                    sensors::LidarCameraData& rerun_out) {
+    const int total_points = static_cast<int>(lc_data.points_size / 3);
+    rerun_out.timestamp = lc_data.timestamp;
+    rerun_out.points_size = 0;
+    rerun_out.colors_size = 0;
+    rerun_out.image_size = 0;
+    rerun_out.points_frame_id = static_cast<core::CoordinateFrameId_t>(core::CoordinateFrameId::kFLU);
+    rerun_out.image_frame_id = lc_data.image_frame_id;
+
+    if (kRerunIncludeImage && lc_data.image_size > 0) {
+      const size_t copy_size = std::min(lc_data.image_size, rerun_out.image.size());
+      std::copy(lc_data.image.begin(), lc_data.image.begin() + copy_size, rerun_out.image.begin());
+      rerun_out.image_size = copy_size;
+    }
+
+    if (total_points <= 0) {
+      return;
+    }
+
+    const int max_rerun_points = std::max(1, std::min(kRerunMaxPoints, sensors::max_points_per_scan));
+    const int rerun_stride = std::max(1, total_points / max_rerun_points);
+    const bool points_rdf =
+        lc_data.points_frame_id == static_cast<core::CoordinateFrameId_t>(core::CoordinateFrameId::kRDF);
+
+    int used_points_rerun = 0;
+    for (int i = 0; i < total_points && used_points_rerun < sensors::max_points_per_scan; i += rerun_stride) {
+      const int in_base = i * 3;
+      const int out_base = used_points_rerun * 3;
+
+      float x = lc_data.points[in_base + 0];
+      float y = lc_data.points[in_base + 1];
+      float z = lc_data.points[in_base + 2];
+      if (points_rdf) {
+        core::rdf_to_flu(x, y, z, &x, &y, &z);
+      }
+
+      // Apply camera-to-body mounting correction:
+      // (x, y, z) -> (x, -z, y)
+      const float corrected_x = x;
+      const float corrected_y = -z;
+      const float corrected_z = y;
+
+      rerun_out.points[out_base + 0] = corrected_x;
+      rerun_out.points[out_base + 1] = corrected_y;
+      rerun_out.points[out_base + 2] = corrected_z;
+
+      uint8_t r = 200, g = 200, b = 200;
+      const int color_base = i * 3;
+      if (lc_data.colors_size >= static_cast<size_t>(color_base + 3)) {
+        r = lc_data.colors[color_base + 0];
+        g = lc_data.colors[color_base + 1];
+        b = lc_data.colors[color_base + 2];
+      }
+      rerun_out.colors[out_base + 0] = r;
+      rerun_out.colors[out_base + 1] = g;
+      rerun_out.colors[out_base + 2] = b;
+      used_points_rerun += 1;
+    }
+
+    rerun_out.points_size = static_cast<size_t>(used_points_rerun * 3);
+    rerun_out.colors_size = static_cast<size_t>(used_points_rerun * 3);
+  }
 
   void update_map_from_lidar(const sensors::LidarCameraData& lc_data,
                              MapFrame& map_frame,
-                             sensors::LidarCameraData* rerun_out,
-                             bool update_map,
                              bool& map_initialized,
                              const core::PoseSE3d& body_to_world
                             //  const bool rotation_only_bc_imu_drifts
                             ) {
+    const auto call_start = std::chrono::steady_clock::now();
     const int total_points = static_cast<int>(lc_data.points_size / 3);
     if (total_points <= 0) return;
 
-    if (update_map && !map_initialized) {
+    if (!map_initialized) {
       reset_map();
       reset_points();
       reset_poses();
@@ -57,8 +185,10 @@ namespace mapping {
     // Use the phone-facing axis (camera forward) as +X for mapping.
     const core::Vector3d forward_flu = {1.0, 0.0, 0.0};
 
-    // currently, this does nothing so we can comment it out safely. in the future, we may want to compensate for mounting errors.
-    const core::Vector4d q_point_to_body = core::quat_identity();
+    // Correct camera-to-body mounting by +90 deg roll:
+    // (x, y, z) -> (x, -z, y)
+    // Applying here guarantees map, z filtering, and rerun all use the same corrected geometry.
+    const core::Vector4d q_point_to_body = core::quat_from_euler_zyx(core::pi * 0.5, 0.0, 0.0);
     const core::Vector3d forward_flu_body = core::quat_rotate(q_point_to_body, forward_flu);
 
     const core::Vector3d forward_flu_world = core::quat_rotate(q_body_to_world, forward_flu_body);
@@ -67,13 +197,11 @@ namespace mapping {
     // project to SE2
     const double yaw = std::atan2(ffw.y, ffw.x);
     const double range = std::sqrt(ffw.x * ffw.x + ffw.y * ffw.y);
-    if (update_map) {
-      if (g_pose_history_count < mapMaxPoses) {
-        set_pose(g_pose_history_count, t_body_to_world.x, t_body_to_world.y, yaw);
-        g_pose_history_count += 1;
-      } else {
-        set_pose(mapMaxPoses - 1, t_body_to_world.x, t_body_to_world.y, yaw);
-      }
+    if (g_pose_history_count < mapMaxPoses) {
+      set_pose(g_pose_history_count, t_body_to_world.x, t_body_to_world.y, yaw);
+      g_pose_history_count += 1;
+    } else {
+      set_pose(mapMaxPoses - 1, t_body_to_world.x, t_body_to_world.y, yaw);
     }
 
 
@@ -85,24 +213,11 @@ namespace mapping {
     if (total_points > mapMaxPoints) {
       stride = std::max(1, total_points / mapMaxPoints);
     }
-
     const float max_range2 = mapMaxRangeMeters * mapMaxRangeMeters;
     int used_points = 0;
-    int used_points_rerun = 0;
-
-    if (rerun_out) {
-      rerun_out->timestamp = lc_data.timestamp;
-      rerun_out->points_size = 0;
-      rerun_out->colors_size = 0;
-      rerun_out->image_size = 0;
-      if (kRerunIncludeImage && lc_data.image_size > 0) {
-        const size_t copy_size = std::min(lc_data.image_size, rerun_out->image.size());
-        std::copy(lc_data.image.begin(), lc_data.image.begin() + copy_size, rerun_out->image.begin());
-        rerun_out->image_size = copy_size;
-      }
-    }
     const core::Vector4d q_point_to_world_yaw = core::quat_mul(q_body_to_world_yaw, q_point_to_body);
 
+    const auto point_loop_start = std::chrono::steady_clock::now();
     for (int i = 0; i < total_points; ++i) {
       const int base = i * 3;
       float x = lc_data.points[base + 0];
@@ -128,34 +243,7 @@ namespace mapping {
       const bool in_range = (r2 <= max_range2);
       const bool filtered = keep && in_range;
 
-      if (rerun_out && used_points_rerun < sensors::max_points_per_scan) {
-        const int out_base = used_points_rerun * 3;
-
-        rerun_out->points[out_base + 0] = wp.x;
-        rerun_out->points[out_base + 1] = wp.y;
-        rerun_out->points[out_base + 2] = wp.z;
-
-        uint8_t r = 200, g = 200, b = 200;
-        const int color_base = i * 3;
-        if (lc_data.colors_size >= static_cast<size_t>(color_base + 3)) {
-          r = lc_data.colors[color_base + 0];
-          g = lc_data.colors[color_base + 1];
-          b = lc_data.colors[color_base + 2];
-        }
-        if (kRerunHighlightFiltered && filtered) {
-          r = 255;
-          g = 0;
-          b = 255;
-        }
-        if (rerun_out->colors.size() >= static_cast<size_t>(out_base + 3)) {
-          rerun_out->colors[out_base + 0] = r;
-          rerun_out->colors[out_base + 1] = g;
-          rerun_out->colors[out_base + 2] = b;
-        }
-        used_points_rerun += 1;
-      }
-
-      if (update_map && filtered && (i % stride == 0) && used_points < mapMaxPoints) {
+      if (filtered && (i % stride == 0) && used_points < mapMaxPoints) {
         core::Vector3d map_point = core::quat_rotate(q_point_to_world_yaw, sensor_point);
         map_point.x += t_body_to_world.x;
         map_point.y += t_body_to_world.y;
@@ -163,20 +251,25 @@ namespace mapping {
         used_points += 1;
       }
     }
-
-    if (rerun_out) {
-      rerun_out->points_size = static_cast<size_t>(used_points_rerun * 3);
-      rerun_out->colors_size = static_cast<size_t>(used_points_rerun * 3);
-    }
-
-    if (!update_map || used_points <= 0) return;
+    const auto point_loop_end = std::chrono::steady_clock::now();
+    const double point_loop_ms = elapsed_ms(point_loop_start, point_loop_end);
 
     if (lc_data.timestamp - g_last_map_log_ts < kMapLogIntervalSec) {
+      const auto call_end = std::chrono::steady_clock::now();
+      observe_map_perf(
+          total_points,
+          used_points,
+          point_loop_ms,
+          0.0,
+          elapsed_ms(call_start, call_end));
       return;
     }
     g_last_map_log_ts = lc_data.timestamp;
 
+    const auto draw_start = std::chrono::steady_clock::now();
     draw_map(g_pose_history_count, used_points, mapWidth, mapHeight);
+    const auto draw_end = std::chrono::steady_clock::now();
+    const double draw_ms = elapsed_ms(draw_start, draw_end);
 
     map_frame.width = get_image_width();
     map_frame.timestamp = lc_data.timestamp;
@@ -188,7 +281,15 @@ namespace mapping {
 
     rerun_log_map_frame(&map_frame);
 
-    if (lc_data.timestamp - g_last_yaw_log_ts >= 1.0) {
+    const auto call_end = std::chrono::steady_clock::now();
+    observe_map_perf(
+        total_points,
+        used_points,
+        point_loop_ms,
+        draw_ms,
+        elapsed_ms(call_start, call_end));
+
+    if (kLogYawDebug && lc_data.timestamp - g_last_yaw_log_ts >= 1.0) {
 
       g_last_yaw_log_ts = lc_data.timestamp;
 
