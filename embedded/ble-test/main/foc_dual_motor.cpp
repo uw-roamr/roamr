@@ -553,10 +553,6 @@ static void setupMotors() {
   digitalWrite(PIN_CS1, HIGH);
   pinMode(PIN_CS2, OUTPUT);
   digitalWrite(PIN_CS2, HIGH);
-  pinMode(PIN_DRIVER1_CS, OUTPUT);
-  digitalWrite(PIN_DRIVER1_CS, HIGH);
-  pinMode(PIN_DRIVER2_CS, OUTPUT);
-  digitalWrite(PIN_DRIVER2_CS, HIGH);
 
 
   g_sensor_left.init();
@@ -569,6 +565,7 @@ static void setupMotors() {
   g_driver_left.voltage_limit = 12;
   g_driver_right.voltage_limit = 12;
 
+
   g_driver_left.init(&SPI);
   g_driver_right.init(&SPI);
 
@@ -578,8 +575,13 @@ static void setupMotors() {
   g_driver_left.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
   g_driver_right.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
 
+  g_driver_left.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
+  g_driver_right.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
+
   g_driver_left.setBuckPowerSequencingEnabled(false);
   g_driver_right.setBuckPowerSequencingEnabled(false);
+  g_driver_left.setBuckEnabled(false);
+  g_driver_right.setBuckEnabled(false);
 
   g_motor_left.linkDriver(&g_driver_left);
   g_motor_right.linkDriver(&g_driver_right);
@@ -598,9 +600,15 @@ static void setupMotors() {
   if (left_ready) {
     left_ready = g_motor_left.initFOC();
   }
+  else{
+    Serial.println("left init failed");
+  }
 
   if (right_ready) {
     right_ready = g_motor_right.initFOC();
+  }
+  else{
+    Serial.println("right init failed");
   }
 
   g_motor_left.target = 0.0f;
@@ -644,6 +652,21 @@ void setup() {
   logHeapAndStack("setup:after_serial");
 
   setupMotors();
+
+  DRV8316Status s1 = g_driver_right.getStatus();
+  DRV8316Status s2 = g_driver_left.getStatus();
+
+  Serial.printf("DRV1: fault=%d ot=%d ocp=%d ovp=%d spi=%d bk=%d npor=%d vcp_uv=%d locked=%d pwm_mode=%d\n",
+    s1.isFault(), s1.isOverTemperature(), s1.isOverCurrent(), s1.isOverVoltage(),
+    s1.isSPIError(), s1.isBuckError(), s1.isPowerOnReset(), s1.isChargePumpUnderVoltage(),
+    (int)g_driver_left.isRegistersLocked(), (int)g_driver_right.getPWMMode());
+  Serial.printf("DRV1 Status2: buck_uv=%d buck_ocp=%d\n", s1.isBuckUnderVoltage(), s1.isBuckOverCurrent());
+  Serial.printf("DRV2: fault=%d ot=%d ocp=%d ovp=%d spi=%d bk=%d npor=%d vcp_uv=%d locked=%d pwm_mode=%d\n",
+    s2.isFault(), s2.isOverTemperature(), s2.isOverCurrent(), s2.isOverVoltage(),
+    s2.isSPIError(), s2.isBuckError(), s2.isPowerOnReset(), s2.isChargePumpUnderVoltage(),
+    (int)g_driver_left.isRegistersLocked(), (int)g_driver_left.getPWMMode());
+  Serial.printf("DRV2 Status2: buck_uv=%d buck_ocp=%d\n", s2.isBuckUnderVoltage(), s2.isBuckOverCurrent());
+
 }
 
 void loop() {
