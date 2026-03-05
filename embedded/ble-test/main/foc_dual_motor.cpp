@@ -80,6 +80,20 @@ void setup() {
   driver1.init(&SPI);
   driver2.init(&SPI);
 
+  // Disable buck before reading status or initializing motors.
+  // Buck pins are floating, which causes BK_FLT at power-on. The DRV8316
+  // holds gate drive disabled while any fault is latched, so this must happen
+  // before motor.init() / initFOC() or the motor won't spin.
+  driver1.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
+  driver2.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
+  driver1.setBuckEnabled(false);
+  driver2.setBuckEnabled(false);
+  driver1.setOCPMode(DRV8316_OCPMode::ReportOnly);
+  driver2.setOCPMode(DRV8316_OCPMode::ReportOnly);
+  driver1.clearFault();
+  driver2.clearFault();
+  delayMicroseconds(100);
+
   DRV8316Status s1 = driver1.getStatus();
   DRV8316Status s2 = driver2.getStatus();
   Serial.printf("DRV1: fault=%d ot=%d ocp=%d ovp=%d spi=%d bk=%d npor=%d vcp_uv=%d locked=%d pwm_mode=%d\n",
@@ -116,18 +130,6 @@ void setup() {
   if (!m2_ready)
     Serial.println("Motor 2 init failed");
 
-  driver1.setRegistersLocked(false);
-  driver2.setRegistersLocked(false);
-  delayMicroseconds(10);
-  driver1.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
-  driver2.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
-  driver1.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
-  driver2.setSDOMode(DRV8316_SDOMode::SDOMode_PushPull);
-  driver1.setBuckEnabled(false);
-  driver2.setBuckEnabled(false);
-  driver1.clearFault();
-  driver2.clearFault();
-
   _delay(500);
 
   if (!motor1.initFOC()) {
@@ -142,8 +144,8 @@ void setup() {
   }
   motor1.enable();
   motor2.enable();
-  motor1.target = 3.0; // V - constant spin
-  motor2.target = 3.0; // V - constant spin
+  motor1.target = 0.0;
+  motor2.target = 0.0;
 
   command.add('A', doMotor1, "Motor1");
   command.add('B', doMotor2, "Motor2");
@@ -179,6 +181,9 @@ void loop() {
 
     driver1.clearFault();
     driver2.clearFault();
+    delayMicroseconds(100);
+    driver1.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
+    driver2.setPWMMode(DRV8316_PWMMode::PWM3_Mode);
     DRV8316Status s1 = driver1.getStatus();
     DRV8316Status s2 = driver2.getStatus();
     Serial.printf("DRV1: fault=%d ot=%d ocp=%d ovp=%d spi=%d bk=%d npor=%d vcp_uv=%d locked=%d pwm_mode=%d\n",
