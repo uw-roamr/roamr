@@ -242,6 +242,8 @@ int main(){
       }
 
       mapping::initialize_map();
+      wasm_log_line("Initialized map");
+
       while(true){
 
         // get a valid lidar-camera frame, then get the most recent pose
@@ -288,10 +290,12 @@ int main(){
         }
         g_map_update_revision.fetch_add(1, std::memory_order_acq_rel);
 
-        planning::bridge::update_plan_overlay(
-            body_to_world,
-            g_map_frame.width,
-            g_map_frame.height);
+        wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
+
+        // planning::bridge::update_plan_overlay(
+        //     body_to_world,
+        //     g_map_frame.width,
+        //     g_map_frame.height);
         g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
 
         // if (g_rerun_lc.points_size > 0) {
