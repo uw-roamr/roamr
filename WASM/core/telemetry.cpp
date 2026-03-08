@@ -24,8 +24,6 @@ void wasm_log_line(const std::string& text) {
 }
 
 void log_config(const sensors::CameraConfig& cam_config){
-  std::cout << "Sensor config" << std::endl;
-  std::cout << "T: " << cam_config.timestamp << ", height: " << cam_config.image_height << ", width: " << cam_config.image_width << ", channels: " << cam_config.image_channels << std::endl;
   wasm_log_line("Sensor config initialized");
 }
 

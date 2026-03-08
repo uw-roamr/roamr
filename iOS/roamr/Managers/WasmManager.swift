@@ -37,19 +37,18 @@ final class WasmManager: ObservableObject {
             wasm_runtime_terminate(moduleInstance)
         }
         lock.unlock()
-        print("WASM stop requested")
+        appendLogLine("WASM stop requested")
     }
 
     func initializeRuntime() -> Bool {
         if isInitialized { return true }
 
-        print("Initializing WAMR runtime...")
         guard wasm_runtime_init() else {
-            print("Fatal Error: WAMR runtime initialization failed.")
+            appendLogLine("Fatal Error: WAMR runtime initialization failed.")
             return false
         }
         wasm_runtime_set_max_thread_num(Self.maxWasmThreads)
-        print("Configured WAMR max thread count: \(Self.maxWasmThreads)")
+        appendLogLine("Configured WAMR max thread count: \(Self.maxWasmThreads)")
 
         // Prepare Native Symbols
         struct NativeFunction {
@@ -102,7 +101,7 @@ final class WasmManager: ObservableObject {
         globalModuleNamePtr = UnsafeMutablePointer(mutating: moduleNamePtr)
 
         guard wasm_runtime_register_natives(moduleNamePtr, nativeSymbolPtr, UInt32(nativeFunctions.count)) else {
-            print("Error: Failed to register native symbols")
+            appendLogLine("Error: Failed to register native symbols")
             return false
         }
 
@@ -130,7 +129,7 @@ final class WasmManager: ObservableObject {
 
         guard let resolvedWasmURL = wasmURL else {
             let present = bundle.paths(forResourcesOfType: "wasm", inDirectory: nil)
-            print("Error: Could not find \(fileName).wasm. Bundle currently has: \(present)")
+            appendLogLine("Error: Could not find \(fileName).wasm. Bundle currently has: \(present)")
             return
         }
         runWasmFile(at: resolvedWasmURL)
@@ -161,7 +160,6 @@ final class WasmManager: ObservableObject {
                 // Load module
                 guard let wasmModule = wasm_runtime_load(wasmBuffer, wasmBufferSize, &errorBuf, UInt32(errorBuf.count)) else {
                     let message = "Error loading WASM module: \(String(cString: errorBuf))"
-                    print(message)
                     appendLogLine(message)
                     DispatchQueue.main.async {
                         self.isRunning = false
@@ -175,7 +173,6 @@ final class WasmManager: ObservableObject {
 
                 guard let moduleInstance = wasm_runtime_instantiate(wasmModule, stackSize, heapSize, &errorBuf, UInt32(errorBuf.count)) else {
                     let message = "Error instantiating WASM module: \(String(cString: errorBuf))"
-                    print(message)
                     appendLogLine(message)
                     DispatchQueue.main.async {
                         self.isRunning = false
@@ -192,7 +189,6 @@ final class WasmManager: ObservableObject {
                 // Create execution environment
                 guard let execEnv = wasm_runtime_create_exec_env(moduleInstance, stackSize) else {
                     let message = "Error creating execution environment"
-                    print(message)
                     appendLogLine(message)
                     DispatchQueue.main.async {
                         self.isRunning = false
@@ -205,23 +201,18 @@ final class WasmManager: ObservableObject {
                     return
                 }
 
-                print("Running WASM module from: \(fileURL.lastPathComponent)")
-
                 // Call _start function (default entry point for WASI)
                 if let startFunc = wasm_runtime_lookup_function(moduleInstance, "_start") {
                      if !wasm_runtime_call_wasm(execEnv, startFunc, 0, nil) {
                          let wasStopped = shouldStop
                          if wasStopped {
-                             print("WASM execution was stopped")
                              appendLogLine("WASM execution was stopped")
                          } else {
                              let exception = String(cString: wasm_runtime_get_exception(moduleInstance))
-                             print("Error calling _start: \(exception)")
                              appendLogLine("Error calling _start: \(exception)")
                          }
                      }
                 } else {
-                    print("Error: Could not find _start function")
                     appendLogLine("Error: Could not find _start function")
                 }
 
@@ -235,14 +226,12 @@ final class WasmManager: ObservableObject {
                 wasm_runtime_deinstantiate(moduleInstance)
                 wasm_runtime_unload(wasmModule)
 
-                print("WASM execution finished.")
                 appendLogLine("WASM execution finished.")
                 DispatchQueue.main.async {
                     self.isRunning = false
                 }
             }
         } catch {
-            print("Error reading WASM file: \(error)")
             appendLogLine("Error reading WASM file: \(error.localizedDescription)")
             DispatchQueue.main.async {
                 self.isRunning = false

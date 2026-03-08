@@ -57,9 +57,9 @@ enum class PoseSource{
 };
 static constexpr PoseSource pose_source = PoseSource::wheel_odom;
 static constexpr bool kEnableVisibleMotorTurnDemo = true;
-static constexpr int32_t kVisibleTurnLeftPercent = -35;
-static constexpr int32_t kVisibleTurnRightPercent = 35;
-static constexpr int32_t kVisibleTurnDurationMs = 2000;
+static constexpr int32_t kVisibleTurnLeftPercent = -18;
+static constexpr int32_t kVisibleTurnRightPercent = 18;
+static constexpr int32_t kVisibleTurnDurationMs = 1200;
 
 // Tiny planner demo: set a fixed map-view pixel goal at startup.
 // Toggle off when using host-provided goal clicks.
@@ -295,7 +295,6 @@ int main(){
                           << " left=" << kVisibleTurnLeftPercent
                           << " right=" << kVisibleTurnRightPercent
                           << " duration_ms=" << kVisibleTurnDurationMs;
-                std::cout << start_log.str() << std::endl;
                 wasm_log_line(start_log.str());
 
                 motors.drive_for(
@@ -307,7 +306,6 @@ int main(){
 
                 std::ostringstream done_log;
                 done_log << "[demo][motor] completed one-shot visible turn";
-                std::cout << done_log.str() << std::endl;
                 wasm_log_line(done_log.str());
 
                 continue;
@@ -342,7 +340,7 @@ int main(){
         while(!g_first_map_update_done.load(std::memory_order_acquire)){
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-        wasm_log_line("AUTONOMY_INIT -> ");
+        wasm_log_line("AUTONOMY_INIT -> AUTONOMY_ENGAGED");
         g_state.store(RobotState::AUTONOMY_ENGAGED, std::memory_order_release);
     });
 

@@ -9,6 +9,8 @@ import Foundation
 import CoreBluetooth
 import Combine
 
+private let kEnableVerboseBleLogs = false
+
 struct WheelOdometrySample {
     var timestamp: Double
     var seq: Int32
@@ -96,17 +98,23 @@ class BluetoothManager: NSObject, ObservableObject {
               let device = connectedDevice,
               let data = message.data(using: .utf8) else {
             lastMessage = "Error: Not ready to send"
-            print("[BLE TX] dropped not-ready hasDevice=\(connectedDevice != nil) hasControlChar=\(controlCharacteristic != nil) msg=\"\(message)\"")
+            if kEnableVerboseBleLogs {
+                print("[BLE TX] dropped not-ready hasDevice=\(connectedDevice != nil) hasControlChar=\(controlCharacteristic != nil) msg=\"\(message)\"")
+            }
             return
         }
 
         let writeType: CBCharacteristicWriteType =
             characteristic.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
-        let writeTypeLabel = (writeType == .withoutResponse) ? "withoutResponse" : "withResponse"
-        print("[BLE TX] send msg=\"\(message)\" bytes=\(data.count) type=\(writeTypeLabel) char=\(characteristic.uuid) props=0x\(String(characteristic.properties.rawValue, radix: 16))")
+        if kEnableVerboseBleLogs {
+            let writeTypeLabel = (writeType == .withoutResponse) ? "withoutResponse" : "withResponse"
+            print("[BLE TX] send msg=\"\(message)\" bytes=\(data.count) type=\(writeTypeLabel) char=\(characteristic.uuid) props=0x\(String(characteristic.properties.rawValue, radix: 16))")
+        }
         device.writeValue(data, for: characteristic, type: writeType)
         lastMessage = "Sent: \(message)"
-        print("[BLE TX] queued msg=\"\(message)\"")
+        if kEnableVerboseBleLogs {
+            print("[BLE TX] queued msg=\"\(message)\"")
+        }
 
         if let motor = parseMotorCommand(message) {
             lastMotorCommandTimestamp = Date().timeIntervalSince1970
@@ -168,7 +176,9 @@ class BluetoothManager: NSObject, ObservableObject {
 
     private func decodeOdomFrame(_ data: Data) {
         guard data.count >= 3 else {
-            print("[BLE ODOM RX] frame too short bytes=\(data.count)")
+            if kEnableVerboseBleLogs {
+                print("[BLE ODOM RX] frame too short bytes=\(data.count)")
+            }
             return
         }
 
@@ -178,14 +188,18 @@ class BluetoothManager: NSObject, ObservableObject {
         let expectedLength = 3 + sampleCount * 4
 
         guard data.count == expectedLength else {
-            print("[BLE ODOM RX] frame length mismatch bytes=\(data.count) expected=\(expectedLength)")
+            if kEnableVerboseBleLogs {
+                print("[BLE ODOM RX] frame length mismatch bytes=\(data.count) expected=\(expectedLength)")
+            }
             return
         }
 
         if let previous = lastOdomSeq {
             let expected = previous &+ 1
             if seq != expected {
-                print("[BLE ODOM RX] seq gap expected=\(expected) got=\(seq)")
+                if kEnableVerboseBleLogs {
+                    print("[BLE ODOM RX] seq gap expected=\(expected) got=\(seq)")
+                }
             }
         }
         lastOdomSeq = seq
@@ -314,7 +328,9 @@ extension BluetoothManager: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         connectionStatus = "Failed to Connect"
         if let error = error {
-            print("Connection error: \(error.localizedDescription)")
+            if kEnableVerboseBleLogs {
+                print("Connection error: \(error.localizedDescription)")
+            }
         }
     }
 }
@@ -373,10 +389,14 @@ extension BluetoothManager: CBPeripheralDelegate {
         for characteristic in characteristics {
             if characteristic.uuid == controlCharacteristicUUID {
                 controlCharacteristic = characteristic
-                print("Control characteristic discovered")
+                if kEnableVerboseBleLogs {
+                    print("Control characteristic discovered")
+                }
             } else if characteristic.uuid == dataCharacteristicUUID {
                 dataCharacteristic = characteristic
-                print("Data characteristic discovered")
+                if kEnableVerboseBleLogs {
+                    print("Data characteristic discovered")
+                }
             }
         }
 
@@ -395,15 +415,21 @@ extension BluetoothManager: CBPeripheralDelegate {
         odomNotifyRequested = false
 
         if let error = error {
-            print("Failed to subscribe to odometry notifications: \(error.localizedDescription)")
+            if kEnableVerboseBleLogs {
+                print("Failed to subscribe to odometry notifications: \(error.localizedDescription)")
+            }
             return
         }
 
         if characteristic.isNotifying {
-            print("Notifications enabled for \(characteristic.uuid)")
+            if kEnableVerboseBleLogs {
+                print("Notifications enabled for \(characteristic.uuid)")
+            }
             connectionStatus = "Ready + Odom Notify"
         } else {
-            print("Notifications disabled for \(characteristic.uuid)")
+            if kEnableVerboseBleLogs {
+                print("Notifications disabled for \(characteristic.uuid)")
+            }
             activateOdometryStreamingIfPossible()
         }
     }
@@ -411,20 +437,26 @@ extension BluetoothManager: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
             lastMessage = "Send Error: \(error.localizedDescription)"
-            print("[BLE TX] write error char=\(characteristic.uuid) err=\(error.localizedDescription)")
-        } else {
+            if kEnableVerboseBleLogs {
+                print("[BLE TX] write error char=\(characteristic.uuid) err=\(error.localizedDescription)")
+            }
+        } else if kEnableVerboseBleLogs {
             print("[BLE TX] write ack char=\(characteristic.uuid)")
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
-            print("Error receiving data: \(error.localizedDescription)")
+            if kEnableVerboseBleLogs {
+                print("Error receiving data: \(error.localizedDescription)")
+            }
             return
         }
 
         guard let data = characteristic.value else {
-            print("No data received")
+            if kEnableVerboseBleLogs {
+                print("No data received")
+            }
             return
         }
 
@@ -434,9 +466,11 @@ extension BluetoothManager: CBPeripheralDelegate {
         }
 
         if let response = String(data: data, encoding: .utf8) {
-            print("Received response: \(response)")
             lastMessage = "Received: \(response)"
-        } else {
+            if kEnableVerboseBleLogs {
+                print("Received response: \(response)")
+            }
+        } else if kEnableVerboseBleLogs {
             print("Received data (hex): \(data.map { String(format: "%02x", $0) }.joined(separator: " "))")
         }
     }
