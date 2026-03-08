@@ -13,6 +13,7 @@
 #include "controls/path_following.h"
 #include "core/telemetry.h"
 #include "mapping/map_update.h"
+#include "mapping/visualization.h"
 #include "planning/planner_bridge.h"
 #include "sensors/calibration.h"
 #include "sensors/imu.h"
@@ -220,6 +221,8 @@ int main(){
                     g_lc_cv.notify_one();
                 }
                 write_idx = 1 - write_idx;
+
+                wasm_log_line("lc timestamp: " + std::to_string(g_lc_buffers[write_idx].timestamp) + " points: " + std::to_string(g_lc_buffers[write_idx].points_size));
             }
         }
     });
@@ -346,8 +349,11 @@ int main(){
 
 
     std::thread telemetry_thread([](){
+        // Dedicated visualization thread: blocks until the mapping thread
+        // enqueues a render request, then draws the occupancy grid and ships
+        // the RGBA frame to the host — completely decoupled from scan ingestion.
         while(true){
-            // redraw map with overlay
+            mapping::visualization::wait_and_render(g_map_frame);
         }
     });
 
@@ -385,7 +391,7 @@ int main(){
                 g_latest_wheel_odom = odom;
             }
 
-            sensors::integrate_wheel_odometry(odom, &x, &y, &yaw);
+            sensors::integrate_wheel_odometry(odom, &x, &y, &yaw_odom);
             g_latest_translation_odom = {x, y, 0.0};
             g_latest_quat_odom = {
                 0.0, 0.0, std::sin(yaw_odom * 0.5), std::cos(yaw_odom * 0.5)};

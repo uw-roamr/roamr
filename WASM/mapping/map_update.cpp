@@ -1,6 +1,7 @@
 #include "map_update.h"
 
 #include "map_api.h"
+#include "visualization.h"
 
 #include <algorithm>
 #include <chrono>
@@ -294,27 +295,24 @@ namespace mapping {
     }
     g_last_map_log_ts = lc_data.timestamp;
 
-    const auto draw_start = std::chrono::steady_clock::now();
-    draw_map(g_pose_history_count, used_points, mapWidth, mapHeight);
-    const auto draw_end = std::chrono::steady_clock::now();
-    const double draw_ms = elapsed_ms(draw_start, draw_end);
-
-    map_frame.width = get_image_width();
+    // Set frame metadata synchronously so update_plan_overlay has valid
+    // dimensions immediately. The telemetry thread performs the actual
+    // draw_map + rerun_log_map_frame asynchronously after being notified.
     map_frame.timestamp = lc_data.timestamp;
-    map_frame.height = get_image_height();
-    map_frame.channels = 4;
-    map_frame.data_ptr = static_cast<uint32_t>(
-        reinterpret_cast<uintptr_t>(get_image_rgba_ptr()));
-    map_frame.data_size = get_image_rgba_size();
+    map_frame.width     = mapWidth;
+    map_frame.height    = mapHeight;
+    map_frame.channels  = 4;
 
-    rerun_log_map_frame(&map_frame);
+    visualization::request_render({
+        g_pose_history_count, used_points, mapWidth, mapHeight,
+        lc_data.timestamp});
 
     const auto call_end = std::chrono::steady_clock::now();
     observe_map_perf(
         total_points,
         used_points,
         point_loop_ms,
-        draw_ms,
+        0.0,
         elapsed_ms(call_start, call_end));
 
     if (kLogYawDebug && lc_data.timestamp - g_last_yaw_log_ts >= 1.0) {
