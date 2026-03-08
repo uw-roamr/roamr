@@ -10,9 +10,6 @@ import CoreBluetooth
 import Combine
 
 private let kEnableVerboseBleLogs = false
-private let kWheelTicksPerRev = 16384.0
-private let kWheelRadiusMeters = 0.025
-private let kWheelBaseMeters = 0.155
 
 struct WheelOdometrySample {
     var timestamp: Double
@@ -34,7 +31,6 @@ class BluetoothManager: NSObject, ObservableObject {
     @Published var lastMotorCommandText = "TX motor: -"
     @Published var lastOdomFrameText = "RX odom: -"
     @Published var lastMotorOdomText = "TX->RX: -"
-    @Published var lastOdomPoseText = "Wheel pose: -"
 
     private var centralManager: CBCentralManager!
     private var controlCharacteristic: CBCharacteristic?
@@ -48,9 +44,6 @@ class BluetoothManager: NSObject, ObservableObject {
     private var lastMotorLeftPercent = 0
     private var lastMotorRightPercent = 0
     private var lastMotorHoldMs = 0
-    private var wheelPoseX = 0.0
-    private var wheelPoseY = 0.0
-    private var wheelPoseYaw = 0.0
     private let odomQueueLock = NSLock()
     private var pendingOdomSamples: [WheelOdometrySample] = []
     private let maxPendingOdomSamples = 12_000
@@ -172,26 +165,6 @@ class BluetoothManager: NSObject, ObservableObject {
         odomQueueLock.unlock()
     }
 
-    private func resetWheelPose() {
-        wheelPoseX = 0.0
-        wheelPoseY = 0.0
-        wheelPoseYaw = 0.0
-        lastOdomPoseText = "Wheel pose: -"
-    }
-
-    private func integrateWheelPose(sample: WheelOdometrySample) {
-        let metersPerTick = (2.0 * Double.pi * kWheelRadiusMeters) / kWheelTicksPerRev
-        let dl = Double(sample.dlTicks) * metersPerTick
-        let dr = Double(sample.drTicks) * metersPerTick
-        let ds = 0.5 * (dl + dr)
-        let dtheta = (dr - dl) / kWheelBaseMeters
-        let headingMid = wheelPoseYaw + (0.5 * dtheta)
-
-        wheelPoseX += ds * cos(headingMid)
-        wheelPoseY += ds * sin(headingMid)
-        wheelPoseYaw += dtheta
-    }
-
     private func activateOdometryStreamingIfPossible() {
         guard isConnected, let device = connectedDevice, let dataCharacteristic else { return }
         if dataCharacteristic.isNotifying || odomNotifyRequested {
@@ -261,15 +234,6 @@ class BluetoothManager: NSObject, ObservableObject {
         let sumDl = samples.reduce(0) { $0 + Int($1.dlTicks) }
         let sumDr = samples.reduce(0) { $0 + Int($1.drTicks) }
         lastOdomFrameText = "RX odom: seq \(seq) n \(sampleCount) sum(\(sumDl),\(sumDr)) q=\(queuedCount)"
-        for sample in samples {
-            integrateWheelPose(sample: sample)
-        }
-        lastOdomPoseText = String(
-            format: "Wheel pose: x=%.3f y=%.3f yaw=%.1f deg",
-            wheelPoseX,
-            wheelPoseY,
-            wheelPoseYaw * 180.0 / .pi
-        )
 
         let sinceMotorCommandMs = Int((Date().timeIntervalSince1970 - lastMotorCommandTimestamp) * 1000.0)
         if lastMotorCommandTimestamp > 0, sinceMotorCommandMs >= 0, sinceMotorCommandMs <= 2000 {
@@ -337,7 +301,6 @@ extension BluetoothManager: CBCentralManagerDelegate {
         lastMotorRightPercent = 0
         lastMotorHoldMs = 0
         clearWheelOdometrySamples()
-        resetWheelPose()
         connectionStatus = "Connected to \(peripheral.name ?? "Unknown")"
         peripheral.delegate = self
         peripheral.discoverServices([serviceUUID])
@@ -359,7 +322,6 @@ extension BluetoothManager: CBCentralManagerDelegate {
         lastMotorRightPercent = 0
         lastMotorHoldMs = 0
         clearWheelOdometrySamples()
-        resetWheelPose()
         connectionStatus = "Disconnected"
     }
 

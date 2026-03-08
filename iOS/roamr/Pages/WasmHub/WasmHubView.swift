@@ -15,12 +15,10 @@ enum WasmHubTab: String, CaseIterable {
 struct WasmHubView: View {
     @Environment(\.safeAreaInsets) private var safeAreaInsets
     @ObservedObject private var wasmManager = WasmManager.shared
-    @ObservedObject private var bluetoothManager = BluetoothManager.shared
     @State private var selectedTab: WasmHubTab = .hub
     @State private var selectedFile: LocalWasmFile?
     @State private var isMapExpanded = true
     @State private var isConsoleExpanded = true
-    @State private var isOdomExpanded = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -110,25 +108,6 @@ struct WasmHubView: View {
                     )
                 } label: {
                     Text("Map Preview")
-                        .font(.headline)
-                }
-
-                DisclosureGroup(isExpanded: $isOdomExpanded) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(bluetoothManager.lastOdomFrameText)
-                        Text(bluetoothManager.lastOdomPoseText)
-                        Text(bluetoothManager.lastMotorOdomText)
-                    }
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 16)
-                            .fill(Color.black.opacity(0.06))
-                    )
-                } label: {
-                    Text("Wheel Odom")
                         .font(.headline)
                 }
 
