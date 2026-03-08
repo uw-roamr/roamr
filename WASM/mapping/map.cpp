@@ -105,8 +105,8 @@
 		out_meta->width = MAP_SIZE_X;
 		out_meta->height = MAP_SIZE_Y;
 		out_meta->resolution_m = GRID_RESOLUTION;
-		out_meta->origin_x_m = -((double)MAP_SIZE_X * 0.5 * GRID_RESOLUTION) - MAP_ORIGIN_OFFSET_X;
-		out_meta->origin_y_m = -((double)MAP_SIZE_Y * 0.5 * GRID_RESOLUTION) - MAP_ORIGIN_OFFSET_Y;
+		out_meta->origin_x_m = -((double)MAP_SIZE_X * 0.5 * GRID_RESOLUTION) + MAP_ORIGIN_OFFSET_X;
+		out_meta->origin_y_m = -((double)MAP_SIZE_Y * 0.5 * GRID_RESOLUTION) + MAP_ORIGIN_OFFSET_Y;
 		out_meta->origin_initialized = MAP_ORIGIN_INITIALIZED ? 1 : 0;
 		return 1;
 	}
@@ -168,8 +168,8 @@
 
 	static inline int32_t world_to_grid(double x, double y, int32_t *gx, int32_t *gy) {
 		if (MAP_ORIGIN_INITIALIZED) {
-			x += MAP_ORIGIN_OFFSET_X;
-			y += MAP_ORIGIN_OFFSET_Y;
+			x -= MAP_ORIGIN_OFFSET_X;
+			y -= MAP_ORIGIN_OFFSET_Y;
 		}
 		int32_t ix = (int32_t)(x / GRID_RESOLUTION) + MAP_SIZE_X / 2;
 		int32_t iy = (int32_t)(y / GRID_RESOLUTION) + MAP_SIZE_Y / 2;

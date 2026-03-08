@@ -49,6 +49,7 @@ static std::atomic<bool> g_imu_ready{false};
 // motor encoder odometry globals
 static core::Vector3d g_latest_translation_odom = {0.0, 0.0, 0.0};
 static core::Vector4d g_latest_quat_odom = core::quat_identity();
+static std::atomic<bool> g_wheel_odom_ready{false};
 
 static sensors::PoseLog g_pose;
 enum class PoseSource{
@@ -190,7 +191,7 @@ int main(){
       double perf_rerun_log_ms_sum = 0.0;
       double perf_map_update_ms_sum = 0.0;
 
-      while (!g_imu_ready.load(std::memory_order_acquire)) {
+      while (g_state != RobotState::AUTONOMY_ENGAGED && g_state != RobotState::AUTONOMY_INIT) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
       while(true){
@@ -268,14 +269,14 @@ int main(){
             const double rerun_log_avg_ms = perf_rerun_log_ms_sum / rerun_denom;
             const double map_update_avg_ms = perf_map_update_ms_sum / map_denom;
 
-            // std::cout << "[mapping][thread] "
-            //           << "frames=" << frames_rate << "/s"
-            //           << " rerun_emit=" << rerun_rate << "/s"
-            //           << " map_update=" << map_rate << "/s"
-            //           << " rerun_build_ms=" << rerun_build_avg_ms
-            //           << " rerun_log_ms=" << rerun_log_avg_ms
-            //           << " map_update_ms=" << map_update_avg_ms
-            //           << std::endl;
+            std::cout << "[mapping][thread] "
+                      << "frames=" << frames_rate << "/s"
+                      << " rerun_emit=" << rerun_rate << "/s"
+                      << " map_update=" << map_rate << "/s"
+                      << " rerun_build_ms=" << rerun_build_avg_ms
+                      << " rerun_log_ms=" << rerun_log_avg_ms
+                      << " map_update_ms=" << map_update_avg_ms
+                      << std::endl;
 
             perf_window_start = now;
             perf_frames_with_points = 0;
@@ -313,6 +314,9 @@ int main(){
             if (odom.seq < 0 || odom.timestamp <= 0.0) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 continue;
+            }
+            if (!g_wheel_odom_ready.load(std::memory_order_relaxed)) {
+                g_wheel_odom_ready.store(true, std::memory_order_release);
             }
 
             sensors::integrate_wheel_odometry(odom, &x, &y, &yaw_odom);
@@ -477,7 +481,7 @@ int main(){
         // the main high level thread
         while(!g_imu_ready.load(std::memory_order_acquire) ||
               !g_lc_ready.load(std::memory_order_acquire)
-        // || !g_wheel_odom_ready
+              || !g_wheel_odom_ready.load(std::memory_order_acquire)
         ){
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }

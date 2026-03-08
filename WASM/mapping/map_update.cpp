@@ -157,7 +157,10 @@ namespace mapping {
       world_point.z += t_body_to_world.z;
       const float z_world = world_point.z + sensorHeightMeters;
       const bool keep = !(z_world < mapMinZ || z_world > mapMaxZ);
-      const float r2 = world_point.x * world_point.x + world_point.y * world_point.y;
+      // Range relative to the robot (sensor) position, not the world origin.
+      const double rdx = world_point.x - t_body_to_world.x;
+      const double rdy = world_point.y - t_body_to_world.y;
+      const float r2 = static_cast<float>(rdx * rdx + rdy * rdy);
       const bool in_range = (r2 <= max_range2);
       const bool filtered = keep && in_range;
 
@@ -261,8 +264,10 @@ namespace mapping {
       // only use points that meet certain criteria in world frame (not too low/high, not too far)
       const float z_world = world_point.z + sensorHeightMeters;
       const bool keep = !(z_world < mapMinZ || z_world > mapMaxZ);
-      // Filter in full world frame (roll/pitch/yaw) so range/z checks match true geometry.
-      const float r2 = wp.x * wp.x + wp.y * wp.y;
+      // Filter range relative to the robot (sensor) position, not the world origin.
+      const double rdx = wp.x - t_body_to_world.x;
+      const double rdy = wp.y - t_body_to_world.y;
+      const float r2 = static_cast<float>(rdx * rdx + rdy * rdy);
       const bool in_range = (r2 <= max_range2);
       const bool filtered = keep && in_range;
 
