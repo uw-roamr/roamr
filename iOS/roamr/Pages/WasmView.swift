@@ -9,59 +9,66 @@ import SwiftUI
 
 struct WasmView: View {
 	@Environment(\.safeAreaInsets) private var safeAreaInsets
-	@State private var isRunning = false
+	@ObservedObject private var wasmManager = WasmManager.shared
 
 	var body: some View {
 		VStack {
 			PageHeader(
 				title: "WASM",
-				statusText: isRunning ? "Running" : "Idle",
-				statusColor: isRunning ? .green : .gray
+				statusText: wasmManager.isRunning ? "Running" : "Idle",
+				statusColor: wasmManager.isRunning ? .green : .gray
 			) {
 				Button {
 					runWasm()
 				} label: {
-					PlayButton(isActive: isRunning)
+					PlayButton(isActive: wasmManager.isRunning)
 				}
-				.disabled(isRunning)
+				.disabled(wasmManager.isRunning)
 			}
 
-			Spacer()
-
-			VStack(spacing: 16) {
-				Image(systemName: "doc.badge.plus")
-					.font(.system(size: 48))
-					.foregroundColor(.gray.opacity(0.5))
-
-				Text("Upload WASM File")
+			VStack(alignment: .leading, spacing: 12) {
+				Text("WASM Console")
 					.font(.headline)
-					.foregroundColor(.gray)
 
-				Text("Select a .wasm file to run")
-					.font(.caption)
-					.foregroundColor(.gray.opacity(0.7))
+				ScrollView {
+					VStack(alignment: .leading, spacing: 8) {
+						if wasmManager.logLines.isEmpty {
+							Text("Run a WASM module to see host-side logs from the module here.")
+								.foregroundColor(.secondary)
+						} else {
+							ForEach(Array(wasmManager.logLines.enumerated()), id: \.offset) { _, line in
+								Text(line)
+									.font(.system(.caption, design: .monospaced))
+									.foregroundColor(.primary)
+									.frame(maxWidth: .infinity, alignment: .leading)
+							}
+						}
+					}
+					.frame(maxWidth: .infinity, alignment: .leading)
+				}
+				.frame(maxWidth: .infinity, maxHeight: .infinity)
+				.padding(12)
+				.background(
+					RoundedRectangle(cornerRadius: 16)
+						.fill(Color.black.opacity(0.06))
+				)
 			}
-
-			Spacer()
+			.frame(maxWidth: .infinity, maxHeight: .infinity)
+			.padding(.horizontal, 20)
 		}
 		.padding(.top, safeAreaInsets.top)
 		.padding(.bottom, safeAreaInsets.bottom + AppConstants.shared.tabBarHeight)
 	}
 
 	func runWasm() {
-		isRunning = true
 		DispatchQueue.global(qos: .userInitiated).async {
 			IMUManager.shared.start()
 			AVManager.shared.start()
 
-			WasmManager.shared.runWasmFile(named: "slam_main")
+			wasmManager.runWasmFile(named: "slam_main")
 
 			AVManager.shared.stop()
 			IMUManager.shared.stop()
-
-			DispatchQueue.main.async {
-				isRunning = false
-			}
 		}
 	}
 }

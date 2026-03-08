@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iostream>
 #include <mutex>
+#include <sstream>
 #include <thread>
 #include <vector>
 
@@ -55,12 +56,15 @@ enum class PoseSource{
     fused
 };
 static constexpr PoseSource pose_source = PoseSource::wheel_odom;
-static constexpr bool kEnableOdomTurnDemo = false;
+static constexpr bool kEnableOdomTurnDemo = true;
 static constexpr double kOdomTurnDeltaYawRad = sensors::kTwoPi;
 static constexpr int32_t kOdomTurnDirection = 1;  // +1 CCW, -1 CW
 static constexpr int32_t kOdomTurnHoldMs = 120;
 static constexpr int32_t kOdomTurnSettledSamples = 3;
-static constexpr int32_t kOdomTurnTimeoutMs = 15000;
+static constexpr int32_t kOdomTurnTimeoutMs = 25000;
+static constexpr double kOdomTurnMaxOmegaRadPerSec = 0.35;
+static constexpr double kOdomTurnMinOmegaRadPerSec = 0.12;
+static constexpr double kOdomTurnYawToleranceRad = 5.0 * core::pi / 180.0;
 
 // Tiny planner demo: set a fixed map-view pixel goal at startup.
 // Toggle off when using host-provided goal clicks.
@@ -283,6 +287,9 @@ int main(){
         int settled_samples = 0;
         auto turn_start = std::chrono::steady_clock::now();
         controls::TurnInPlaceConfig turn_cfg{};
+        turn_cfg.max_omega_rad_s = kOdomTurnMaxOmegaRadPerSec;
+        turn_cfg.min_omega_rad_s = kOdomTurnMinOmegaRadPerSec;
+        turn_cfg.yaw_tolerance_rad = kOdomTurnYawToleranceRad;
 
         while(true){
             read_wheel_odometry(&odom);
@@ -303,6 +310,13 @@ int main(){
                     settled_samples = 0;
                     turn_start = std::chrono::steady_clock::now();
                     motors.reset_twist_controller();
+                    std::ostringstream start_log;
+                    start_log << "[demo][turn] start_yaw=" << yaw
+                              << " target_yaw=" << turn_target_yaw
+                              << " timeout_ms=" << kOdomTurnTimeoutMs
+                              << " max_omega=" << turn_cfg.max_omega_rad_s;
+                    std::cout << start_log.str() << std::endl;
+                    wasm_log_line(start_log.str());
                 }
 
                 const bool reached = motors.drive_turn_to_yaw(
@@ -318,6 +332,12 @@ int main(){
                         turn_active = false;
                         motors.stop();
                         motors.reset_twist_controller();
+                        std::ostringstream reached_log;
+                        reached_log << "[demo][turn] reached target_yaw=" << turn_target_yaw
+                                    << " final_yaw=" << yaw
+                                    << " settled_samples=" << settled_samples;
+                        std::cout << reached_log.str() << std::endl;
+                        wasm_log_line(reached_log.str());
                     }
                 } else {
                     settled_samples = 0;
@@ -330,6 +350,12 @@ int main(){
                     turn_active = false;
                     motors.stop();
                     motors.reset_twist_controller();
+                    std::ostringstream timeout_log;
+                    timeout_log << "[demo][turn] timeout target_yaw=" << turn_target_yaw
+                                << " current_yaw=" << yaw
+                                << " elapsed_ms=" << elapsed_ms;
+                    std::cout << timeout_log.str() << std::endl;
+                    wasm_log_line(timeout_log.str());
                 }
             }
 
@@ -356,11 +382,11 @@ int main(){
               !g_lc_ready.load(std::memory_order_acquire)
         // || !g_wheel_odom_ready
         ){
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         g_state.store(RobotState::AUTONOMY_INIT, std::memory_order_release);
         while(!g_first_map_update_done.load(std::memory_order_acquire)){
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         g_state.store(RobotState::AUTONOMY_ENGAGED, std::memory_order_release);
     });

@@ -14,18 +14,18 @@ enum WasmHubTab: String, CaseIterable {
 
 struct WasmHubView: View {
     @Environment(\.safeAreaInsets) private var safeAreaInsets
+    @ObservedObject private var wasmManager = WasmManager.shared
     @State private var selectedTab: WasmHubTab = .hub
-    @State private var isRunning = false
     @State private var selectedFile: LocalWasmFile?
 
     var body: some View {
         VStack(spacing: 0) {
             PageHeader(
                 title: "WASM",
-                statusText: isRunning ? "Running" : (selectedFile != nil ? "Ready" : "Idle"),
-                statusColor: isRunning ? .green : (selectedFile != nil ? .blue : .gray)
+                statusText: wasmManager.isRunning ? "Running" : (selectedFile != nil ? "Ready" : "Idle"),
+                statusColor: wasmManager.isRunning ? .green : (selectedFile != nil ? .blue : .gray)
             ) {
-                if isRunning {
+                if wasmManager.isRunning {
                     Button {
                         stopWasm()
                     } label: {
@@ -40,7 +40,7 @@ struct WasmHubView: View {
                     Button {
                         runSelectedWasm()
                     } label: {
-                        PlayButton(isActive: isRunning)
+                        PlayButton(isActive: wasmManager.isRunning)
                     }
                     .disabled(selectedFile == nil)
                 }
@@ -67,10 +67,40 @@ struct WasmHubView: View {
                 case .downloaded:
                     DownloadedTab(
                         selectedFile: $selectedFile,
-                        isRunning: isRunning
+                        isRunning: wasmManager.isRunning
                     )
                 }
             }
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("WASM Console")
+                    .font(.headline)
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 8) {
+                        if wasmManager.logLines.isEmpty {
+                            Text("Run a WASM module to see host-side logs from the module here.")
+                                .foregroundColor(.secondary)
+                        } else {
+                            ForEach(Array(wasmManager.logLines.enumerated()), id: \.offset) { _, line in
+                                Text(line)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .foregroundColor(.primary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxWidth: .infinity, minHeight: 140, maxHeight: 220)
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color.black.opacity(0.06))
+                )
+            }
+            .padding(.horizontal)
+            .padding(.top, 8)
         }
         .padding(.top, safeAreaInsets.top)
         .padding(.bottom, safeAreaInsets.bottom + AppConstants.shared.tabBarHeight)
@@ -79,19 +109,14 @@ struct WasmHubView: View {
     private func runSelectedWasm() {
         guard let file = selectedFile else { return }
 
-        isRunning = true
         DispatchQueue.global(qos: .userInitiated).async {
             IMUManager.shared.start()
             AVManager.shared.start()
 
-            WasmManager.shared.runWasmFile(at: file.fileURL)
+            wasmManager.runWasmFile(at: file.fileURL)
 
             AVManager.shared.stop()
             IMUManager.shared.stop()
-
-            DispatchQueue.main.async {
-                isRunning = false
-            }
         }
     }
 
