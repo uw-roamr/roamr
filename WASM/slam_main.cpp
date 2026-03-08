@@ -29,6 +29,7 @@ static std::atomic<RobotState> g_state{RobotState::SENSOR_INIT};
 static bool g_map_initialized = false;
 static mapping::MapFrame g_map_frame;
 static std::atomic<bool> g_first_map_update_done{false};
+static std::atomic<uint64_t> g_map_update_revision{0};
 
 // lidar camera globals
 static sensors::CameraConfig g_cam_config;
@@ -59,7 +60,10 @@ static constexpr PoseSource pose_source = PoseSource::wheel_odom;
 static constexpr bool kEnableVisibleMotorTurnDemo = true;
 static constexpr int32_t kVisibleTurnLeftPercent = -18;
 static constexpr int32_t kVisibleTurnRightPercent = 18;
-static constexpr int32_t kVisibleTurnDurationMs = 2600;
+static constexpr int32_t kVisibleTurnSegmentDurationMs = 800;
+static constexpr int32_t kVisibleTurnHoldMs = 150;
+static constexpr int32_t kVisibleTurnSegments = 4;
+static constexpr int32_t kVisibleTurnMapWaitTimeoutMs = 1500;
 
 // Tiny planner demo: set a fixed map-view pixel goal at startup.
 // Toggle off when using host-provided goal clicks.
@@ -215,6 +219,7 @@ int main(){
         if (!g_first_map_update_done.load(std::memory_order_relaxed)) {
             g_first_map_update_done.store(true, std::memory_order_release);
         }
+        g_map_update_revision.fetch_add(1, std::memory_order_acq_rel);
         const auto map_update_end = Clock::now();
         perf_map_update_ms_sum += elapsed_ms(map_update_start, map_update_end);
         perf_map_updates += 1;
@@ -269,6 +274,7 @@ int main(){
 
     std::thread control_thread([&m_pose, &motors](){
         // responsible for reading encoder values and sending motor commands
+        using Clock = std::chrono::steady_clock;
         sensors::WheelOdometryData odom = {};
         controls::PathFollower path_follower;
         std::vector<core::Vector3d> planned_path_world;
@@ -277,6 +283,12 @@ int main(){
         double y = 0.0;
         double yaw = 0.0;
         bool visible_turn_demo_done = !kEnableVisibleMotorTurnDemo;
+        bool visible_turn_segment_active = false;
+        bool waiting_for_map_cycle = false;
+        int visible_turn_segment_index = 0;
+        uint64_t last_seen_map_revision = 0;
+        Clock::time_point visible_turn_deadline{};
+        Clock::time_point visible_turn_map_wait_deadline{};
 
         while(true){
             read_wheel_odometry(&odom);
@@ -288,28 +300,6 @@ int main(){
             sensors::integrate_wheel_odometry(odom, &x, &y, &yaw);
             g_latest_translation_odom = {x, y, 0.0};
             g_latest_quat_odom = {0.0, 0.0, std::sin(yaw * 0.5), std::cos(yaw * 0.5)};
-
-            if (!visible_turn_demo_done) {
-                std::ostringstream start_log;
-                start_log << "[demo][motor] start_yaw=" << yaw
-                          << " left=" << kVisibleTurnLeftPercent
-                          << " right=" << kVisibleTurnRightPercent
-                          << " duration_ms=" << kVisibleTurnDurationMs;
-                wasm_log_line(start_log.str());
-
-                motors.drive_for(
-                    kVisibleTurnLeftPercent,
-                    kVisibleTurnRightPercent,
-                    kVisibleTurnDurationMs,
-                    true);
-                visible_turn_demo_done = true;
-
-                std::ostringstream done_log;
-                done_log << "[demo][motor] completed one-shot visible turn";
-                wasm_log_line(done_log.str());
-
-                continue;
-            }
 
             if (pose_source == PoseSource::wheel_odom){
                 sensors::PoseLog pose_copy = {};
@@ -324,6 +314,82 @@ int main(){
                 rerun_log_pose_wheel(&pose_copy);
             }
             // rerun_log_pose_wheel(&wheel_pose);
+
+            if (!visible_turn_demo_done) {
+                if (!g_lc_ready.load(std::memory_order_acquire) ||
+                    !g_first_map_update_done.load(std::memory_order_acquire)) {
+                    continue;
+                }
+
+                if (waiting_for_map_cycle) {
+                    const uint64_t current_map_revision =
+                        g_map_update_revision.load(std::memory_order_acquire);
+                    if (current_map_revision > last_seen_map_revision) {
+                        waiting_for_map_cycle = false;
+                        if (visible_turn_segment_index >= kVisibleTurnSegments) {
+                            visible_turn_demo_done = true;
+                            std::ostringstream done_log;
+                            done_log << "[demo][motor] completed stepped turn final_yaw=" << yaw
+                                     << " map_revision=" << current_map_revision;
+                            wasm_log_line(done_log.str());
+                        } else {
+                            std::ostringstream resume_log;
+                            resume_log << "[demo][motor] map update observed after segment="
+                                       << visible_turn_segment_index
+                                       << " revision=" << current_map_revision;
+                            wasm_log_line(resume_log.str());
+                        }
+                    } else if (Clock::now() >= visible_turn_map_wait_deadline) {
+                        waiting_for_map_cycle = false;
+                        std::ostringstream timeout_log;
+                        timeout_log << "[demo][motor] map wait timeout after segment="
+                                    << visible_turn_segment_index
+                                    << " revision=" << current_map_revision;
+                        wasm_log_line(timeout_log.str());
+                    }
+                    continue;
+                }
+
+                if (visible_turn_segment_index >= kVisibleTurnSegments) {
+                    visible_turn_demo_done = true;
+                    continue;
+                }
+
+                if (!visible_turn_segment_active) {
+                    visible_turn_segment_active = true;
+                    visible_turn_deadline =
+                        Clock::now() + std::chrono::milliseconds(kVisibleTurnSegmentDurationMs);
+                    std::ostringstream start_log;
+                    start_log << "[demo][motor] start segment="
+                              << (visible_turn_segment_index + 1) << "/" << kVisibleTurnSegments
+                              << " yaw=" << yaw
+                              << " left=" << kVisibleTurnLeftPercent
+                              << " right=" << kVisibleTurnRightPercent
+                              << " duration_ms=" << kVisibleTurnSegmentDurationMs;
+                    wasm_log_line(start_log.str());
+                }
+
+                if (Clock::now() < visible_turn_deadline) {
+                    motors.drive_percent(
+                        kVisibleTurnLeftPercent,
+                        kVisibleTurnRightPercent,
+                        kVisibleTurnHoldMs);
+                } else {
+                    motors.stop();
+                    visible_turn_segment_active = false;
+                    visible_turn_segment_index += 1;
+                    waiting_for_map_cycle = true;
+                    last_seen_map_revision =
+                        g_map_update_revision.load(std::memory_order_acquire);
+                    visible_turn_map_wait_deadline =
+                        Clock::now() + std::chrono::milliseconds(kVisibleTurnMapWaitTimeoutMs);
+                    std::ostringstream stop_log;
+                    stop_log << "[demo][motor] stop segment=" << visible_turn_segment_index
+                             << " yaw=" << yaw
+                             << " waiting_for_map_revision>" << last_seen_map_revision;
+                    wasm_log_line(stop_log.str());
+                }
+            }
         }
     });
 
