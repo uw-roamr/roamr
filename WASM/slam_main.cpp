@@ -56,18 +56,28 @@ enum class PoseSource{
     wheel_odom,
     fused
 };
+// IMU preintegration drifts over time, so the shared autonomy/map pose should
+// not treat it as a drop-in orientation estimate.
 static constexpr PoseSource pose_source = PoseSource::wheel_odom;
-static constexpr bool kEnableVisibleMotorTurnDemo = true;
-static constexpr int32_t kVisibleTurnLeftPercent = -18;
-static constexpr int32_t kVisibleTurnRightPercent = 18;
-static constexpr int32_t kVisibleTurnSegmentDurationMs = 800;
-static constexpr int32_t kVisibleTurnHoldMs = 150;
-static constexpr int32_t kVisibleTurnSegments = 4;
-static constexpr int32_t kVisibleTurnMapWaitTimeoutMs = 1500;
+static constexpr bool kEnableInitialSpin = true;
+static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
+static constexpr int32_t kInitialSpinSegments = 4;
+static constexpr int32_t kInitialSpinHoldMs = 120;
+static constexpr int32_t kInitialSpinMapWaitTimeoutMs = 1500;
+static constexpr double kInitialSpinStepRad = core::pi * 0.5;
+static constexpr controls::TurnInPlaceConfig kInitialSpinTurnCfg{
+    2.2,
+    1.2,
+    0.25,
+    4.0 * core::pi / 180.0};
+static constexpr int32_t kPathFollowHoldMs = 120;
+static constexpr bool kEnableWheelPoseLogging = true;
+static constexpr double kWheelPoseLogIntervalSec = 0.2;
+static constexpr bool kEnableVerboseAutonomyLogs = false;
 
 // Tiny planner demo: set a fixed map-view pixel goal at startup.
 // Toggle off when using host-provided goal clicks.
-static constexpr bool kEnablePlannerDemoGoal = true;
+static constexpr bool kEnablePlannerDemoGoal = false;
 static constexpr int kPlannerDemoGoalPixelX = 160;
 static constexpr int kPlannerDemoGoalPixelY = 128;
 
@@ -130,6 +140,7 @@ int main(){
     });
     std::thread lidar_camera_thread([&m_lc](){
         double g_last_logged_lc_timestamp = -1.0;
+        double last_lc_frame_timestamp = -1.0;
         int write_idx = 0;
 
         while(true){
@@ -143,9 +154,15 @@ int main(){
                     std::this_thread::yield();
                     continue;
                 }
+                g_lc_buffers[write_idx].timestamp = 0.0;
+                g_lc_buffers[write_idx].points_size = 0;
+                g_lc_buffers[write_idx].colors_size = 0;
+                g_lc_buffers[write_idx].image_size = 0;
                 read_lidar_camera(&g_lc_buffers[write_idx]);
                 sensors::ensure_points_flu(g_lc_buffers[write_idx]);
-                if (g_lc_buffers[write_idx].points_size > 0) {
+                if (g_lc_buffers[write_idx].points_size > 0 &&
+                    g_lc_buffers[write_idx].timestamp > last_lc_frame_timestamp) {
+                    last_lc_frame_timestamp = g_lc_buffers[write_idx].timestamp;
                     if (!g_lc_ready.load(std::memory_order_relaxed)) {
                         g_lc_ready.store(true, std::memory_order_release);
                     }
@@ -281,14 +298,15 @@ int main(){
         uint64_t planned_path_revision = 0;
         double x = 0.0;
         double y = 0.0;
-        double yaw = 0.0;
-        bool visible_turn_demo_done = !kEnableVisibleMotorTurnDemo;
-        bool visible_turn_segment_active = false;
+        double yaw_odom = 0.0;
+        double last_wheel_pose_log_timestamp = -1.0;
+        bool spin_target_active = false;
         bool waiting_for_map_cycle = false;
-        int visible_turn_segment_index = 0;
+        bool goal_reached_logged = false;
+        int initial_spin_segment_index = 0;
         uint64_t last_seen_map_revision = 0;
-        Clock::time_point visible_turn_deadline{};
-        Clock::time_point visible_turn_map_wait_deadline{};
+        double spin_target_yaw = 0.0;
+        Clock::time_point initial_spin_map_wait_deadline{};
 
         while(true){
             read_wheel_odometry(&odom);
@@ -297,25 +315,32 @@ int main(){
                 continue;
             }
 
-            sensors::integrate_wheel_odometry(odom, &x, &y, &yaw);
+            sensors::integrate_wheel_odometry(odom, &x, &y, &yaw_odom);
             g_latest_translation_odom = {x, y, 0.0};
-            g_latest_quat_odom = {0.0, 0.0, std::sin(yaw * 0.5), std::cos(yaw * 0.5)};
+            g_latest_quat_odom = {
+                0.0, 0.0, std::sin(yaw_odom * 0.5), std::cos(yaw_odom * 0.5)};
 
-            if (pose_source == PoseSource::wheel_odom){
-                sensors::PoseLog pose_copy = {};
-                {
-                    std::lock_guard<std::mutex> lk(m_pose);
-                    g_pose.timestamp = odom.timestamp;
-                    g_pose.translation = g_latest_translation_odom;
-                    g_pose.quaternion = g_latest_quat_odom;
-                    pose_copy = g_pose;
-                }
-                // rerun_log_pose(&pose_copy);
-                rerun_log_pose_wheel(&pose_copy);
+            sensors::PoseLog pose_copy = {};
+            {
+                std::lock_guard<std::mutex> lk(m_pose);
+                g_pose.timestamp = odom.timestamp;
+                g_pose.translation = g_latest_translation_odom;
+                g_pose.quaternion = g_latest_quat_odom;
+                pose_copy = g_pose;
             }
-            // rerun_log_pose_wheel(&wheel_pose);
+            if (kEnableWheelPoseLogging &&
+                (last_wheel_pose_log_timestamp < 0.0 ||
+                 (odom.timestamp - last_wheel_pose_log_timestamp) >= kWheelPoseLogIntervalSec)) {
+                rerun_log_pose_wheel(&pose_copy);
+                last_wheel_pose_log_timestamp = odom.timestamp;
+            }
+            if (pose_source != PoseSource::wheel_odom) {
+                rerun_log_pose(&pose_copy);
+            }
 
-            if (!visible_turn_demo_done) {
+            const RobotState state = g_state.load(std::memory_order_acquire);
+            if (state == RobotState::AUTONOMY_INIT &&
+                !g_initial_spin_done.load(std::memory_order_acquire)) {
                 if (!g_lc_ready.load(std::memory_order_acquire) ||
                     !g_first_map_update_done.load(std::memory_order_acquire)) {
                     continue;
@@ -326,74 +351,128 @@ int main(){
                         g_map_update_revision.load(std::memory_order_acquire);
                     if (current_map_revision > last_seen_map_revision) {
                         waiting_for_map_cycle = false;
-                        if (visible_turn_segment_index >= kVisibleTurnSegments) {
-                            visible_turn_demo_done = true;
+                        if (initial_spin_segment_index >= kInitialSpinSegments) {
+                            g_initial_spin_done.store(true, std::memory_order_release);
+                            motors.stop();
                             std::ostringstream done_log;
-                            done_log << "[demo][motor] completed stepped turn final_yaw=" << yaw
+                            done_log << "[autonomy][spin] completed final_yaw="
+                                     << yaw_odom
                                      << " map_revision=" << current_map_revision;
                             wasm_log_line(done_log.str());
-                        } else {
+                        } else if (kEnableVerboseAutonomyLogs) {
                             std::ostringstream resume_log;
-                            resume_log << "[demo][motor] map update observed after segment="
-                                       << visible_turn_segment_index
+                            resume_log << "[autonomy][spin] map update observed after segment="
+                                       << initial_spin_segment_index
                                        << " revision=" << current_map_revision;
                             wasm_log_line(resume_log.str());
                         }
-                    } else if (Clock::now() >= visible_turn_map_wait_deadline) {
+                    } else if (Clock::now() >= initial_spin_map_wait_deadline) {
                         waiting_for_map_cycle = false;
                         std::ostringstream timeout_log;
-                        timeout_log << "[demo][motor] map wait timeout after segment="
-                                    << visible_turn_segment_index
+                        timeout_log << "[autonomy][spin] map wait timeout after segment="
+                                    << initial_spin_segment_index
                                     << " revision=" << current_map_revision;
                         wasm_log_line(timeout_log.str());
                     }
                     continue;
                 }
 
-                if (visible_turn_segment_index >= kVisibleTurnSegments) {
-                    visible_turn_demo_done = true;
+                if (initial_spin_segment_index >= kInitialSpinSegments) {
+                    g_initial_spin_done.store(true, std::memory_order_release);
+                    motors.stop();
                     continue;
                 }
 
-                if (!visible_turn_segment_active) {
-                    visible_turn_segment_active = true;
-                    visible_turn_deadline =
-                        Clock::now() + std::chrono::milliseconds(kVisibleTurnSegmentDurationMs);
-                    std::ostringstream start_log;
-                    start_log << "[demo][motor] start segment="
-                              << (visible_turn_segment_index + 1) << "/" << kVisibleTurnSegments
-                              << " yaw=" << yaw
-                              << " left=" << kVisibleTurnLeftPercent
-                              << " right=" << kVisibleTurnRightPercent
-                              << " duration_ms=" << kVisibleTurnSegmentDurationMs;
-                    wasm_log_line(start_log.str());
+                if (!spin_target_active) {
+                    spin_target_active = true;
+                    spin_target_yaw = yaw_odom + kInitialSpinStepRad;
+                    if (kEnableVerboseAutonomyLogs) {
+                        std::ostringstream start_log;
+                        start_log << "[autonomy][spin] start segment="
+                                  << (initial_spin_segment_index + 1) << "/" << kInitialSpinSegments
+                                  << " current_yaw=" << yaw_odom
+                                  << " target_yaw=" << spin_target_yaw;
+                        wasm_log_line(start_log.str());
+                    }
                 }
 
-                if (Clock::now() < visible_turn_deadline) {
-                    motors.drive_percent(
-                        kVisibleTurnLeftPercent,
-                        kVisibleTurnRightPercent,
-                        kVisibleTurnHoldMs);
-                } else {
+                const bool reached = motors.drive_turn_to_yaw(
+                    yaw_odom,
+                    spin_target_yaw,
+                    odom,
+                    kInitialSpinTurnCfg,
+                    kInitialSpinHoldMs);
+                if (reached) {
                     motors.stop();
-                    visible_turn_segment_active = false;
-                    visible_turn_segment_index += 1;
+                    spin_target_active = false;
+                    initial_spin_segment_index += 1;
                     waiting_for_map_cycle = true;
                     last_seen_map_revision =
                         g_map_update_revision.load(std::memory_order_acquire);
-                    visible_turn_map_wait_deadline =
-                        Clock::now() + std::chrono::milliseconds(kVisibleTurnMapWaitTimeoutMs);
-                    std::ostringstream stop_log;
-                    stop_log << "[demo][motor] stop segment=" << visible_turn_segment_index
-                             << " yaw=" << yaw
-                             << " waiting_for_map_revision>" << last_seen_map_revision;
-                    wasm_log_line(stop_log.str());
+                    initial_spin_map_wait_deadline =
+                        Clock::now() + std::chrono::milliseconds(kInitialSpinMapWaitTimeoutMs);
+                    if (kEnableVerboseAutonomyLogs) {
+                        std::ostringstream stop_log;
+                        stop_log << "[autonomy][spin] reached segment="
+                                 << initial_spin_segment_index
+                                 << " yaw=" << yaw_odom
+                                 << " waiting_for_map_revision>" << last_seen_map_revision;
+                        wasm_log_line(stop_log.str());
+                    }
+                }
+                continue;
+            }
+
+            if (state != RobotState::AUTONOMY_ENGAGED) {
+                continue;
+            }
+
+            const uint64_t latest_path_revision =
+                planning::bridge::copy_latest_plan_world(&planned_path_world);
+            if (latest_path_revision != planned_path_revision) {
+                planned_path_revision = latest_path_revision;
+                goal_reached_logged = false;
+                if (!planned_path_world.empty()) {
+                    path_follower.set_path(planned_path_world);
+                    if (kEnableVerboseAutonomyLogs) {
+                        std::ostringstream path_log;
+                        path_log << "[autonomy][path] updated revision="
+                                 << planned_path_revision
+                                 << " waypoints=" << planned_path_world.size();
+                        wasm_log_line(path_log.str());
+                    }
+                } else {
+                    path_follower.clear_path();
+                    motors.stop();
                 }
             }
+
+            if (!path_follower.has_path()) {
+                motors.stop();
+                continue;
+            }
+
+            const controls::Pose2D fused_pose{x, y, yaw_odom};
+            const double dt_seconds = std::max(
+                1e-3,
+                static_cast<double>(std::max(1, odom.sample_period_ms)) * 1e-3);
+            const controls::PathFollowerStatus status =
+                path_follower.update(fused_pose, dt_seconds, kPathFollowHoldMs);
+            if (status.goal_reached) {
+                if (!goal_reached_logged) {
+                    goal_reached_logged = true;
+                    wasm_log_line("[autonomy][path] goal reached");
+                }
+                path_follower.clear_path();
+                motors.stop();
+                continue;
+            }
+            goal_reached_logged = false;
+            motors.drive_twist(status.command, odom);
         }
     });
 
-    
+
     std::thread autonomy_thread([](){
         // the main high level thread
         while(!g_imu_ready.load(std::memory_order_acquire) ||
@@ -402,8 +481,10 @@ int main(){
         ){
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+        wasm_log_line("SENSOR_INIT -> AUTONOMY_INIT");
         g_state.store(RobotState::AUTONOMY_INIT, std::memory_order_release);
-        while(!g_first_map_update_done.load(std::memory_order_acquire)){
+        while(!g_first_map_update_done.load(std::memory_order_acquire) ||
+              !g_initial_spin_done.load(std::memory_order_acquire)){
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         wasm_log_line("AUTONOMY_INIT -> AUTONOMY_ENGAGED");

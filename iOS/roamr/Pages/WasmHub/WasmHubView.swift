@@ -17,6 +17,8 @@ struct WasmHubView: View {
     @ObservedObject private var wasmManager = WasmManager.shared
     @State private var selectedTab: WasmHubTab = .hub
     @State private var selectedFile: LocalWasmFile?
+    @State private var isMapExpanded = true
+    @State private var isConsoleExpanded = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -73,31 +75,69 @@ struct WasmHubView: View {
             }
 
             VStack(alignment: .leading, spacing: 12) {
-                Text("WASM Console")
-                    .font(.headline)
-
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 8) {
-                        if wasmManager.logLines.isEmpty {
-                            Text("Run a WASM module to see host-side logs from the module here.")
-                                .foregroundColor(.secondary)
+                DisclosureGroup(isExpanded: $isMapExpanded) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let data = wasmManager.latestMapJPEGData,
+                           let image = UIImage(data: data) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .interpolation(.none)
+                                .scaledToFit()
+                                .frame(maxWidth: .infinity)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
                         } else {
-                            ForEach(Array(wasmManager.logLines.enumerated()), id: \.offset) { _, line in
-                                Text(line)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundColor(.primary)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
+                            Text("No map frame received yet.")
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, minHeight: 160)
                         }
+
+                        Text(
+                            "Frames: \(wasmManager.latestMapFrameCount)  Timestamp: " +
+                            (wasmManager.latestMapTimestamp > 0
+                                ? String(format: "%.3f", wasmManager.latestMapTimestamp)
+                                : "n/a")
+                        )
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(Color.black.opacity(0.06))
+                    )
+                } label: {
+                    Text("Map Preview")
+                        .font(.headline)
                 }
-                .frame(maxWidth: .infinity, minHeight: 140, maxHeight: 220)
-                .padding(12)
-                .background(
-                    RoundedRectangle(cornerRadius: 16)
-                        .fill(Color.black.opacity(0.06))
-                )
+
+                DisclosureGroup(isExpanded: $isConsoleExpanded) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if wasmManager.logLines.isEmpty {
+                                Text("Run a WASM module to see host-side logs from the module here.")
+                                    .foregroundColor(.secondary)
+                            } else {
+                                ForEach(Array(wasmManager.logLines.enumerated()), id: \.offset) { _, line in
+                                    Text(line)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .foregroundColor(.primary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 140, maxHeight: 220)
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(Color.black.opacity(0.06))
+                    )
+                } label: {
+                    Text("WASM Console")
+                        .font(.headline)
+                }
             }
             .padding(.horizontal)
             .padding(.top, 8)

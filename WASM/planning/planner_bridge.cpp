@@ -1,11 +1,13 @@
 #include "planning/planner_bridge.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <mutex>
 #include <vector>
 
 #include "mapping/map_api.h"
+#include "planning/frontier_explorer.h"
 #include "planning/planner.h"
 
 namespace planning::bridge {
@@ -14,6 +16,8 @@ namespace {
 constexpr int32_t kRenderWidthDefault = 256;   // keep in sync with mapping/map_update.cpp
 constexpr int32_t kRenderHeightDefault = 256;  // keep in sync with mapping/map_update.cpp
 constexpr int32_t kMaxPlannedPathCells = 4096; // keep in sync with mapping/map.cpp
+constexpr bool kEnableAutoFrontierExploration = true;
+constexpr double kAutoFrontierReplanIntervalSec = 0.75;
 
 struct PlannerGoalPixel {
   bool active = false;
@@ -26,6 +30,8 @@ PlannerGoalPixel g_planner_goal;
 std::mutex g_planned_path_mutex;
 std::vector<core::Vector3d> g_planned_path_world;
 uint64_t g_planned_path_revision = 0;
+std::chrono::steady_clock::time_point g_last_auto_frontier_plan_time =
+    std::chrono::steady_clock::time_point::min();
 
 PlannerConfig build_planner_config() {
   PlannerConfig cfg;
@@ -33,11 +39,25 @@ PlannerConfig build_planner_config() {
   cfg.treat_unknown_as_occupied = true;
   cfg.allow_diagonal = true;
   cfg.prevent_corner_cutting = true;
-  cfg.inflation_radius_m = 0.0;
+  cfg.inflation_radius_m = 0.20;
   cfg.simplify_path = true;
   cfg.snap_start_to_free = true;
   cfg.snap_goal_to_free = true;
   cfg.snap_search_radius_cells = 10;
+  return cfg;
+}
+
+FrontierExplorerConfig build_frontier_config() {
+  FrontierExplorerConfig cfg;
+  cfg.occupied_threshold = 50;
+  cfg.allow_diagonal = true;
+  cfg.prevent_corner_cutting = true;
+  cfg.inflation_radius_m = 0.20;
+  cfg.simplify_path = true;
+  cfg.snap_start_to_free = true;
+  cfg.snap_goal_to_free = true;
+  cfg.snap_search_radius_cells = 10;
+  cfg.min_cluster_size = 4;
   return cfg;
 }
 
@@ -151,6 +171,44 @@ void update_cached_path_world(const std::vector<core::Vector3d>& path_world) {
   ++g_planned_path_revision;
 }
 
+void update_overlay_from_plan_result(const PlanResult& planned) {
+  mapping::clear_planned_path();
+  if (!planned.success || planned.path_grid.empty()) {
+    update_cached_path_world({});
+    return;
+  }
+
+  const GridCoord& goal_cell = planned.path_grid.back();
+  mapping::set_planned_goal_cell(goal_cell.x, goal_cell.y, 1);
+
+  const int32_t limit = std::min<int32_t>(
+      static_cast<int32_t>(planned.path_grid.size()),
+      kMaxPlannedPathCells);
+  for (int32_t i = 0; i < limit; ++i) {
+    const GridCoord& c = planned.path_grid[static_cast<size_t>(i)];
+    mapping::set_planned_path_cell(i, c.x, c.y);
+  }
+  update_cached_path_world(planned.path_world);
+}
+
+void update_overlay_from_frontier_result(const FrontierPlanResult& planned) {
+  mapping::clear_planned_path();
+  if (!planned.success || planned.path_grid.empty()) {
+    update_cached_path_world({});
+    return;
+  }
+
+  mapping::set_planned_goal_cell(planned.goal_cell.x, planned.goal_cell.y, 1);
+  const int32_t limit = std::min<int32_t>(
+      static_cast<int32_t>(planned.path_grid.size()),
+      kMaxPlannedPathCells);
+  for (int32_t i = 0; i < limit; ++i) {
+    const GridCoord& c = planned.path_grid[static_cast<size_t>(i)];
+    mapping::set_planned_path_cell(i, c.x, c.y);
+  }
+  update_cached_path_world(planned.path_world);
+}
+
 }  // namespace
 
 void set_goal_map_pixel(int32_t x, int32_t y) {
@@ -175,36 +233,6 @@ void update_plan_overlay(
     goal = g_planner_goal;
   }
 
-  if (!goal.active) {
-    mapping::clear_planned_path();
-    update_cached_path_world({});
-    return;
-  }
-
-  if (render_width <= 0) {
-    render_width = kRenderWidthDefault;
-  }
-  if (render_height <= 0) {
-    render_height = kRenderHeightDefault;
-  }
-
-  GridCoord goal_cell{};
-  const int32_t goal_x = clampi(goal.x, 0, render_width - 1);
-  const int32_t goal_y = clampi(goal.y, 0, render_height - 1);
-  if (!render_pixel_to_map_cell(
-          goal_x,
-          goal_y,
-          render_width,
-          render_height,
-          &goal_cell)) {
-    mapping::clear_planned_path();
-    update_cached_path_world({});
-    return;
-  }
-
-  mapping::clear_planned_path();
-  mapping::set_planned_goal_cell(goal_cell.x, goal_cell.y, 1);
-
   GridMap2D planner_map;
   GridCoord start_cell{};
   if (!load_planner_grid(&planner_map) ||
@@ -213,24 +241,58 @@ void update_plan_overlay(
           body_to_world.translation.x,
           body_to_world.translation.y,
           &start_cell)) {
+    mapping::clear_planned_path();
     update_cached_path_world({});
     return;
   }
 
-  const PlanResult planned = g_planner.plan_to_grid(planner_map, start_cell, goal_cell);
-  if (!planned.success || planned.path_grid.empty()) {
+  if (goal.active) {
+    if (render_width <= 0) {
+      render_width = kRenderWidthDefault;
+    }
+    if (render_height <= 0) {
+      render_height = kRenderHeightDefault;
+    }
+
+    GridCoord goal_cell{};
+    const int32_t goal_x = clampi(goal.x, 0, render_width - 1);
+    const int32_t goal_y = clampi(goal.y, 0, render_height - 1);
+    if (!render_pixel_to_map_cell(
+            goal_x,
+            goal_y,
+            render_width,
+            render_height,
+            &goal_cell)) {
+      mapping::clear_planned_path();
+      update_cached_path_world({});
+      return;
+    }
+
+    const PlanResult planned = g_planner.plan_to_grid(planner_map, start_cell, goal_cell);
+    update_overlay_from_plan_result(planned);
+    return;
+  }
+
+  if (!kEnableAutoFrontierExploration) {
+    mapping::clear_planned_path();
     update_cached_path_world({});
     return;
   }
 
-  const int32_t limit = std::min<int32_t>(
-      static_cast<int32_t>(planned.path_grid.size()),
-      kMaxPlannedPathCells);
-  for (int32_t i = 0; i < limit; ++i) {
-    const GridCoord& c = planned.path_grid[static_cast<size_t>(i)];
-    mapping::set_planned_path_cell(i, c.x, c.y);
+  const auto now = std::chrono::steady_clock::now();
+  const double elapsed_sec = std::chrono::duration<double>(
+      now - g_last_auto_frontier_plan_time).count();
+  if (g_last_auto_frontier_plan_time != std::chrono::steady_clock::time_point::min() &&
+      elapsed_sec < kAutoFrontierReplanIntervalSec) {
+    return;
   }
-  update_cached_path_world(planned.path_world);
+  g_last_auto_frontier_plan_time = now;
+
+  const FrontierPlanResult planned = plan_to_nearest_frontier(
+      planner_map,
+      body_to_world.translation,
+      build_frontier_config());
+  update_overlay_from_frontier_result(planned);
 }
 
 uint64_t copy_latest_plan_world(std::vector<core::Vector3d>* out_path) {

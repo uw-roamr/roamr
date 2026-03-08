@@ -32,6 +32,7 @@ namespace mapping {
   static double g_last_yaw_log_ts = -1.0;
   static double g_last_map_log_ts = -1.0;
   static int g_pose_history_count = 0;
+  static double g_last_pose_yaw = 0.0;
 
   struct MapPerfWindow {
     std::chrono::steady_clock::time_point window_start = std::chrono::steady_clock::now();
@@ -198,6 +199,7 @@ namespace mapping {
       reset_poses();
       set_points_world(1);
       g_pose_history_count = 0;
+      g_last_pose_yaw = 0.0;
       map_initialized = true;
     }
 
@@ -205,22 +207,19 @@ namespace mapping {
     const core::Vector3d& t_body_to_world = body_to_world.translation;
     const bool points_rdf =
         lc_data.points_frame_id == static_cast<core::CoordinateFrameId_t>(core::CoordinateFrameId::kRDF);
-
-    // Use the phone-facing axis (camera forward) as +X for mapping.
-    const core::Vector3d forward_flu = {1.0, 0.0, 0.0};
+    double roll = 0.0;
+    double pitch = 0.0;
+    double yaw = 0.0;
+    core::quat_to_euler_zyx(q_body_to_world, &roll, &pitch, &yaw);
+    if (g_pose_history_count > 0) {
+      yaw = core::unwrap_angle_near(yaw, g_last_pose_yaw);
+    }
+    g_last_pose_yaw = yaw;
 
     // Correct camera-to-body mounting by +90 deg roll:
     // (x, y, z) -> (x, -z, y)
     // Applying here guarantees map, z filtering, and rerun all use the same corrected geometry.
     const core::Vector4d q_point_to_body = core::quat_from_euler_zyx(core::pi * 0.5, 0.0, 0.0);
-    const core::Vector3d forward_flu_body = core::quat_rotate(q_point_to_body, forward_flu);
-
-    const core::Vector3d forward_flu_world = core::quat_rotate(q_body_to_world, forward_flu_body);
-    const core::Vector3d& ffw = forward_flu_world;
-
-    // project to SE2
-    const double yaw = std::atan2(ffw.y, ffw.x);
-    const double range = std::sqrt(ffw.x * ffw.x + ffw.y * ffw.y);
     if (g_pose_history_count < mapMaxPoses) {
       set_pose(g_pose_history_count, t_body_to_world.x, t_body_to_world.y, yaw);
       g_pose_history_count += 1;
@@ -327,8 +326,7 @@ namespace mapping {
       const float yaw_z = atan2f(static_cast<float>(c.y), static_cast<float>(c.x)) * deg;
       std::cout << "Pose yaw deg: " << (yaw * deg)
                 << " | yaw_x/y/z=" << yaw_x << "/" << yaw_y << "/" << yaw_z
-                << " | fwd=[" << ffw.x << "," << ffw.y << "," << ffw.z << "]"
-                << " | range=" << range
+                << " | rpy_deg=" << (roll * deg) << "/" << (pitch * deg) << "/" << (yaw * deg)
                 << " | up=[" << c.x << "," << c.y << "," << c.z << "]"
                 << std::endl;
     }

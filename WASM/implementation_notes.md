@@ -1,7 +1,7 @@
 ## Plan outline is from Codex, implementation details are from me to implement
 
 1. Add shared readiness/status fields and a real autonomy enum in WASM/slam_main.cpp.
-    basic outer state machine: 
+    basic outer state machine:
     1. SENSOR_INIT (merges two states below)
        1. HARDWARE_INIT (waiting for all sensor communications to init)
        2. CALIBRATION_INIT (waiting for calibrations to complete)
@@ -37,6 +37,7 @@
 - Added latched readiness flags:
   - `g_lc_ready` becomes true after the first non-empty LiDAR frame is published
   - `g_first_map_update_done` becomes true after the first successful map update
+- Added `g_initial_spin_done` so `AUTONOMY_INIT` can wait for the initial mapping spin to finish before path-following begins.
 - Kept `g_map_initialized` as mapping-internal state instead of reusing it as a cross-thread readiness signal.
 - Made `g_state` atomic because it is shared across threads.
 
@@ -46,20 +47,45 @@
 - Recalibration still updates biases when the device is still, but repeated `"recalibrated IMU"` spam was removed.
 - Current UI logging only reports the initial calibration event and gravity initialization message.
 
+### Pose fusion
+
+- Added gyro-yaw accumulation in `IMUPreintegrator`, but this is currently treated as diagnostic / future-estimator plumbing, not as an authoritative shared orientation estimate.
+- Important correction: IMU preintegration accumulates drift, so it is not suitable as a drop-in rotation estimate for the shared autonomy/map pose.
+- The shared `g_pose` used by mapping, planning, and path following currently uses wheel odometry yaw again.
+- If IMU orientation is reintroduced into the shared pose later, it should be through a proper bounded-drift estimator rather than raw preintegration.
+
 ### Current turn demo
 
-- The current demo is still a blind open-loop turn used as a stepping stone before closed-loop autonomy.
-- It now uses a non-blocking timed motor-command loop in the control thread instead of `drive_for(...)`.
-  - This keeps odometry and `g_pose` updating while the robot rotates.
-  - That is important because blocking the control thread prevented mapping from seeing pose motion during the turn.
-- The turn starts only after:
+- The initial spin is now a closed-loop `AUTONOMY_INIT` behavior instead of a blind open-loop turn.
+- It uses `drive_turn_to_yaw(...)` against wheel-odometry yaw in 4 quarter-turn segments.
+- Each segment waits for a fresh map revision before continuing so the mapper has a chance to integrate the new viewpoint.
+- The spin starts only after:
   - LiDAR has produced a valid frame
   - the mapping thread has completed at least one map update
-- Current demo constants in `slam_main.cpp`:
-  - left motor = `-18`
-  - right motor = `18`
-  - duration = `2600 ms`
-  - hold time = `150 ms`
+- Current spin constants in `slam_main.cpp`:
+  - step = `pi / 2 rad`
+  - segments = `4`
+  - controller hold time = `120 ms`
+  - map-wait timeout = `1500 ms`
+
+### Planning / control
+
+- The planner bridge computes an inflated A* path to the current goal pixel when a manual goal is active.
+- When no manual goal is active, it now runs automatic frontier exploration:
+  - load the occupancy grid from `mapping/map.cpp`
+  - inflate obstacles using the same planner-side inflation model
+  - BFS reachable free cells from the robot start cell
+  - detect frontier cells as reachable known-free cells adjacent to unknown space
+  - cluster frontier cells with 8-connectivity
+  - choose the nearest reachable cluster by running inflated A* to each cluster representative
+- `AUTONOMY_ENGAGED` now consumes the latest planned world path and feeds it into `PathFollower`.
+- The controller still uses conservative limits and stops cleanly when no path is available or the goal is reached.
+
+### Mapping performance
+
+- Removed duplicated planned-path / goal rendering in `mapping/map.cpp`.
+- Replaced point/pose reset loops with `memset(...)`.
+- Added cached pixel-to-grid lookup tables for the occupancy raster pass so draw-time work does less per-pixel floating-point math.
 
 ### Important debugging lessons
 
@@ -72,6 +98,10 @@
 
 ### Next likely steps
 
-- Replace the blind timed turn with a closed-loop turn target using odometry yaw or gyro-derived yaw.
-- Build fused pose = wheel `x/y` + gyro yaw before relying on mapping during rotation.
-- After the initial spin works reliably, move on to frontier detection and inflated A* planning.
+- Tune the spin and path-following gains against real robot behavior now that the loop is closed.
+- Add a real bounded-drift attitude / heading estimator before relying on IMU-derived rotation in the shared pose.
+- Improve frontier-goal quality:
+  - evaluate better cluster scoring than shortest-path-only
+  - add hysteresis / goal stickiness so replanning does not churn while the robot is already progressing toward a frontier
+  - consider a spin-at-goal behavior to expose new unknown space before picking the next frontier
+- Keep pushing mapping cost down, especially the per-scan ray integration path if it remains the runtime bottleneck.

@@ -27,6 +27,9 @@ final class WasmManager: ObservableObject {
     private let lock = NSLock()
     @Published var isRunning = false
     @Published var logLines: [String] = []
+    @Published var latestMapJPEGData: Data?
+    @Published var latestMapTimestamp: Double = 0
+    @Published var latestMapFrameCount: Int = 0
 
     private init() {}
 
@@ -142,6 +145,7 @@ final class WasmManager: ObservableObject {
         shouldStop = false
         lock.unlock()
         clearLogs()
+        clearMapPreview()
         appendLogLine("Running \(fileURL.lastPathComponent)")
         DispatchQueue.main.async {
             self.isRunning = true
@@ -245,6 +249,14 @@ final class WasmManager: ObservableObject {
         }
     }
 
+    func clearMapPreview() {
+        DispatchQueue.main.async {
+            self.latestMapJPEGData = nil
+            self.latestMapTimestamp = 0
+            self.latestMapFrameCount = 0
+        }
+    }
+
     func appendLogLine(_ line: String) {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
@@ -253,6 +265,15 @@ final class WasmManager: ObservableObject {
             if self.logLines.count > Self.maxLogLines {
                 self.logLines.removeFirst(self.logLines.count - Self.maxLogLines)
             }
+        }
+    }
+
+    func updateMapPreview(jpegData: Data, timestamp: Double) {
+        guard !jpegData.isEmpty else { return }
+        DispatchQueue.main.async {
+            self.latestMapJPEGData = jpegData
+            self.latestMapTimestamp = timestamp
+            self.latestMapFrameCount += 1
         }
     }
 }

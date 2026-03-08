@@ -24,6 +24,7 @@ class IMUPreintegrator {
   void reset() noexcept {
     pose_ = core::PoseSE3d();
     velocity_ = {};
+    gyro_yaw_ = 0.0;
     last_ts_ = -1.0;
   }
 
@@ -43,6 +44,7 @@ class IMUPreintegrator {
   void get_pose_log(PoseLog* out) const noexcept;
 
   const core::PoseSE3d& pose() const noexcept { return pose_; }
+  double gyro_yaw() const noexcept { return gyro_yaw_; }
 
  private:
   calibration::IMUCalibration& imu_calib_;
@@ -51,6 +53,7 @@ class IMUPreintegrator {
   core::Vector3d bias_gyro_;
   core::Vector3d bias_acc_;
   core::Vector3d gravity_;
+  double gyro_yaw_ = 0.0;
   double last_ts_ = -1.0;
 };
 

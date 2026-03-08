@@ -57,17 +57,19 @@
 
 	// 0 = points are in robot/laser frame (default), 1 = points already in world/map frame.
 	static int32_t POINTS_IN_WORLD = 0;
+	static int32_t PIXEL_TO_GX[MAX_W];
+	static int32_t PIXEL_TO_GY[MAX_H];
+	static uint8_t PIXEL_X_VALID[MAX_W];
+	static uint8_t PIXEL_Y_VALID[MAX_H];
+	static int32_t PIXEL_LUT_W = -1;
+	static int32_t PIXEL_LUT_H = -1;
 
 	void reset_poses() {
-		for (int32_t i = 0; i < 3 * MAX_POSES; ++i) {
-			POSES[i] = 0.0;
-		}
+		memset(POSES, 0, sizeof(POSES));
 	}
 
 	void reset_points() {
-		for (int32_t i = 0; i < 2 * MAX_POINTS; ++i) {
-			POINTS[i] = 0.0f;
-		}
+		memset(POINTS, 0, sizeof(POINTS));
 		POINTS_COUNT = 0;
 	}
 
@@ -321,6 +323,62 @@
 		return 1;
 	}
 
+	static void rebuild_pixel_grid_lookup(float scale, float off_x, float off_y) {
+		for (int32_t x = 0; x < CUR_W; ++x) {
+			float mx = ((float)x - off_x) / scale;
+			if (mx < 0.0f || mx >= (float)MAP_SIZE_X) {
+				PIXEL_X_VALID[x] = 0;
+				PIXEL_TO_GX[x] = 0;
+				continue;
+			}
+			PIXEL_X_VALID[x] = 1;
+			PIXEL_TO_GX[x] = (int32_t)mx;
+		}
+		for (int32_t y = 0; y < CUR_H; ++y) {
+			float my = ((float)y - off_y) / scale;
+			if (my < 0.0f || my >= (float)MAP_SIZE_Y) {
+				PIXEL_Y_VALID[y] = 0;
+				PIXEL_TO_GY[y] = 0;
+				continue;
+			}
+			PIXEL_Y_VALID[y] = 1;
+			PIXEL_TO_GY[y] = MAP_SIZE_Y - 1 - (int32_t)my;
+		}
+		PIXEL_LUT_W = CUR_W;
+		PIXEL_LUT_H = CUR_H;
+	}
+
+	static void draw_planned_path_overlay(float scale, float off_x, float off_y) {
+		if (PLANNED_PATH_COUNT <= 1) return;
+		for (int32_t i = 1; i < PLANNED_PATH_COUNT; ++i) {
+			const int32_t base0 = (i - 1) * 2;
+			const int32_t base1 = i * 2;
+			const int32_t gx0 = PLANNED_PATH[base0 + 0];
+			const int32_t gy0 = PLANNED_PATH[base0 + 1];
+			const int32_t gx1 = PLANNED_PATH[base1 + 0];
+			const int32_t gy1 = PLANNED_PATH[base1 + 1];
+			int32_t px0 = 0, py0 = 0, px1 = 0, py1 = 0;
+			if (!grid_to_pixel(gx0, gy0, scale, off_x, off_y, &px0, &py0) ||
+				!grid_to_pixel(gx1, gy1, scale, off_x, off_y, &px1, &py1)) {
+				continue;
+			}
+			draw_line_pixel(px0, py0, px1, py1, 0, 120, 255, 255);
+		}
+	}
+
+	static void draw_goal_marker(float scale, float off_x, float off_y) {
+		if (!PLANNED_GOAL_ENABLED) return;
+		int32_t px = 0;
+		int32_t py = 0;
+		if (!grid_to_pixel(PLANNED_GOAL_X, PLANNED_GOAL_Y, scale, off_x, off_y, &px, &py)) {
+			return;
+		}
+		for (int32_t d = -2; d <= 2; ++d) {
+			set_pixel(px + d, py, 0, 120, 255, 255);
+			set_pixel(px, py + d, 0, 120, 255, 255);
+		}
+	}
+
 	// Render occupancy map to IMAGE, optionally integrating the current scan.
 	void draw_map(int32_t poseCount, int32_t pointCount, int32_t width, int32_t height) {
 		if (poseCount < 0) poseCount = 0;
@@ -377,16 +435,17 @@
 		float map_h = (float)MAP_SIZE_Y * scale;
 		float off_x = ((float)CUR_W - map_w) * 0.5f;
 		float off_y = ((float)CUR_H - map_h) * 0.5f;
+		if (PIXEL_LUT_W != CUR_W || PIXEL_LUT_H != CUR_H) {
+			rebuild_pixel_grid_lookup(scale, off_x, off_y);
+		}
 
 		// Render occupancy grid into the image.
 		for (int32_t y = 0; y < CUR_H; ++y) {
-			float my = ((float)y - off_y) / scale;
-			if (my < 0.0f || my >= (float)MAP_SIZE_Y) continue;
-			int32_t gy = MAP_SIZE_Y - 1 - (int32_t)my;
+			if (!PIXEL_Y_VALID[y]) continue;
+			int32_t gy = PIXEL_TO_GY[y];
 			for (int32_t x = 0; x < CUR_W; ++x) {
-				float mx = ((float)x - off_x) / scale;
-				if (mx < 0.0f || mx >= (float)MAP_SIZE_X) continue;
-				int32_t gx = (int32_t)mx;
+				if (!PIXEL_X_VALID[x]) continue;
+				int32_t gx = PIXEL_TO_GX[x];
 				int32_t idx = grid_index(gx, gy);
 				uint8_t v = c_unknown;
 				if (!VISITED[idx]) {
@@ -454,63 +513,8 @@
 			}
 		}
 
-		// Overlay planned path as a purple polyline.
-		if (PLANNED_PATH_COUNT > 1) {
-			for (int32_t i = 1; i < PLANNED_PATH_COUNT; ++i) {
-				const int32_t base0 = (i - 1) * 2;
-				const int32_t base1 = i * 2;
-				const int32_t gx0 = PLANNED_PATH[base0 + 0];
-				const int32_t gy0 = PLANNED_PATH[base0 + 1];
-				const int32_t gx1 = PLANNED_PATH[base1 + 0];
-				const int32_t gy1 = PLANNED_PATH[base1 + 1];
-				int32_t px0 = 0, py0 = 0, px1 = 0, py1 = 0;
-				if (!grid_to_pixel(gx0, gy0, scale, off_x, off_y, &px0, &py0) ||
-					!grid_to_pixel(gx1, gy1, scale, off_x, off_y, &px1, &py1)) {
-					continue;
-				}
-				draw_line_pixel(px0, py0, px1, py1, 128, 0, 128, 255);
-			}
-		}
-
-		// Blue goal marker.
-		if (PLANNED_GOAL_ENABLED) {
-			int32_t px = 0, py = 0;
-			if (grid_to_pixel(PLANNED_GOAL_X, PLANNED_GOAL_Y, scale, off_x, off_y, &px, &py)) {
-				for (int32_t d = -2; d <= 2; ++d) {
-					set_pixel(px + d, py, 0, 120, 255, 255);
-					set_pixel(px, py + d, 0, 120, 255, 255);
-				}
-			}
-		}
-
-		// Overlay planned path as a blue polyline.
-		if (PLANNED_PATH_COUNT > 1) {
-			for (int32_t i = 1; i < PLANNED_PATH_COUNT; ++i) {
-				const int32_t base0 = (i - 1) * 2;
-				const int32_t base1 = i * 2;
-				const int32_t gx0 = PLANNED_PATH[base0 + 0];
-				const int32_t gy0 = PLANNED_PATH[base0 + 1];
-				const int32_t gx1 = PLANNED_PATH[base1 + 0];
-				const int32_t gy1 = PLANNED_PATH[base1 + 1];
-				int32_t px0 = 0, py0 = 0, px1 = 0, py1 = 0;
-				if (!grid_to_pixel(gx0, gy0, scale, off_x, off_y, &px0, &py0) ||
-					!grid_to_pixel(gx1, gy1, scale, off_x, off_y, &px1, &py1)) {
-					continue;
-				}
-				draw_line_pixel(px0, py0, px1, py1, 0, 120, 255, 255);
-			}
-		}
-
-		// Blue goal marker.
-		if (PLANNED_GOAL_ENABLED) {
-			int32_t px = 0, py = 0;
-			if (grid_to_pixel(PLANNED_GOAL_X, PLANNED_GOAL_Y, scale, off_x, off_y, &px, &py)) {
-				for (int32_t d = -2; d <= 2; ++d) {
-					set_pixel(px + d, py, 0, 120, 255, 255);
-					set_pixel(px, py + d, 0, 120, 255, 255);
-				}
-			}
-		}
+		draw_planned_path_overlay(scale, off_x, off_y);
+		draw_goal_marker(scale, off_x, off_y);
 
 		// Overlay only the latest pose as a 3x3 white dot.
 		if (poseCount > 0) {
