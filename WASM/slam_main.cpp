@@ -18,8 +18,16 @@
 #include "sensors/lidar_camera.h"
 #include "sensors/wheel_odometry.h"
 
+enum class RobotState{
+    SENSOR_INIT,
+    AUTONOMY_INIT,
+    AUTONOMY_ENGAGED
+};
+static std::atomic<RobotState> g_state{RobotState::SENSOR_INIT};
+
 static bool g_map_initialized = false;
 static mapping::MapFrame g_map_frame;
+static std::atomic<bool> g_first_map_update_done{false};
 
 // lidar camera globals
 static sensors::CameraConfig g_cam_config;
@@ -27,6 +35,7 @@ static sensors::LidarCameraData g_lc_buffers[2];
 static std::atomic<int> g_lc_ready_idx{-1};
 static std::atomic<int> g_lc_in_use_idx{-1};
 static sensors::LidarCameraData g_rerun_lc;
+static std::atomic<bool> g_lc_ready{false};
 
 // IMU globals
 static sensors::calibration::IMUHistoryBuffer g_imu_history;
@@ -42,8 +51,8 @@ static core::Vector4d g_latest_quat_odom = core::quat_identity();
 static sensors::PoseLog g_pose;
 enum class PoseSource{
     IMU,
-    wheel_odom
-    // todo: fused, ideally prioritizing wheel_odom for translation and IMU for rotation
+    wheel_odom,
+    fused
 };
 static constexpr PoseSource pose_source = PoseSource::wheel_odom;
 static constexpr bool kEnableOdomTurnDemo = false;
@@ -119,6 +128,7 @@ int main(){
     std::thread lidar_camera_thread([&m_lc](){
         double g_last_logged_lc_timestamp = -1.0;
         int write_idx = 0;
+
         while(true){
             std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(sensors::LidarCameraIntervalMs)));
             {
@@ -132,7 +142,12 @@ int main(){
                 }
                 read_lidar_camera(&g_lc_buffers[write_idx]);
                 sensors::ensure_points_flu(g_lc_buffers[write_idx]);
-                g_lc_ready_idx.store(write_idx, std::memory_order_release);
+                if (g_lc_buffers[write_idx].points_size > 0) {
+                    if (!g_lc_ready.load(std::memory_order_relaxed)) {
+                        g_lc_ready.store(true, std::memory_order_release);
+                    }
+                    g_lc_ready_idx.store(write_idx, std::memory_order_release);
+                }
                 write_idx = 1 - write_idx;
             }
         }
@@ -198,6 +213,9 @@ int main(){
             g_map_initialized,
             body_to_world
         );
+        if (!g_first_map_update_done.load(std::memory_order_relaxed)) {
+            g_first_map_update_done.store(true, std::memory_order_release);
+        }
         const auto map_update_end = Clock::now();
         perf_map_update_ms_sum += elapsed_ms(map_update_start, map_update_end);
         perf_map_updates += 1;
@@ -229,14 +247,14 @@ int main(){
             const double rerun_log_avg_ms = perf_rerun_log_ms_sum / rerun_denom;
             const double map_update_avg_ms = perf_map_update_ms_sum / map_denom;
 
-            std::cout << "[mapping][thread] "
-                      << "frames=" << frames_rate << "/s"
-                      << " rerun_emit=" << rerun_rate << "/s"
-                      << " map_update=" << map_rate << "/s"
-                      << " rerun_build_ms=" << rerun_build_avg_ms
-                      << " rerun_log_ms=" << rerun_log_avg_ms
-                      << " map_update_ms=" << map_update_avg_ms
-                      << std::endl;
+            // std::cout << "[mapping][thread] "
+            //           << "frames=" << frames_rate << "/s"
+            //           << " rerun_emit=" << rerun_rate << "/s"
+            //           << " map_update=" << map_rate << "/s"
+            //           << " rerun_build_ms=" << rerun_build_avg_ms
+            //           << " rerun_log_ms=" << rerun_log_avg_ms
+            //           << " map_update_ms=" << map_update_avg_ms
+            //           << std::endl;
 
             perf_window_start = now;
             perf_frames_with_points = 0;
@@ -250,7 +268,8 @@ int main(){
       }
     });
 
-    std::thread wheel_odom_thread([&m_pose, &motors](){
+    std::thread control_thread([&m_pose, &motors](){
+        // responsible for reading encoder values and sending motor commands
         sensors::WheelOdometryData odom = {};
         controls::PathFollower path_follower;
         std::vector<core::Vector3d> planned_path_world;
@@ -330,6 +349,22 @@ int main(){
         }
     });
 
+    
+    std::thread autonomy_thread([](){
+        // the main high level thread
+        while(!g_imu_ready.load(std::memory_order_acquire) ||
+              !g_lc_ready.load(std::memory_order_acquire)
+        // || !g_wheel_odom_ready
+        ){
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        g_state.store(RobotState::AUTONOMY_INIT, std::memory_order_release);
+        while(!g_first_map_update_done.load(std::memory_order_acquire)){
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        g_state.store(RobotState::AUTONOMY_ENGAGED, std::memory_order_release);
+    });
+
     // TODO: remove once autonomy control loop is closed
     // controls::drive_forward_demo();
     // controls::drive_twist_demo();
@@ -337,5 +372,6 @@ int main(){
     imu_thread.join();
     lidar_camera_thread.join();
     mapping_thread.join();
-    wheel_odom_thread.join();
+    control_thread.join();
+    autonomy_thread.join();
 }
