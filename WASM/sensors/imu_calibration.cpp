@@ -53,7 +53,6 @@ namespace sensors::calibration{
 
         last_calibrated = last_imu_timestamp;
         std::cout << "calibrated IMU" << std::endl;
-        wasm_log_line("calibrated IMU");
     }
 
     void IMUCalibration::init_biases(){

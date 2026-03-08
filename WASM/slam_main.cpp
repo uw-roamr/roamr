@@ -56,15 +56,10 @@ enum class PoseSource{
     fused
 };
 static constexpr PoseSource pose_source = PoseSource::wheel_odom;
-static constexpr bool kEnableOdomTurnDemo = true;
-static constexpr double kOdomTurnDeltaYawRad = sensors::kTwoPi;
-static constexpr int32_t kOdomTurnDirection = 1;  // +1 CCW, -1 CW
-static constexpr int32_t kOdomTurnHoldMs = 120;
-static constexpr int32_t kOdomTurnSettledSamples = 3;
-static constexpr int32_t kOdomTurnTimeoutMs = 25000;
-static constexpr double kOdomTurnMaxOmegaRadPerSec = 0.35;
-static constexpr double kOdomTurnMinOmegaRadPerSec = 0.12;
-static constexpr double kOdomTurnYawToleranceRad = 5.0 * core::pi / 180.0;
+static constexpr bool kEnableVisibleMotorTurnDemo = true;
+static constexpr int32_t kVisibleTurnLeftPercent = -35;
+static constexpr int32_t kVisibleTurnRightPercent = 35;
+static constexpr int32_t kVisibleTurnDurationMs = 2000;
 
 // Tiny planner demo: set a fixed map-view pixel goal at startup.
 // Toggle off when using host-provided goal clicks.
@@ -281,15 +276,7 @@ int main(){
         double x = 0.0;
         double y = 0.0;
         double yaw = 0.0;
-        bool turn_active = false;
-        bool turn_done = !kEnableOdomTurnDemo;
-        double turn_target_yaw = 0.0;
-        int settled_samples = 0;
-        auto turn_start = std::chrono::steady_clock::now();
-        controls::TurnInPlaceConfig turn_cfg{};
-        turn_cfg.max_omega_rad_s = kOdomTurnMaxOmegaRadPerSec;
-        turn_cfg.min_omega_rad_s = kOdomTurnMinOmegaRadPerSec;
-        turn_cfg.yaw_tolerance_rad = kOdomTurnYawToleranceRad;
+        bool visible_turn_demo_done = !kEnableVisibleMotorTurnDemo;
 
         while(true){
             read_wheel_odometry(&odom);
@@ -302,61 +289,28 @@ int main(){
             g_latest_translation_odom = {x, y, 0.0};
             g_latest_quat_odom = {0.0, 0.0, std::sin(yaw * 0.5), std::cos(yaw * 0.5)};
 
-            if (!turn_done) {
-                if (!turn_active) {
-                    const double sign = (kOdomTurnDirection >= 0) ? 1.0 : -1.0;
-                    turn_target_yaw = yaw + (sign * kOdomTurnDeltaYawRad);
-                    turn_active = true;
-                    settled_samples = 0;
-                    turn_start = std::chrono::steady_clock::now();
-                    motors.reset_twist_controller();
-                    std::ostringstream start_log;
-                    start_log << "[demo][turn] start_yaw=" << yaw
-                              << " target_yaw=" << turn_target_yaw
-                              << " timeout_ms=" << kOdomTurnTimeoutMs
-                              << " max_omega=" << turn_cfg.max_omega_rad_s;
-                    std::cout << start_log.str() << std::endl;
-                    wasm_log_line(start_log.str());
-                }
+            if (!visible_turn_demo_done) {
+                std::ostringstream start_log;
+                start_log << "[demo][motor] start_yaw=" << yaw
+                          << " left=" << kVisibleTurnLeftPercent
+                          << " right=" << kVisibleTurnRightPercent
+                          << " duration_ms=" << kVisibleTurnDurationMs;
+                std::cout << start_log.str() << std::endl;
+                wasm_log_line(start_log.str());
 
-                const bool reached = motors.drive_turn_to_yaw(
-                    yaw,
-                    turn_target_yaw,
-                    odom,
-                    turn_cfg,
-                    kOdomTurnHoldMs);
-                if (reached) {
-                    settled_samples += 1;
-                    if (settled_samples >= kOdomTurnSettledSamples) {
-                        turn_done = true;
-                        turn_active = false;
-                        motors.stop();
-                        motors.reset_twist_controller();
-                        std::ostringstream reached_log;
-                        reached_log << "[demo][turn] reached target_yaw=" << turn_target_yaw
-                                    << " final_yaw=" << yaw
-                                    << " settled_samples=" << settled_samples;
-                        std::cout << reached_log.str() << std::endl;
-                        wasm_log_line(reached_log.str());
-                    }
-                } else {
-                    settled_samples = 0;
-                }
+                motors.drive_for(
+                    kVisibleTurnLeftPercent,
+                    kVisibleTurnRightPercent,
+                    kVisibleTurnDurationMs,
+                    true);
+                visible_turn_demo_done = true;
 
-                const int64_t elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - turn_start).count();
-                if (turn_active && elapsed_ms > kOdomTurnTimeoutMs) {
-                    turn_done = true;
-                    turn_active = false;
-                    motors.stop();
-                    motors.reset_twist_controller();
-                    std::ostringstream timeout_log;
-                    timeout_log << "[demo][turn] timeout target_yaw=" << turn_target_yaw
-                                << " current_yaw=" << yaw
-                                << " elapsed_ms=" << elapsed_ms;
-                    std::cout << timeout_log.str() << std::endl;
-                    wasm_log_line(timeout_log.str());
-                }
+                std::ostringstream done_log;
+                done_log << "[demo][motor] completed one-shot visible turn";
+                std::cout << done_log.str() << std::endl;
+                wasm_log_line(done_log.str());
+
+                continue;
             }
 
             if (pose_source == PoseSource::wheel_odom){
@@ -388,6 +342,7 @@ int main(){
         while(!g_first_map_update_done.load(std::memory_order_acquire)){
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+        wasm_log_line("AUTONOMY_INIT -> ");
         g_state.store(RobotState::AUTONOMY_ENGAGED, std::memory_order_release);
     });
 

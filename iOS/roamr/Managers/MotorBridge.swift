@@ -28,6 +28,7 @@ func write_motors_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?
     let holdMs = max(0, Int(command.hold_ms))
 
     let message = "\(clampedLeft) \(clampedRight) \(holdMs)"
+    WasmManager.shared.appendLogLine("[host][motor] \(message)")
 
     motorQueue.async {
         // Bump token for each command; used to cancel stale watchdogs.
