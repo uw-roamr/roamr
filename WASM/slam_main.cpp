@@ -190,40 +190,42 @@ int main(){
         }
     });
     std::thread lidar_camera_thread([&m_lc](){
-        double g_last_logged_lc_timestamp = -1.0;
-        double last_lc_frame_timestamp = -1.0;
         int write_idx = 0;
 
         while(true){
             std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(sensors::LidarCameraIntervalMs)));
-            {
-                const int in_use = g_lc_in_use_idx.load(std::memory_order_acquire);
-                if (write_idx == in_use) {
-                    write_idx = 1 - write_idx;
-                }
-                if (write_idx == in_use) {
-                    std::this_thread::yield();
-                    continue;
-                }
-                g_lc_buffers[write_idx].timestamp = 0.0;
-                g_lc_buffers[write_idx].points_size = 0;
-                g_lc_buffers[write_idx].colors_size = 0;
-                g_lc_buffers[write_idx].image_size = 0;
-                read_lidar_camera(&g_lc_buffers[write_idx]);
-                sensors::ensure_points_flu(g_lc_buffers[write_idx]);
-                if (g_lc_buffers[write_idx].points_size > 0 &&
-                    g_lc_buffers[write_idx].timestamp > last_lc_frame_timestamp) {
-                    last_lc_frame_timestamp = g_lc_buffers[write_idx].timestamp;
-                    if (!g_lc_ready.load(std::memory_order_relaxed)) {
-                        g_lc_ready.store(true, std::memory_order_release);
-                    }
-                    g_lc_ready_idx.store(write_idx, std::memory_order_release);
-                    g_lc_cv.notify_one();
-                }
-                write_idx = 1 - write_idx;
 
-                wasm_log_line("lc timestamp: " + std::to_string(g_lc_buffers[write_idx].timestamp) + " points: " + std::to_string(g_lc_buffers[write_idx].points_size));
+            const int in_use = g_lc_in_use_idx.load(std::memory_order_acquire);
+            if (write_idx == in_use) {
+                write_idx = 1 - write_idx;
             }
+            if (write_idx == in_use) {
+                // Both slots claimed — shouldn't happen with 2 buffers but yield defensively.
+                std::this_thread::yield();
+                continue;
+            }
+
+            g_lc_buffers[write_idx].timestamp = 0.0;
+            g_lc_buffers[write_idx].points_size = 0;
+            g_lc_buffers[write_idx].colors_size = 0;
+            g_lc_buffers[write_idx].image_size = 0;
+            read_lidar_camera(&g_lc_buffers[write_idx]);
+            sensors::ensure_points_flu(g_lc_buffers[write_idx]);
+
+            if (g_lc_buffers[write_idx].points_size > 0) {
+                // Timestamp deduplication is intentionally omitted here: the mapping
+                // thread's do_map_update interval check (mapMinInterval) handles
+                // rate-limiting and will drop frames whose timestamps haven't advanced
+                // enough. Deduplicating here caused a permanent stall whenever the host
+                // returned a frame with the same timestamp as the previous call.
+                if (!g_lc_ready.load(std::memory_order_relaxed)) {
+                    g_lc_ready.store(true, std::memory_order_release);
+                }
+                g_lc_ready_idx.store(write_idx, std::memory_order_release);
+                g_lc_cv.notify_one();
+            }
+
+            write_idx = 1 - write_idx;
         }
     });
 
