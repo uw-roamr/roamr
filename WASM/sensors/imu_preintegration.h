@@ -28,7 +28,7 @@ class IMUPreintegrator {
     last_ts_ = -1.0;
   }
 
-  void init_from_calibration() noexcept {
+  void update_bias() noexcept {
     bias_gyro_[0] = imu_calib_.gyro_bias[0];
     bias_gyro_[1] = imu_calib_.gyro_bias[1];
     bias_gyro_[2] = imu_calib_.gyro_bias[2];

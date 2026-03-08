@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iostream>
 #include <mutex>
+#include <condition_variable>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -19,6 +20,9 @@
 #include "sensors/lidar_camera.h"
 #include "sensors/wheel_odometry.h"
 
+namespace {
+constexpr bool kLogToRerun = false;
+
 enum class RobotState{
     SENSOR_INIT,
     AUTONOMY_INIT,
@@ -31,6 +35,13 @@ static mapping::MapFrame g_map_frame;
 static std::atomic<bool> g_first_map_update_done{false};
 static std::atomic<uint64_t> g_map_update_revision{0};
 
+// IMU globals
+static sensors::calibration::IMUHistoryBuffer g_imu_history;
+static sensors::calibration::IMUCalibration g_imu_calib(g_imu_history);
+static sensors::IMUPreintegrator g_imu_preintegrator(g_imu_calib);
+static core::Vector4d g_latest_quat_imu = core::quat_identity();
+static std::atomic<bool> g_imu_ready{false};
+
 // lidar camera globals
 static sensors::CameraConfig g_cam_config;
 static sensors::LidarCameraData g_lc_buffers[2];
@@ -38,13 +49,8 @@ static std::atomic<int> g_lc_ready_idx{-1};
 static std::atomic<int> g_lc_in_use_idx{-1};
 static sensors::LidarCameraData g_rerun_lc;
 static std::atomic<bool> g_lc_ready{false};
-
-// IMU globals
-static sensors::calibration::IMUHistoryBuffer g_imu_history;
-static sensors::calibration::IMUCalibration g_imu_calib(g_imu_history);
-static sensors::IMUPreintegrator g_imu_preintegrator(g_imu_calib);
-static core::Vector4d g_latest_quat_imu = core::quat_identity();
-static std::atomic<bool> g_imu_ready{false};
+static std::mutex g_lc_cv_mutex;
+static std::condition_variable g_lc_cv;
 
 // motor encoder odometry globals
 static core::Vector3d g_latest_translation_odom = {0.0, 0.0, 0.0};
@@ -75,7 +81,7 @@ enum class PoseSource{
 };
 // IMU preintegration drifts over time, so the shared autonomy/map pose should
 // not treat it as a drop-in orientation estimate.
-static constexpr PoseSource pose_source = PoseSource::wheel_odom;
+static constexpr PoseSource pose_source = PoseSource::IMU;
 static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
 static constexpr int32_t kInitialSpinSegments = 4;
@@ -97,7 +103,7 @@ static constexpr bool kEnableVerboseAutonomyLogs = false;
 static constexpr bool kEnablePlannerDemoGoal = false;
 static constexpr int kPlannerDemoGoalPixelX = 160;
 static constexpr int kPlannerDemoGoalPixelY = 128;
-
+}; //namespace
 
 int main(){
     std::mutex m_imu;
@@ -119,18 +125,45 @@ int main(){
         planning::bridge::clear_goal();
     }
 
+    std::thread autonomy_thread([](){
+        constexpr int kAutonomyFSMSleepMs = 100;
+
+        // the main high level thread
+        while(!g_imu_ready.load(std::memory_order_acquire) ||
+              !g_lc_ready.load(std::memory_order_acquire)
+        ){
+            std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
+        }
+        if (pose_source == PoseSource::wheel_odom || pose_source == PoseSource::fused){
+            while(!g_wheel_odom_ready.load(std::memory_order_acquire)){
+                std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
+            }
+        }
+        wasm_log_line("SENSOR_INIT -> AUTONOMY_INIT");
+        g_state.store(RobotState::AUTONOMY_INIT, std::memory_order_release);
+        while(!g_first_map_update_done.load(std::memory_order_acquire) ||
+              !g_initial_spin_done.load(std::memory_order_acquire)){
+            std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
+        }
+        wasm_log_line("AUTONOMY_INIT -> AUTONOMY_ENGAGED");
+        g_state.store(RobotState::AUTONOMY_ENGAGED, std::memory_order_release);
+    });
+
     std::thread imu_thread([&m_imu, &m_pose](){
         double g_last_logged_imu_timestamp = -1.0;
         double g_last_calib_timestamp = -1.0;
 
+        // initial calibration for gyro and accelerometer biases
         g_imu_calib.init_biases();
         g_imu_preintegrator.reset();
-        g_imu_preintegrator.init_from_calibration();
+        g_imu_preintegrator.update_bias();
         g_last_calib_timestamp = g_imu_calib.last_calibrated;
         g_imu_ready.store(true, std::memory_order_release);
+        wasm_log_line("IMU ready");
+
         static sensors::IMUData imu_copy;
         while(true){
-            std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(sensors::IMUIntervalMs)));
+            std::this_thread::sleep_for(std::chrono::microseconds(sensors::IMUIntervalMicrosecond));
             {
                 std::lock_guard<std::mutex> lk(m_imu);
                 read_imu(&g_imu_calib.new_write_slot());
@@ -138,7 +171,7 @@ int main(){
                 g_imu_calib.recalibrate(); // if possible, update biases
                 if (g_imu_calib.last_calibrated > g_last_calib_timestamp) {
                     g_last_calib_timestamp = g_imu_calib.last_calibrated;
-                    g_imu_preintegrator.init_from_calibration();
+                    g_imu_preintegrator.update_bias();
                 }
                 imu_copy = g_imu_calib.curr_slot();
             }
@@ -153,7 +186,6 @@ int main(){
                 }
                 rerun_log_pose(&pose_copy);
             }
-            // log_imu(m_imu, imu_copy, g_last_logged_imu_timestamp);
         }
     });
     std::thread lidar_camera_thread([&m_lc](){
@@ -185,6 +217,7 @@ int main(){
                         g_lc_ready.store(true, std::memory_order_release);
                     }
                     g_lc_ready_idx.store(write_idx, std::memory_order_release);
+                    g_lc_cv.notify_one();
                 }
                 write_idx = 1 - write_idx;
             }
@@ -202,10 +235,10 @@ int main(){
       double map_timestamp = -1;
       auto perf_window_start = Clock::now();
       int perf_frames_with_points = 0;
-      int perf_rerun_emits = 0;
+    //   int perf_rerun_emits = 0;
       int perf_map_updates = 0;
-      double perf_rerun_build_ms_sum = 0.0;
-      double perf_rerun_log_ms_sum = 0.0;
+    //   double perf_rerun_build_ms_sum = 0.0;
+    //   double perf_rerun_log_ms_sum = 0.0;
       double perf_map_update_ms_sum = 0.0;
 
       while (g_state != RobotState::AUTONOMY_ENGAGED && g_state != RobotState::AUTONOMY_INIT) {
@@ -220,9 +253,13 @@ int main(){
             body_to_world.translation = g_pose.translation;
         }
 
-        const int ready_idx = g_lc_ready_idx.exchange(-1, std::memory_order_acq_rel);
+        int ready_idx = -1;
+        {
+            std::unique_lock<std::mutex> lk(g_lc_cv_mutex);
+            g_lc_cv.wait(lk, []{return g_lc_ready_idx.load(std::memory_order_acquire) >= 0;});
+            ready_idx = g_lc_ready_idx.exchange(-1, std::memory_order_acq_rel);
+        }
         if (ready_idx < 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
         g_lc_in_use_idx.store(ready_idx, std::memory_order_release);
@@ -233,10 +270,10 @@ int main(){
         }
         perf_frames_with_points += 1;
 
-        const auto rerun_build_start = Clock::now();
-        mapping::build_rerun_frame_from_lidar(lc_data, g_rerun_lc, body_to_world);
-        const auto rerun_build_end = Clock::now();
-        perf_rerun_build_ms_sum += elapsed_ms(rerun_build_start, rerun_build_end);
+        // const auto rerun_build_start = Clock::now();
+        // mapping::build_rerun_frame_from_lidar(lc_data, g_rerun_lc, body_to_world);
+        // const auto rerun_build_end = Clock::now();
+        // perf_rerun_build_ms_sum += elapsed_ms(rerun_build_start, rerun_build_end);
         map_timestamp = lc_data.timestamp;
         const bool do_map_update = (map_timestamp - g_last_map_timestamp >= mapping::mapMinInterval);
         if (!do_map_update) {
@@ -264,53 +301,60 @@ int main(){
             g_map_frame.height);
         g_lc_in_use_idx.store(-1, std::memory_order_release);
 
-        if (g_rerun_lc.points_size > 0) {
-            const auto rerun_log_start = Clock::now();
-            rerun_log_lidar_frame(&g_rerun_lc);
-            const auto rerun_log_end = Clock::now();
-            perf_rerun_log_ms_sum += elapsed_ms(rerun_log_start, rerun_log_end);
-            perf_rerun_emits += 1;
-        }
+        // if (g_rerun_lc.points_size > 0) {
+        //     const auto rerun_log_start = Clock::now();
+        //     rerun_log_lidar_frame(&g_rerun_lc);
+        //     const auto rerun_log_end = Clock::now();
+        //     perf_rerun_log_ms_sum += elapsed_ms(rerun_log_start, rerun_log_end);
+        //     perf_rerun_emits += 1;
+        // }
 
         const auto now = Clock::now();
         const double window_sec = std::chrono::duration<double>(now - perf_window_start).count();
         if (window_sec >= 2.0) {
             const double frames_rate = static_cast<double>(perf_frames_with_points) / std::max(1e-6, window_sec);
-            const double rerun_rate = static_cast<double>(perf_rerun_emits) / std::max(1e-6, window_sec);
+            // const double rerun_rate = static_cast<double>(perf_rerun_emits) / std::max(1e-6, window_sec);
             const double map_rate = static_cast<double>(perf_map_updates) / std::max(1e-6, window_sec);
 
             const int frames_denom = std::max(1, perf_frames_with_points);
-            const int rerun_denom = std::max(1, perf_rerun_emits);
+            // const int rerun_denom = std::max(1, perf_rerun_emits);
             const int map_denom = std::max(1, perf_map_updates);
-            const double rerun_build_avg_ms = perf_rerun_build_ms_sum / frames_denom;
-            const double rerun_log_avg_ms = perf_rerun_log_ms_sum / rerun_denom;
+            // const double rerun_build_avg_ms = perf_rerun_build_ms_sum / frames_denom;
+            // const double rerun_log_avg_ms = perf_rerun_log_ms_sum / rerun_denom;
             const double map_update_avg_ms = perf_map_update_ms_sum / map_denom;
 
             std::cout << "[mapping][thread] "
                       << "frames=" << frames_rate << "/s"
-                      << " rerun_emit=" << rerun_rate << "/s"
+                    //   << " rerun_emit=" << rerun_rate << "/s"
                       << " map_update=" << map_rate << "/s"
-                      << " rerun_build_ms=" << rerun_build_avg_ms
-                      << " rerun_log_ms=" << rerun_log_avg_ms
+                    //   << " rerun_build_ms=" << rerun_build_avg_ms
+                    //   << " rerun_log_ms=" << rerun_log_avg_ms
                       << " map_update_ms=" << map_update_avg_ms
                       << std::endl;
 
             perf_window_start = now;
             perf_frames_with_points = 0;
-            perf_rerun_emits = 0;
+            // perf_rerun_emits = 0;
             perf_map_updates = 0;
-            perf_rerun_build_ms_sum = 0.0;
-            perf_rerun_log_ms_sum = 0.0;
+            // perf_rerun_build_ms_sum = 0.0;
+            // perf_rerun_log_ms_sum = 0.0;
             perf_map_update_ms_sum = 0.0;
         }
 
       }
     });
 
+
+    std::thread telemetry_thread([](){
+        while(true){
+            // redraw map with overlay
+        }
+    });
+
     std::thread control_thread([&m_pose, &motors](){
         // responsible for reading encoder values and sending motor commands
         using Clock = std::chrono::steady_clock;
-        sensors::WheelOdometryData odom = {};
+        sensors::WheelOdometryData odom{};
         controls::PathFollower path_follower;
         std::vector<core::Vector3d> planned_path_world;
         uint64_t planned_path_revision = 0;
@@ -347,6 +391,7 @@ int main(){
                 0.0, 0.0, std::sin(yaw_odom * 0.5), std::cos(yaw_odom * 0.5)};
 
             sensors::PoseLog pose_copy = {};
+            if(pose_source == PoseSource::wheel_odom)
             {
                 std::lock_guard<std::mutex> lk(m_pose);
                 g_pose.timestamp = odom.timestamp;
@@ -357,11 +402,8 @@ int main(){
             if (kEnableWheelPoseLogging &&
                 (last_wheel_pose_log_timestamp < 0.0 ||
                  (odom.timestamp - last_wheel_pose_log_timestamp) >= kWheelPoseLogIntervalSec)) {
-                rerun_log_pose_wheel(&pose_copy);
+                // rerun_log_pose_wheel(&pose_copy);
                 last_wheel_pose_log_timestamp = odom.timestamp;
-            }
-            if (pose_source != PoseSource::wheel_odom) {
-                rerun_log_pose(&pose_copy);
             }
 
             const RobotState state = g_state.load(std::memory_order_acquire);
@@ -499,23 +541,6 @@ int main(){
     });
 
 
-    std::thread autonomy_thread([](){
-        // the main high level thread
-        while(!g_imu_ready.load(std::memory_order_acquire) ||
-              !g_lc_ready.load(std::memory_order_acquire)
-              || !g_wheel_odom_ready.load(std::memory_order_acquire)
-        ){
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-        wasm_log_line("SENSOR_INIT -> AUTONOMY_INIT");
-        g_state.store(RobotState::AUTONOMY_INIT, std::memory_order_release);
-        while(!g_first_map_update_done.load(std::memory_order_acquire) ||
-              !g_initial_spin_done.load(std::memory_order_acquire)){
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-        wasm_log_line("AUTONOMY_INIT -> AUTONOMY_ENGAGED");
-        g_state.store(RobotState::AUTONOMY_ENGAGED, std::memory_order_release);
-    });
 
     // TODO: remove once autonomy control loop is closed
     // controls::drive_forward_demo();
@@ -524,6 +549,6 @@ int main(){
     imu_thread.join();
     lidar_camera_thread.join();
     mapping_thread.join();
+    telemetry_thread.join();
     control_thread.join();
-    autonomy_thread.join();
 }

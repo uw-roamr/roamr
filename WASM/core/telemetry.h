@@ -29,6 +29,5 @@ WASM_IMPORT("host", "wasm_log_text") void wasm_log_text(const WasmTextLog* data)
 
 void log_config(const sensors::CameraConfig& cam_config);
 
-void log_imu(std::mutex& m_imu, const sensors::IMUData& imu_data, double& last_imu_timestamp);
 void wasm_log_line(const char* text);
 void wasm_log_line(const std::string& text);

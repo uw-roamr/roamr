@@ -17,5 +17,5 @@ namespace sensors{
     WASM_IMPORT("host", "read_imu") void read_imu(IMUData* data);
 
     constexpr double IMURefreshHz = 100.0;
-    constexpr int IMUIntervalMs = static_cast<int>(1000.0 / IMURefreshHz) / 2.0;
+    constexpr int IMUIntervalMicrosecond = static_cast<int>(1000000.0 / (IMURefreshHz * 2.0 + 0.1));
 }; //namespace sensors
