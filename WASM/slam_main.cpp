@@ -38,6 +38,22 @@ static std::atomic<bool> g_imu_ready{false};
 // motor encoder odometry globals
 static core::Vector3d g_latest_translation_odom = {0.0, 0.0, 0.0};
 static core::Vector4d g_latest_quat_odom = core::quat_identity();
+static std::mutex g_latest_wheel_odom_mutex;
+static sensors::WheelOdometryData g_latest_wheel_odom = {0.0, -1, 0, 0, 0};
+
+static bool read_latest_wheel_odom_snapshot(sensors::WheelOdometryData* out) {
+    if (!out) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lk(g_latest_wheel_odom_mutex);
+    if (g_latest_wheel_odom.seq < 0 ||
+        g_latest_wheel_odom.timestamp <= 0.0 ||
+        g_latest_wheel_odom.sample_period_ms <= 0) {
+        return false;
+    }
+    *out = g_latest_wheel_odom;
+    return true;
+}
 
 static sensors::PoseLog g_pose;
 enum class PoseSource{
@@ -66,6 +82,7 @@ int main(){
     std::mutex m_pose;
 
     controls::MotorController motors;
+    motors.set_odom_reader(read_latest_wheel_odom_snapshot);
     motors.stop(); // ensure motors start from a safe state
 
     init_camera(&g_cam_config);
@@ -272,6 +289,11 @@ int main(){
                 continue;
             }
 
+            {
+                std::lock_guard<std::mutex> lk(g_latest_wheel_odom_mutex);
+                g_latest_wheel_odom = odom;
+            }
+
             sensors::integrate_wheel_odometry(odom, &x, &y, &yaw);
             g_latest_translation_odom = {x, y, 0.0};
             g_latest_quat_odom = {0.0, 0.0, std::sin(yaw * 0.5), std::cos(yaw * 0.5)};
@@ -332,7 +354,7 @@ int main(){
 
     // TODO: remove once autonomy control loop is closed
     // controls::drive_forward_demo();
-    // controls::drive_twist_demo();
+    controls::drive_twist_demo(motors);
 
     imu_thread.join();
     lidar_camera_thread.join();
