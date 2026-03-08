@@ -11,6 +11,7 @@ typealias CFunction = @convention(c) (wasm_exec_env_t?, UnsafeMutableRawPointer?
 
 class WasmManager {
     static let shared = WasmManager()
+    private static let maxWasmThreads: UInt32 = 8
 
     private var isInitialized = false
     private var globalNativeSymbolPtr: UnsafeMutablePointer<NativeSymbol>?
@@ -40,6 +41,8 @@ class WasmManager {
             print("Fatal Error: WAMR runtime initialization failed.")
             return false
         }
+        wasm_runtime_set_max_thread_num(Self.maxWasmThreads)
+        print("Configured WAMR max thread count: \(Self.maxWasmThreads)")
 
         // Prepare Native Symbols
         struct NativeFunction {
