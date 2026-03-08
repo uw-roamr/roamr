@@ -183,7 +183,7 @@ int main(){
                     }
                     rerun_log_pose(&pose_copy);
                 }
-                wasm_log_line("imu: " + std::to_string(imu_copy.timestamp) + ", " + std::to_string(imu_copy.gyro_z));
+                // wasm_log_line("imu: " + std::to_string(imu_copy.timestamp) + ", " + std::to_string(imu_copy.gyro_z));
             }
             g_imu_preintegrator.integrate(imu_copy);
         }
@@ -222,6 +222,7 @@ int main(){
                 }
                 g_lc_ready_idx.store(write_idx, std::memory_order_release);
                 g_lc_cv.notify_one();
+                // wasm_log_line("lidar: " + std::to_string(g_lc_buffers[write_idx].timestamp) + ", " + std::to_string(g_lc_buffers[write_idx].points_size));
             }
 
             write_idx = 1 - write_idx;
@@ -231,6 +232,7 @@ int main(){
 
     std::thread mapping_thread([&m_lc, &m_pose](){
       using Clock = std::chrono::steady_clock;
+      constexpr int kUnusedIdx = -1;
 
       double last_map_timestamp = -1.0;
       double map_timestamp = -1;
@@ -238,20 +240,16 @@ int main(){
       while (g_state != RobotState::AUTONOMY_ENGAGED && g_state != RobotState::AUTONOMY_INIT) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
+
+      mapping::initialize_map();
       while(true){
 
-        core::PoseSE3d body_to_world;
-        {
-            std::lock_guard<std::mutex> lk(m_pose);
-            body_to_world.quaternion = g_pose.quaternion;
-            body_to_world.translation = g_pose.translation;
-        }
-
-        int ready_idx = -1;
+        // get a valid lidar-camera frame, then get the most recent pose
+        int ready_idx = kUnusedIdx;
         {
             std::unique_lock<std::mutex> lk(g_lc_cv_mutex);
             g_lc_cv.wait(lk, []{return g_lc_ready_idx.load(std::memory_order_acquire) >= 0;});
-            ready_idx = g_lc_ready_idx.exchange(-1, std::memory_order_acq_rel);
+            ready_idx = g_lc_ready_idx.exchange(kUnusedIdx, std::memory_order_acq_rel);
         }
         if (ready_idx < 0) {
             continue;
@@ -259,25 +257,30 @@ int main(){
         g_lc_in_use_idx.store(ready_idx, std::memory_order_release);
         const sensors::LidarCameraData& lc_data = g_lc_buffers[ready_idx];
         if (lc_data.points_size <= 0) {
-            g_lc_in_use_idx.store(-1, std::memory_order_release);
+            g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
             continue;
         }
+        core::PoseSE3d body_to_world;
+        double pose_timestamp;
+        {
+            std::lock_guard<std::mutex> lk(m_pose);
+            body_to_world.quaternion = g_pose.quaternion;
+            body_to_world.translation = g_pose.translation;
+            pose_timestamp = g_pose.timestamp;
+        }
 
-        // const auto rerun_build_start = Clock::now();
-        mapping::build_rerun_frame_from_lidar(lc_data, g_rerun_lc, body_to_world);
-        // const auto rerun_build_end = Clock::now();
-        map_timestamp = lc_data.timestamp;
-        const bool do_map_update = (map_timestamp - last_map_timestamp >= mapping::mapMinInterval);
+        map_timestamp = std::max(lc_data.timestamp, pose_timestamp);
+        const bool do_map_update = (map_timestamp - last_map_timestamp >= mapping::mapMinIntervalSeconds);
         if (!do_map_update) {
-            g_lc_in_use_idx.store(-1, std::memory_order_release);
+            g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
             continue;
         }
         last_map_timestamp = map_timestamp;
 
+        // project all lc_data to map
         mapping::update_map_from_lidar(
             lc_data,
             g_map_frame,
-            g_map_initialized,
             body_to_world
         );
         if (!g_first_map_update_done.load(std::memory_order_relaxed)) {
@@ -289,9 +292,10 @@ int main(){
             body_to_world,
             g_map_frame.width,
             g_map_frame.height);
-        g_lc_in_use_idx.store(-1, std::memory_order_release);
+        g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
 
         // if (g_rerun_lc.points_size > 0) {
+        //     mapping::build_rerun_frame_from_lidar(lc_data, g_rerun_lc, body_to_world);
         //     const auto rerun_log_start = Clock::now();
         //     rerun_log_lidar_frame(&g_rerun_lc);
         //     const auto rerun_log_end = Clock::now();
@@ -309,8 +313,8 @@ int main(){
         // enqueues a render request, then draws the occupancy grid and ships
         // the RGBA frame to the host — completely decoupled from scan ingestion.
         while(true){
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            mapping::visualization::wait_and_render(g_map_frame);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            // mapping::visualization::wait_and_render(g_map_frame);
         }
     });
 

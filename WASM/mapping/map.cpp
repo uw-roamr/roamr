@@ -6,8 +6,7 @@
 #include <string.h>
 #include "map_api.h"
 
-
-	namespace mapping{
+namespace mapping{
 	// Legacy single-pose API kept for convenience/testing.
 	void log_pose_f32(float x, float y, float theta) {
 		(void)x; (void)y; (void)theta;
