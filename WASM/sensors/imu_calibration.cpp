@@ -51,7 +51,9 @@ namespace sensors::calibration{
         }
 
         last_calibrated = last_imu_timestamp;
-        wasm_log_line("recalibrated IMU");
+        if (!calibrated) {
+            wasm_log_line("calibrated IMU");
+        }
     }
 
     void IMUCalibration::init_biases(){

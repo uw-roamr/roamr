@@ -59,7 +59,7 @@ static constexpr PoseSource pose_source = PoseSource::wheel_odom;
 static constexpr bool kEnableVisibleMotorTurnDemo = true;
 static constexpr int32_t kVisibleTurnLeftPercent = -18;
 static constexpr int32_t kVisibleTurnRightPercent = 18;
-static constexpr int32_t kVisibleTurnDurationMs = 1200;
+static constexpr int32_t kVisibleTurnDurationMs = 2600;
 
 // Tiny planner demo: set a fixed map-view pixel goal at startup.
 // Toggle off when using host-provided goal clicks.
