@@ -2,7 +2,7 @@
 
 #include <array>
 
-#include "core/coordinate_frames.h"
+#include "core/pose/se3.h"
 #include "sensors/calibration.h"
 #include "sensors/imu.h"
 

@@ -1,5 +1,5 @@
 #pragma once
-#include "coordinate_frames.h"
+#include "core/pose/coordinate_frames.h"
 #include "wasm_utils.h"
 #include <stddef.h> // size_t
 #include <stdint.h> // uint8_t

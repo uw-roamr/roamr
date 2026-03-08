@@ -1,5 +1,5 @@
 #pragma once
-#include "core/coordinate_frames.h"
+#include "core/pose/coordinate_frames.h"
 #include "core/math_utils.h"
 #include "core/ring_buffer.h"
 #include "sensors/imu.h"
@@ -41,14 +41,14 @@ namespace sensors::calibration{
         IMUData& curr_slot() noexcept{
             return history_.back();
         }
-        
+
         IMUData& new_write_slot() noexcept{
             return history_.push_slot();
         }
         void update();
         void recalibrate();
         void init_biases();
-        
+
     private:
         void increment_sums(IMUData& imu_data) noexcept;
         void reset_sums() noexcept;

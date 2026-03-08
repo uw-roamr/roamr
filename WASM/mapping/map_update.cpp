@@ -223,18 +223,8 @@ namespace mapping {
       }
     }
 
-    // Set frame metadata synchronously so update_plan_overlay has valid
-    // dimensions immediately. The telemetry thread performs the actual
-    // draw_map + rerun_log_map_frame asynchronously after being notified.
-    map_frame.timestamp = lc_data.timestamp;
-    map_frame.width     = mapWidth;
-    map_frame.height    = mapHeight;
-    map_frame.channels  = 4;
-
-    visualization::request_render({
+    visualization::render_map_frame(
         g_pose_history_count, used_points, mapWidth, mapHeight,
-        lc_data.timestamp});
-
-
+        lc_data.timestamp, map_frame);
   }
 }//namespace mapping

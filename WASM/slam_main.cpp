@@ -312,15 +312,15 @@ int main(){
     });
 
 
-    std::thread telemetry_thread([](){
-        // Dedicated visualization thread: blocks until the mapping thread
-        // enqueues a render request, then draws the occupancy grid and ships
-        // the RGBA frame to the host — completely decoupled from scan ingestion.
-        while(true){
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            // mapping::visualization::wait_and_render(g_map_frame);
-        }
-    });
+    // std::thread telemetry_thread([](){
+    //     // Dedicated visualization thread: blocks until the mapping thread
+    //     // enqueues a render request, then draws the occupancy grid and ships
+    //     // the RGBA frame to the host — completely decoupled from scan ingestion.
+    //     while(true){
+    //         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    //         // mapping::visualization::wait_and_render(g_map_frame);
+    //     }
+    // });
 
     // std::thread control_thread([&m_pose, &motors](){
     //     // responsible for reading encoder values and sending motor commands
@@ -520,6 +520,6 @@ int main(){
     imu_thread.join();
     lidar_camera_thread.join();
     mapping_thread.join();
-    telemetry_thread.join();
+    // telemetry_thread.join();
     // control_thread.join();
 }

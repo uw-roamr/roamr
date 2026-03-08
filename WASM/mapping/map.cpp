@@ -7,10 +7,6 @@
 #include "map_api.h"
 
 namespace mapping{
-	// Legacy single-pose API kept for convenience/testing.
-	void log_pose_f32(float x, float y, float theta) {
-		(void)x; (void)y; (void)theta;
-	}
 
 	// Pose storage
 	static const int32_t MAX_POSES = 4096;
@@ -56,12 +52,7 @@ namespace mapping{
 
 	// 0 = points are in robot/laser frame (default), 1 = points already in world/map frame.
 	static int32_t POINTS_IN_WORLD = 0;
-	static int32_t PIXEL_TO_GX[MAX_W];
-	static int32_t PIXEL_TO_GY[MAX_H];
-	static uint8_t PIXEL_X_VALID[MAX_W];
-	static uint8_t PIXEL_Y_VALID[MAX_H];
-	static int32_t PIXEL_LUT_W = -1;
-	static int32_t PIXEL_LUT_H = -1;
+
 
 	void reset_poses() {
 		memset(POSES, 0, sizeof(POSES));
@@ -278,29 +269,7 @@ namespace mapping{
 		IMAGE[o + 3] = a;
 	}
 
-	static void draw_line_pixel(int32_t x0, int32_t y0, int32_t x1, int32_t y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-		int dx = (x1 > x0) ? (x1 - x0) : (x0 - x1);
-		int sx = (x0 < x1) ? 1 : -1;
-		int dy = (y1 > y0) ? (y0 - y1) : (y1 - y0); // negative
-		int sy = (y0 < y1) ? 1 : -1;
-		int err = dx + dy;
 
-		int x = x0;
-		int y = y0;
-		while (1) {
-			set_pixel(x, y, r, g, b, a);
-			if (x == x1 && y == y1) break;
-			int e2 = 2 * err;
-			if (e2 >= dy) { // e2 >= dy
-				err += dy;
-				x += sx;
-			}
-			if (e2 <= dx) { // e2 <= dx
-				err += dx;
-				y += sy;
-			}
-		}
-	}
 
 	static inline int32_t grid_to_pixel(
 		int32_t gx,
@@ -322,61 +291,11 @@ namespace mapping{
 		return 1;
 	}
 
-	static void rebuild_pixel_grid_lookup(float scale, float off_x, float off_y) {
-		for (int32_t x = 0; x < CUR_W; ++x) {
-			float mx = ((float)x - off_x) / scale;
-			if (mx < 0.0f || mx >= (float)MAP_SIZE_X) {
-				PIXEL_X_VALID[x] = 0;
-				PIXEL_TO_GX[x] = 0;
-				continue;
-			}
-			PIXEL_X_VALID[x] = 1;
-			PIXEL_TO_GX[x] = (int32_t)mx;
-		}
-		for (int32_t y = 0; y < CUR_H; ++y) {
-			float my = ((float)y - off_y) / scale;
-			if (my < 0.0f || my >= (float)MAP_SIZE_Y) {
-				PIXEL_Y_VALID[y] = 0;
-				PIXEL_TO_GY[y] = 0;
-				continue;
-			}
-			PIXEL_Y_VALID[y] = 1;
-			PIXEL_TO_GY[y] = MAP_SIZE_Y - 1 - (int32_t)my;
-		}
-		PIXEL_LUT_W = CUR_W;
-		PIXEL_LUT_H = CUR_H;
-	}
 
-	static void draw_planned_path_overlay(float scale, float off_x, float off_y) {
-		if (PLANNED_PATH_COUNT <= 1) return;
-		for (int32_t i = 1; i < PLANNED_PATH_COUNT; ++i) {
-			const int32_t base0 = (i - 1) * 2;
-			const int32_t base1 = i * 2;
-			const int32_t gx0 = PLANNED_PATH[base0 + 0];
-			const int32_t gy0 = PLANNED_PATH[base0 + 1];
-			const int32_t gx1 = PLANNED_PATH[base1 + 0];
-			const int32_t gy1 = PLANNED_PATH[base1 + 1];
-			int32_t px0 = 0, py0 = 0, px1 = 0, py1 = 0;
-			if (!grid_to_pixel(gx0, gy0, scale, off_x, off_y, &px0, &py0) ||
-				!grid_to_pixel(gx1, gy1, scale, off_x, off_y, &px1, &py1)) {
-				continue;
-			}
-			draw_line_pixel(px0, py0, px1, py1, 0, 120, 255, 255);
-		}
-	}
 
-	static void draw_goal_marker(float scale, float off_x, float off_y) {
-		if (!PLANNED_GOAL_ENABLED) return;
-		int32_t px = 0;
-		int32_t py = 0;
-		if (!grid_to_pixel(PLANNED_GOAL_X, PLANNED_GOAL_Y, scale, off_x, off_y, &px, &py)) {
-			return;
-		}
-		for (int32_t d = -2; d <= 2; ++d) {
-			set_pixel(px + d, py, 0, 120, 255, 255);
-			set_pixel(px, py + d, 0, 120, 255, 255);
-		}
-	}
+
+
+
 
 	// Render occupancy map to IMAGE, optionally integrating the current scan.
 	void draw_map(int32_t poseCount, int32_t pointCount, int32_t width, int32_t height) {
@@ -384,77 +303,42 @@ namespace mapping{
 		if (poseCount > MAX_POSES) poseCount = MAX_POSES;
 		if (pointCount < 0) pointCount = 0;
 		if (pointCount > MAX_POINTS) pointCount = MAX_POINTS;
-		if (width <= 0) width = 256;
+		if (width  <= 0) width  = 256;
 		if (height <= 0) height = 256;
-		if (width > MAX_W) width = MAX_W;
+		if (width  > MAX_W) width  = MAX_W;
 		if (height > MAX_H) height = MAX_H;
 		CUR_W = width;
 		CUR_H = height;
 
-		int32_t used_points = pointCount;
-		if (used_points > POINTS_COUNT) used_points = POINTS_COUNT;
-
-		double pose_x = 0.0;
-		double pose_y = 0.0;
-		double pose_theta = 0.0;
-		if (poseCount > 0) {
-			int32_t base = (poseCount - 1) * 3;
-			pose_x = POSES[base + 0];
-			pose_y = POSES[base + 1];
-			pose_theta = POSES[base + 2];
+		// Integrate the latest scan into the occupancy grid.
+		const int32_t used_points = (pointCount < POINTS_COUNT) ? pointCount : POINTS_COUNT;
+		if (used_points > 0 && (POINTS_IN_WORLD || poseCount > 0)) {
+			const int32_t base = (poseCount - 1) * 3;
+			integrate_scan(POSES[base], POSES[base + 1], POSES[base + 2], used_points, POINTS_IN_WORLD);
 		}
 
-		if (used_points > 0) {
-			if (POINTS_IN_WORLD || poseCount > 0) {
-				integrate_scan(pose_x, pose_y, pose_theta, used_points, POINTS_IN_WORLD);
-			}
-		}
+		// Scale to fit the map in the image (preserving aspect ratio).
+		const float scale_x = (float)CUR_W / (float)MAP_SIZE_X;
+		const float scale_y = (float)CUR_H / (float)MAP_SIZE_Y;
+		const float scale   = (scale_x < scale_y) ? scale_x : scale_y;
+		const float off_x   = ((float)CUR_W - (float)MAP_SIZE_X * scale) * 0.5f;
+		const float off_y   = ((float)CUR_H - (float)MAP_SIZE_Y * scale) * 0.5f;
 
-		const uint8_t c_unknown = 64;
-		const uint8_t c_free = 0;
-		const uint8_t c_occ = 255;
+		// Render each pixel: unknown=gray(128), free=black(0), wall=white(255).
+		for (int32_t py = 0; py < CUR_H; ++py) {
+			for (int32_t px = 0; px < CUR_W; ++px) {
+				const int32_t gx = (int32_t)(((float)px - off_x) / scale);
+				const int32_t gy = MAP_SIZE_Y - 1 - (int32_t)(((float)py - off_y) / scale);
 
-		// Fill background as unknown.
-		for (int32_t y = 0; y < CUR_H; ++y) {
-			for (int32_t x = 0; x < CUR_W; ++x) {
-				int32_t o = (y * CUR_W + x) * 4;
-				IMAGE[o + 0] = c_unknown;
-				IMAGE[o + 1] = c_unknown;
-				IMAGE[o + 2] = c_unknown;
-				IMAGE[o + 3] = 255;
-			}
-		}
-
-		// Compute map scale to fit while preserving aspect ratio.
-		float scale_x = (float)CUR_W / (float)MAP_SIZE_X;
-		float scale_y = (float)CUR_H / (float)MAP_SIZE_Y;
-		float scale = (scale_x < scale_y) ? scale_x : scale_y;
-		if (scale <= 0.0f) scale = 1.0f;
-		float map_w = (float)MAP_SIZE_X * scale;
-		float map_h = (float)MAP_SIZE_Y * scale;
-		float off_x = ((float)CUR_W - map_w) * 0.5f;
-		float off_y = ((float)CUR_H - map_h) * 0.5f;
-		if (PIXEL_LUT_W != CUR_W || PIXEL_LUT_H != CUR_H) {
-			rebuild_pixel_grid_lookup(scale, off_x, off_y);
-		}
-
-		// Render occupancy grid into the image.
-		for (int32_t y = 0; y < CUR_H; ++y) {
-			if (!PIXEL_Y_VALID[y]) continue;
-			int32_t gy = PIXEL_TO_GY[y];
-			for (int32_t x = 0; x < CUR_W; ++x) {
-				if (!PIXEL_X_VALID[x]) continue;
-				int32_t gx = PIXEL_TO_GX[x];
-				int32_t idx = grid_index(gx, gy);
-				uint8_t v = c_unknown;
-				if (!VISITED[idx]) {
-					v = c_unknown;
-				} else if (CONFIRMED[idx]) {
-					v = c_occ;
-				} else {
-					v = c_free;
+				uint8_t v = 128; // unknown
+				if (gx >= 0 && gx < MAP_SIZE_X && gy >= 0 && gy < MAP_SIZE_Y) {
+					const int32_t idx = grid_index(gx, gy);
+					if (VISITED[idx]) {
+						v = CONFIRMED[idx] ? 255 : 0; // wall=white, free=black
+					}
 				}
-				int32_t o = (y * CUR_W + x) * 4;
+
+				const int32_t o = (py * CUR_W + px) * 4;
 				IMAGE[o + 0] = v;
 				IMAGE[o + 1] = v;
 				IMAGE[o + 2] = v;
@@ -462,114 +346,18 @@ namespace mapping{
 			}
 		}
 
-		// Overlay points (red) for debugging.
-		if (used_points > 0 && (POINTS_IN_WORLD || poseCount > 0)) {
-			const double c = cos(pose_theta);
-			const double s = sin(pose_theta);
-			for (int32_t i = 0; i < used_points; ++i) {
-				int32_t base = i * 2;
-				float lx = POINTS[base + 0];
-				float ly = POINTS[base + 1];
-				if (!is_finite(lx) || !is_finite(ly)) continue;
-
-				double wx = lx;
-				double wy = ly;
-				if (!POINTS_IN_WORLD) {
-					wx = pose_x + c * lx - s * ly;
-					wy = pose_y + s * lx + c * ly;
-				}
-
-				int32_t gx = 0;
-				int32_t gy = 0;
-				if (!world_to_grid(wx, wy, &gx, &gy)) continue;
-				int32_t px = 0;
-				int32_t py = 0;
-				if (!grid_to_pixel(gx, gy, scale, off_x, off_y, &px, &py)) continue;
-				set_pixel(px, py, 255, 0, 255, 255);
-			}
-		}
-
-		// Overlay wheel-odometry path as a purple polyline.
-		if (poseCount > 1) {
-			for (int32_t i = 1; i < poseCount; ++i) {
-				const int32_t base0 = (i - 1) * 3;
-				const int32_t base1 = i * 3;
-				const double x0_world = POSES[base0 + 0];
-				const double y0_world = POSES[base0 + 1];
-				const double x1_world = POSES[base1 + 0];
-				const double y1_world = POSES[base1 + 1];
-				int32_t gx0 = 0, gy0 = 0, gx1 = 0, gy1 = 0;
-				if (!world_to_grid(x0_world, y0_world, &gx0, &gy0) ||
-					!world_to_grid(x1_world, y1_world, &gx1, &gy1)) {
-					continue;
-				}
-				int32_t px0 = 0, py0 = 0, px1 = 0, py1 = 0;
-				if (!grid_to_pixel(gx0, gy0, scale, off_x, off_y, &px0, &py0) ||
-					!grid_to_pixel(gx1, gy1, scale, off_x, off_y, &px1, &py1)) {
-					continue;
-				}
-				draw_line_pixel(px0, py0, px1, py1, 128, 0, 128, 255);
-			}
-		}
-
-		draw_planned_path_overlay(scale, off_x, off_y);
-		draw_goal_marker(scale, off_x, off_y);
-
-		// Overlay only the latest pose as a 3x3 white dot.
+		// Draw the most recent global pose as a 3×3 green dot.
 		if (poseCount > 0) {
-			int32_t base = (poseCount - 1) * 3;
-			const double px_world = POSES[base + 0];
-			const double py_world = POSES[base + 1];
-			int32_t gx = 0;
-			int32_t gy = 0;
-			if (world_to_grid(px_world, py_world, &gx, &gy)) {
-				int32_t px = 0;
-				int32_t py = 0;
-				if (grid_to_pixel(gx, gy, scale, off_x, off_y, &px, &py)) {
-					for (int dy = -1; dy <= 1; ++dy) {
-						for (int dx = -1; dx <= 1; ++dx) {
-							int32_t x = clampi(px + dx, 0, CUR_W - 1);
-							int32_t y = clampi(py + dy, 0, CUR_H - 1);
-							int32_t o = (y * CUR_W + x) * 4;
-							IMAGE[o + 0] = 255;
-							IMAGE[o + 1] = 255;
-							IMAGE[o + 2] = 255;
-							IMAGE[o + 3] = 255;
+			const int32_t base = (poseCount - 1) * 3;
+			int32_t gx = 0, gy = 0;
+			if (world_to_grid(POSES[base], POSES[base + 1], &gx, &gy)) {
+				int32_t ppx = 0, ppy = 0;
+				if (grid_to_pixel(gx, gy, scale, off_x, off_y, &ppx, &ppy)) {
+					for (int32_t dy = -1; dy <= 1; ++dy) {
+						for (int32_t dx = -1; dx <= 1; ++dx) {
+							set_pixel(ppx + dx, ppy + dy, 0, 255, 0, 255);
 						}
 					}
-				}
-			}
-		}
-
-		// Pose axes for the most recent pose: forward=red, left=green.
-		if (poseCount > 0) {
-			const double axis_len_m = 0.5;
-			const int32_t base = (poseCount - 1) * 3;
-			const double px_world = POSES[base + 0];
-			const double py_world = POSES[base + 1];
-			const double theta = POSES[base + 2];
-			const double fx_world = px_world + cos(theta) * axis_len_m;
-			const double fy_world = py_world + sin(theta) * axis_len_m;
-			const double lx_world = px_world - sin(theta) * axis_len_m;
-			const double ly_world = py_world + cos(theta) * axis_len_m;
-
-			int32_t gx0 = 0, gy0 = 0, gfx = 0, gfy = 0;
-			if (world_to_grid(px_world, py_world, &gx0, &gy0) &&
-				world_to_grid(fx_world, fy_world, &gfx, &gfy)) {
-				int32_t px0 = 0, py0 = 0, pfx = 0, pfy = 0;
-				if (grid_to_pixel(gx0, gy0, scale, off_x, off_y, &px0, &py0) &&
-					grid_to_pixel(gfx, gfy, scale, off_x, off_y, &pfx, &pfy)) {
-					draw_line_pixel(px0, py0, pfx, pfy, 255, 0, 0, 255);
-				}
-			}
-
-			int32_t glx = 0, gly = 0;
-			if (world_to_grid(px_world, py_world, &gx0, &gy0) &&
-				world_to_grid(lx_world, ly_world, &glx, &gly)) {
-				int32_t px0 = 0, py0 = 0, plx = 0, ply = 0;
-				if (grid_to_pixel(gx0, gy0, scale, off_x, off_y, &px0, &py0) &&
-					grid_to_pixel(glx, gly, scale, off_x, off_y, &plx, &ply)) {
-					draw_line_pixel(px0, py0, plx, ply, 0, 255, 0, 255);
 				}
 			}
 		}

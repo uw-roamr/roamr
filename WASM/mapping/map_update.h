@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/coordinate_frames.h"
+#include "core/pose/se3.h"
 #include "mapping/map_api.h"
 #include "sensors/lidar_camera.h"
 
