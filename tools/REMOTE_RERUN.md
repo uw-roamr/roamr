@@ -1,3 +1,9 @@
+To run the script and start rerun, use
+
+```sh
+ uv run -U rerun_ws_server.py
+```
+
 # Connecting the app to Rerun when not on the same LAN
 
 The iOS app sends telemetry to `rerun_ws_server.py` over WebSocket. By default you need the phone and the computer on the same network (e.g. a hotspot). These options let you connect over the internet.
