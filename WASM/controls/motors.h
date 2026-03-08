@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <thread>
 #include <chrono>
 
@@ -35,12 +36,32 @@ namespace controls{
         double right_mps;
     };
 
+    struct WheelCommandBandConfig {
+        // Keep nonzero wheel commands in this range.
+        double min_moving_percent = 10.0;
+        double max_moving_percent = 15.0;
+        // If desired wheel speed is below this threshold, command a full stop.
+        double stop_speed_threshold_mps = 0.01;
+        // PI correction is intentionally small; feedforward does most of the work.
+        double max_trim_percent = 3.0;
+        // Maximum wheel speed expected while staying inside moving percent band.
+        double max_wheel_speed_for_band_mps = 0.15;
+    };
+
+    struct TwistCommandCalibrationConfig {
+        // Scales (v, omega) before converting to wheel speed setpoints.
+        // Defaults tuned for uninterrupted odom updates from a single consumer.
+        double linear_scale = 0.25;
+        double angular_scale = 1.1;
+    };
+
     struct WheelSpeedControllerConfig {
-        // Conservative defaults to reduce jerk and oscillation.
-        double kff_percent_per_mps = 60.0;
-        double kp_percent_per_mps = 30.0;
-        double ki_percent_per_mps_s = 10.0;
-        double integral_limit_percent = 10.0;
+        // PI trim around a feedforward operating band.
+        double kp_percent_per_mps = 20.0;
+        double ki_percent_per_mps_s = 3.0;
+        double integral_limit_percent = 6.0;
+        WheelCommandBandConfig band = {};
+        TwistCommandCalibrationConfig twist_calibration = {};
     };
 
     struct TurnInPlaceConfig {
@@ -66,6 +87,32 @@ namespace controls{
             clamped.v_mps + (clamped.omega_rad_s * half_wheel_base)};
     }
 
+    inline TwistCommand apply_twist_calibration(
+        const TwistCommand& cmd,
+        const TwistCommandCalibrationConfig& cfg) {
+        const double linear_scale = std::max(0.0, cfg.linear_scale);
+        const double angular_scale = std::max(0.0, cfg.angular_scale);
+        return TwistCommand{
+            cmd.v_mps * linear_scale,
+            cmd.omega_rad_s * angular_scale,
+            cmd.hold_ms};
+    }
+
+    inline WheelSpeedSetpoint clamp_wheel_speed_setpoint_to_band(
+        const WheelSpeedSetpoint& desired,
+        double max_abs_wheel_speed_mps) {
+        const double max_abs_speed = std::max(0.0, max_abs_wheel_speed_mps);
+        if (max_abs_speed <= 0.0) {
+            return WheelSpeedSetpoint{0.0, 0.0};
+        }
+        const double peak = std::max(std::abs(desired.left_mps), std::abs(desired.right_mps));
+        if (peak <= max_abs_speed || peak <= 1e-9) {
+            return desired;
+        }
+        const double scale = max_abs_speed / peak;
+        return WheelSpeedSetpoint{desired.left_mps * scale, desired.right_mps * scale};
+    }
+
     class WheelSpeedPercentController {
     public:
         explicit WheelSpeedPercentController(const WheelSpeedControllerConfig& cfg = {})
@@ -87,25 +134,16 @@ namespace controls{
             const WheelSpeedSetpoint& desired,
             const sensors::WheelSpeedMetersPerSec& measured,
             int hold_ms) {
-
-            const double left_error = desired.left_mps - measured.left;
-            const double right_error = desired.right_mps - measured.right;
-
-            if (measured.dt_seconds > 0.0) {
-                left_i_term_percent_ = clamp_percent_double(
-                    left_i_term_percent_ + (cfg_.ki_percent_per_mps_s * left_error * measured.dt_seconds),
-                    cfg_.integral_limit_percent);
-                right_i_term_percent_ = clamp_percent_double(
-                    right_i_term_percent_ + (cfg_.ki_percent_per_mps_s * right_error * measured.dt_seconds),
-                    cfg_.integral_limit_percent);
-            }
-
-            const double left_pct = (cfg_.kff_percent_per_mps * desired.left_mps) +
-                                    (cfg_.kp_percent_per_mps * left_error) +
-                                    left_i_term_percent_;
-            const double right_pct = (cfg_.kff_percent_per_mps * desired.right_mps) +
-                                     (cfg_.kp_percent_per_mps * right_error) +
-                                     right_i_term_percent_;
+            const double left_pct = compute_wheel_percent(
+                desired.left_mps,
+                measured.left,
+                measured.dt_seconds,
+                &left_i_term_percent_);
+            const double right_pct = compute_wheel_percent(
+                desired.right_mps,
+                measured.right,
+                measured.dt_seconds,
+                &right_i_term_percent_);
 
             return MotorCommand{
                 clamp_percent(round_to_i32(left_pct)),
@@ -114,6 +152,67 @@ namespace controls{
         }
 
     private:
+        double compute_wheel_percent(
+            double desired_mps,
+            double measured_mps,
+            double dt_seconds,
+            double* i_term_percent) const {
+            if (!i_term_percent) {
+                return 0.0;
+            }
+
+            const double desired_abs = std::abs(desired_mps);
+            const double stop_threshold = std::max(0.0, cfg_.band.stop_speed_threshold_mps);
+            if (desired_abs <= stop_threshold) {
+                *i_term_percent = 0.0;
+                return 0.0;
+            }
+
+            const double error = desired_mps - measured_mps;
+            const double i_term_candidate = integrate_i_term(*i_term_percent, error, dt_seconds);
+            const double p_term = cfg_.kp_percent_per_mps * error;
+            const double trim_limit = std::max(0.0, cfg_.band.max_trim_percent);
+            const double trim_unclamped = p_term + i_term_candidate;
+            const double trim = clamp_percent_double(trim_unclamped, trim_limit);
+
+            const double ff_abs = feedforward_percent_for_speed(desired_abs);
+            const double raw_cmd = std::copysign(ff_abs, desired_mps) + trim;
+
+            const double min_moving = std::max(0.0, cfg_.band.min_moving_percent);
+            const double max_moving = std::max(min_moving, cfg_.band.max_moving_percent);
+            const double cmd_abs = std::clamp(std::abs(raw_cmd), min_moving, max_moving);
+            const double cmd = std::copysign(cmd_abs, desired_mps);
+
+            const bool trim_saturated = std::abs(trim_unclamped - trim) > 1e-9;
+            const bool output_saturated = std::abs(raw_cmd - cmd) > 1e-9;
+            const bool correction_reduces_saturation =
+                (cmd > 0.0 && error < 0.0) || (cmd < 0.0 && error > 0.0);
+
+            if (dt_seconds > 0.0 &&
+                ((!trim_saturated && !output_saturated) || correction_reduces_saturation)) {
+                *i_term_percent = i_term_candidate;
+            }
+
+            return cmd;
+        }
+
+        double integrate_i_term(double i_term_percent, double error, double dt_seconds) const {
+            if (dt_seconds <= 0.0) {
+                return i_term_percent;
+            }
+            return clamp_percent_double(
+                i_term_percent + (cfg_.ki_percent_per_mps_s * error * dt_seconds),
+                cfg_.integral_limit_percent);
+        }
+
+        double feedforward_percent_for_speed(double desired_abs_mps) const {
+            const double min_moving = std::max(0.0, cfg_.band.min_moving_percent);
+            const double max_moving = std::max(min_moving, cfg_.band.max_moving_percent);
+            const double max_speed = std::max(1e-6, cfg_.band.max_wheel_speed_for_band_mps);
+            const double speed_norm = std::clamp(desired_abs_mps / max_speed, 0.0, 1.0);
+            return min_moving + (speed_norm * (max_moving - min_moving));
+        }
+
         static int32_t round_to_i32(double value) {
             return static_cast<int32_t>(std::lround(value));
         }
@@ -139,8 +238,17 @@ namespace controls{
     // Small helper to make the C++ callsite pleasant and safe.
     class MotorController {
     public:
-        explicit MotorController(const WheelSpeedControllerConfig& wheel_speed_cfg = {})
-            : wheel_speed_controller_(wheel_speed_cfg) {}
+        using OdomSnapshotReader = bool (*)(sensors::WheelOdometryData*);
+
+        explicit MotorController(
+            const WheelSpeedControllerConfig& wheel_speed_cfg = {},
+            OdomSnapshotReader odom_reader = nullptr)
+            : wheel_speed_controller_(wheel_speed_cfg),
+              odom_reader_(odom_reader) {}
+
+        void set_odom_reader(OdomSnapshotReader odom_reader) {
+            odom_reader_ = odom_reader;
+        }
 
         // Sends a differential drive command. Percent values are clamped to [-100, 100].
         void drive_percent(int left_pct, int right_pct, int hold_ms = 100) const {
@@ -162,10 +270,17 @@ namespace controls{
         }
 
         void drive_twist(const TwistCommand& cmd, const sensors::WheelOdometryData& odom) {
-            const WheelSpeedSetpoint desired = wheel_speed_setpoint_from_twist(cmd);
+            const TwistCommand calibrated_cmd =
+                apply_twist_calibration(cmd, wheel_speed_controller_.config().twist_calibration);
+            const WheelSpeedSetpoint desired_raw = wheel_speed_setpoint_from_twist(calibrated_cmd);
+            const WheelSpeedSetpoint desired = clamp_wheel_speed_setpoint_to_band(
+                desired_raw,
+                wheel_speed_controller_.config().band.max_wheel_speed_for_band_mps);
             const sensors::WheelSpeedMetersPerSec measured = sensors::wheel_speed_from_odometry(odom);
             const MotorCommand motor_cmd =
                 wheel_speed_controller_.compute(desired, measured, cmd.hold_ms);
+            last_twist_motor_cmd_ = motor_cmd;
+            has_last_twist_motor_cmd_ = true;
             write_motors(&motor_cmd);
         }
 
@@ -205,32 +320,43 @@ namespace controls{
         }
 
         // Blocking twist helper: repeatedly closes loop on wheel odometry for duration_ms.
+        // If an odom reader is configured, this does not pop the host odom queue directly.
         void drive_twist_for(
             double v_mps,
             double omega_rad_s,
             int duration_ms,
             bool stop_after = true,
-            int hold_ms = 120) {
+            int hold_ms = 0) {
             sensors::WheelOdometryData odom = {};
+            constexpr int kControlTickMs = 20;
+            constexpr int kMinSafeHoldMs = 250;
             const auto deadline =
                 std::chrono::steady_clock::now() + std::chrono::milliseconds(clamp_nonnegative(duration_ms));
-            const int safe_hold_ms = clamp_nonnegative(hold_ms);
+            const int requested_hold_ms = clamp_nonnegative(hold_ms);
+            // hold_ms == 0 disables host-side auto-stop; this avoids watchdog stutter.
+            const int safe_hold_ms =
+                (requested_hold_ms == 0) ? 0 : std::max(kMinSafeHoldMs, requested_hold_ms);
+            auto next_tick = std::chrono::steady_clock::now();
+            int32_t last_applied_seq = std::numeric_limits<int32_t>::min();
             while (std::chrono::steady_clock::now() < deadline) {
-                read_wheel_odometry(&odom);
-                if (odom.seq >= 0 && odom.timestamp > 0.0 && odom.sample_period_ms > 0) {
+                next_tick += std::chrono::milliseconds(kControlTickMs);
+                if (read_control_odometry(&odom) && odom.seq != last_applied_seq) {
                     drive_twist(v_mps, omega_rad_s, odom, safe_hold_ms);
-                    const int sleep_ms = std::clamp(odom.sample_period_ms, 1, 50);
-                    std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+                    last_applied_seq = odom.seq;
                 } else {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    refresh_last_twist_command(safe_hold_ms);
                 }
+                std::this_thread::sleep_until(std::min(next_tick, deadline));
             }
             if (stop_after) {
                 stop();
             }
         }
 
-        void reset_twist_controller() { wheel_speed_controller_.reset(); }
+        void reset_twist_controller() {
+            wheel_speed_controller_.reset();
+            has_last_twist_motor_cmd_ = false;
+        }
 
         WheelSpeedPercentController& twist_controller() { return wheel_speed_controller_; }
         const WheelSpeedPercentController& twist_controller() const { return wheel_speed_controller_; }
@@ -248,6 +374,26 @@ namespace controls{
         void stop() const { drive_percent(0, 0, 0); }
 
     private:
+        bool read_control_odometry(sensors::WheelOdometryData* odom) const {
+            if (!odom) {
+                return false;
+            }
+            if (odom_reader_) {
+                return odom_reader_(odom);
+            }
+            read_wheel_odometry(odom);
+            return odom->seq >= 0 && odom->timestamp > 0.0 && odom->sample_period_ms > 0;
+        }
+
+        void refresh_last_twist_command(int hold_ms) {
+            if (!has_last_twist_motor_cmd_) {
+                return;
+            }
+            MotorCommand cmd = last_twist_motor_cmd_;
+            cmd.hold_ms = clamp_nonnegative(hold_ms);
+            write_motors(&cmd);
+        }
+
         static int32_t clamp_percent(int value) {
             return std::clamp<int32_t>(value, -100, 100);
         }
@@ -257,6 +403,9 @@ namespace controls{
         }
 
         WheelSpeedPercentController wheel_speed_controller_;
+        OdomSnapshotReader odom_reader_ = nullptr;
+        MotorCommand last_twist_motor_cmd_{0, 0, 0};
+        bool has_last_twist_motor_cmd_ = false;
     };
 
     void drive_forward_demo() {
@@ -267,17 +416,18 @@ namespace controls{
         //     const int pct = i * 10;
         //     motors.drive_for(-pct, pct, 3000, true);
         // }
-
+        
+        motors.drive_for(15, 15, 2000, true);
+        motors.drive_for(-15, 15, 2000, true);
         // motors.drive_twist_for(0.15, 0.0, 2000, true);
 
         motors.stop();
     }
 
-    void drive_twist_demo() {
-        MotorController motors;
-        motors.drive_twist_for(0.15, 0.0, 2000, false);
+    void drive_twist_demo(MotorController& motors) {
+        motors.drive_twist_for(0.1, 0.0, 2000, false);
         motors.reset_twist_controller();
-        motors.drive_twist_for(0.0, -0.5 * kMaxAngularSpeedRadPerSec, 4000, true);
+        motors.drive_twist_for(0.0, 0.5 * core::pi, 4000, true);
         motors.stop();
     }
 }; //namespace controls
