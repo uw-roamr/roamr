@@ -8,9 +8,8 @@
 
 namespace mapping{
 
-	// Pose storage
-	static const int32_t MAX_POSES = 4096;
-	static double POSES[3 * MAX_POSES]; // x,y,theta triples
+	// Pose storage for drawing trajectory
+	static double POSES[3 * kMaxMapPoses]; // x,y,theta triples
 
 	// Image buffer (RGBA8888)
 	static const int32_t MAX_W = 512;
@@ -20,13 +19,12 @@ namespace mapping{
 	static int32_t CUR_H = 256;
 
 	// LiDAR points storage (2D projection x,y)
-	static const int32_t MAX_POINTS = 20000;
-	static float POINTS[2 * MAX_POINTS];
+	static float POINTS[2 * kMaxMapPoints];
 	static int32_t POINTS_COUNT = 0;
 
 	// Planned path storage (grid cells in map coordinates).
-	static const int32_t MAX_PLANNED_PATH = 4096;
-	static int32_t PLANNED_PATH[2 * MAX_PLANNED_PATH];
+	static const int32_t kMaxPlannedPath = kMaxMapPoses;
+	static int32_t PLANNED_PATH[2 * kMaxPlannedPath];
 	static int32_t PLANNED_PATH_COUNT = 0;
 	static int32_t PLANNED_GOAL_ENABLED = 0;
 	static int32_t PLANNED_GOAL_X = 0;
@@ -107,7 +105,7 @@ namespace mapping{
 	}
 
 	void set_planned_path_cell(int32_t idx, int32_t gx, int32_t gy) {
-		if (idx < 0 || idx >= MAX_PLANNED_PATH) return;
+		if (idx < 0 || idx >= kMaxPlannedPath) return;
 		int32_t base = idx * 2;
 		PLANNED_PATH[base + 0] = gx;
 		PLANNED_PATH[base + 1] = gy;
@@ -128,7 +126,7 @@ namespace mapping{
 
 	// Set a single pose at index (0-based). Extra indices are ignored.
 	void set_pose(int32_t idx, double x, double y, double theta) {
-		if (idx < 0 || idx >= MAX_POSES) return;
+		if (idx < 0 || idx >= kMaxMapPoses) return;
 		int32_t base = idx * 3;
 		POSES[base + 0] = x;
 		POSES[base + 1] = y;
@@ -137,7 +135,7 @@ namespace mapping{
 
 	// Set a single LiDAR point at index (0-based).
 	void set_point(int32_t idx, double x, double y) {
-		if (idx < 0 || idx >= MAX_POINTS) return;
+		if (idx < 0 || idx >= kMaxMapPoints) return;
 		int32_t base = idx * 2;
 		POINTS[base + 0] = static_cast<float>(x);
 		POINTS[base + 1] = static_cast<float>(y);
@@ -300,9 +298,9 @@ namespace mapping{
 	// Render occupancy map to IMAGE, optionally integrating the current scan.
 	void draw_map(int32_t poseCount, int32_t pointCount, int32_t width, int32_t height) {
 		if (poseCount < 0) poseCount = 0;
-		if (poseCount > MAX_POSES) poseCount = MAX_POSES;
+		if (poseCount > kMaxMapPoses) poseCount = kMaxMapPoses;
 		if (pointCount < 0) pointCount = 0;
-		if (pointCount > MAX_POINTS) pointCount = MAX_POINTS;
+		if (pointCount > kMaxMapPoints) pointCount = kMaxMapPoints;
 		if (width  <= 0) width  = 256;
 		if (height <= 0) height = 256;
 		if (width  > MAX_W) width  = MAX_W;

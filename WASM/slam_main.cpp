@@ -77,7 +77,7 @@ static sensors::PoseLog g_pose;
 enum class PoseSource{
     IMU,
     wheel_odom,
-    fused
+    fused_IMU_wheel_odom
 };
 // IMU preintegration drifts over time, so the shared autonomy/map pose should
 // not treat it as a drop-in orientation estimate.
@@ -252,9 +252,8 @@ int main(){
         ){
             std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
         }
-        if (pose_source == PoseSource::wheel_odom || pose_source == PoseSource::fused){
-            sensors::WheelOdometryData initial_odom{};
-            while(!read_scan_odom_sample(&initial_odom)){
+        if (pose_source == PoseSource::wheel_odom || pose_source == PoseSource::fused_IMU_wheel_odom){
+            while(!g_wheel_odom_ready.load(std::memory_order_acquire)){
                 std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
             }
         }
@@ -300,12 +299,13 @@ int main(){
                     g_imu_preintegrator.update_bias();
                 }
                 imu_copy = g_imu_calib.curr_slot();
-                if (pose_source == PoseSource::IMU){
-                    sensors::PoseLog pose_copy = {};
+                if (pose_source == PoseSource::IMU || pose_source == PoseSource::fused_IMU_wheel_odom){
+                    // only update the rotation since the accelerometer drifts too much
+                    sensors::PoseLog pose_copy{};
+                    g_imu_preintegrator.get_pose_log(&pose_copy);
                     {
                         std::lock_guard<std::mutex> lk(m_pose);
-                        g_imu_preintegrator.get_pose_log(&g_pose);
-                        pose_copy = g_pose;
+                        g_pose.quaternion = pose_copy.quaternion;
                     }
                     rerun_log_pose(&pose_copy);
                 }
@@ -351,6 +351,7 @@ int main(){
                 // returned a frame with the same timestamp as the previous call.
                 if (!g_lc_ready.load(std::memory_order_relaxed)) {
                     g_lc_ready.store(true, std::memory_order_release);
+                    wasm_log_line("Lidar camera initialized");
                 }
                 g_lc_ready_idx.store(write_idx, std::memory_order_release);
                 g_lc_cv.notify_one();
@@ -501,14 +502,19 @@ int main(){
     //             0.0, 0.0, std::sin(yaw_odom * 0.5), std::cos(yaw_odom * 0.5)};
 
     //         sensors::PoseLog pose_copy = {};
-    //         if(pose_source == PoseSource::wheel_odom)
-    //         {
-    //             std::lock_guard<std::mutex> lk(m_pose);
-    //             g_pose.timestamp = odom.timestamp;
-    //             g_pose.translation = g_latest_translation_odom;
-    //             g_pose.quaternion = g_latest_quat_odom;
-    //             pose_copy = g_pose;
-    //         }
+            // if(pose_source == PoseSource::wheel_odom || pose_source == PoseSource::fused_IMU_wheel_odom)
+            // {
+            //     std::lock_guard<std::mutex> lk(m_pose);
+            //     g_pose.timestamp = odom.timestamp;
+            //     g_pose.translation = g_latest_translation_odom;
+
+            //     // IMU is used for rotation in fused
+            //     if (pose_source == PoseSource::wheel_odom){
+            //         g_pose.quaternion = g_latest_quat_odom;
+            //     }
+            //     pose_copy = g_pose;
+            // }
+
     //         if (kEnableWheelPoseLogging &&
     //             (last_wheel_pose_log_timestamp < 0.0 ||
     //              (odom.timestamp - last_wheel_pose_log_timestamp) >= kWheelPoseLogIntervalSec)) {

@@ -11,8 +11,7 @@
 namespace mapping {
   constexpr int mapWidth = 256;
   constexpr int mapHeight = 256;
-  constexpr int mapMaxPoints = 20000; // keep in sync with map.cpp
-  constexpr int kMapMaxPoses = 4096; // keep in sync with map.cpp
+
   constexpr float mapMaxRangeMeters = 1.8f;
   constexpr float mapMinZ = 0.1f; // drop ground (world Z up)
   constexpr float mapMaxZ = 0.25f; // drop ceiling/background
@@ -174,11 +173,11 @@ namespace mapping {
     // (x, y, z) -> (x, -z, y)
     // Applying here guarantees map, z filtering, and rerun all use the same corrected geometry.
     const core::Vector4d q_point_to_body = core::quat_from_euler_zyx(core::pi * 0.5, 0.0, 0.0);
-    if (g_pose_history_count < kMapMaxPoses) {
+    if (g_pose_history_count < kMaxMapPoses) {
       set_pose(g_pose_history_count, t_body_to_world.x, t_body_to_world.y, yaw);
       g_pose_history_count += 1;
     } else {
-      set_pose(kMapMaxPoses - 1, t_body_to_world.x, t_body_to_world.y, yaw);
+      set_pose(kMaxMapPoses - 1, t_body_to_world.x, t_body_to_world.y, yaw);
     }
 
     // for determining yaw of points
@@ -214,7 +213,7 @@ namespace mapping {
       const bool in_range = (r2 <= max_range2);
       const bool filtered = keep && in_range;
 
-      if (filtered && used_points < mapMaxPoints) {
+      if (filtered && used_points < kMaxMapPoints) {
         core::Vector3d map_point = core::quat_rotate(q_point_to_world_yaw, sensor_point);
         map_point.x += t_body_to_world.x;
         map_point.y += t_body_to_world.y;
