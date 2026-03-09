@@ -50,7 +50,6 @@ namespace mapping {
   void initialize_map(Map& map){
     map.reset_map();
     map.reset_points();
-    map.reset_free_points();
     map.reset_poses();
     map.clear_planned_path();
     map.set_points_world(1);
@@ -101,7 +100,6 @@ namespace mapping {
     // subsampling
     constexpr float max_range2 = mapMaxRangeMeters * mapMaxRangeMeters;
     int used_points = 0;
-    int free_points = 0;
 
     for (int i = 0; i < total_points; i += 3) {
       const float x = lc_data.points[i + 0];
@@ -122,7 +120,7 @@ namespace mapping {
       // Filter range relative to the robot (sensor) position, not the world origin.
       const double rdx = wp.x - t_body_to_world.x;
       const double rdy = wp.y - t_body_to_world.y;
-      const double r2 = rdx * rdx + rdy * rdy;
+      const float r2 = static_cast<float>(rdx * rdx + rdy * rdy);
       const bool in_range = (r2 <= max_range2);
       const bool filtered = keep && in_range;
 
@@ -132,18 +130,10 @@ namespace mapping {
         map_point.y += t_body_to_world.y;
         map.set_point(used_points, map_point.x, map_point.y);
         used_points += 1;
-      } else if (keep && !in_range && free_points < kMaxFreeRays) {
-        // Clip the ray to the max-range radius and register it as free-space
-        // evidence. No occupancy hit will be recorded at the endpoint.
-        const double r = std::sqrt(static_cast<double>(r2));
-        const double clip_x = t_body_to_world.x + rdx / r * mapMaxRangeMeters;
-        const double clip_y = t_body_to_world.y + rdy / r * mapMaxRangeMeters;
-        map.set_free_point(free_points, clip_x, clip_y);
-        free_points += 1;
       }
     }
 
-    map.draw_map(g_pose_history_count, used_points, free_points);
+    map.draw_map(g_pose_history_count, used_points);
 
     visualization::render_map_frame(
         map,

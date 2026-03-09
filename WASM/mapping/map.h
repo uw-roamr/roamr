@@ -8,7 +8,6 @@
 namespace mapping{
 
     constexpr int kMaxMapPoints = 20000;
-    constexpr int kMaxFreeRays  = kMaxMapPoints;
     constexpr int kMaxMapPoses = 4096;
 
     class Map{
@@ -37,11 +36,9 @@ namespace mapping{
         void set_points_world(int32_t in_world);
         void set_pose(int32_t idx, double x, double y, double theta);
         void set_point(int32_t idx, double x, double y);
-        void set_free_point(int32_t idx, double x, double y);
-        void reset_free_points();
         // Integrate the latest scan into the occupancy grid.
         // width/height are no longer a Map concern; see visualization::render_map_frame.
-        void draw_map(int32_t pose_count, int32_t point_count, int32_t free_point_count);
+        void draw_map(int32_t pose_count, int32_t point_count);
 
         // Viewport helpers used by the visualization layer.
         static void compute_viewport(
@@ -79,10 +76,6 @@ namespace mapping{
             const core::PoseSE2d& pose,
             int32_t point_count,
             int32_t points_in_world);
-        // Cast a free-space-only ray: marks cells as visited/decayed but does
-        // not register an occupancy hit at the endpoint.
-        void integrate_free_ray(int32_t x0, int32_t y0, int32_t x1, int32_t y1);
-        void integrate_free_scan(const core::PoseSE2d& pose, int32_t free_point_count);
 
         // Pose storage for drawing trajectory.
         std::array<core::PoseSE2d, kMaxMapPoses> poses_{}; // x,y,theta triples
@@ -90,10 +83,6 @@ namespace mapping{
         // LiDAR points storage (2D projection x,y).
         std::array<float, 2 * kMaxMapPoints> points_{};
         int32_t points_count_ = 0;
-
-        // Free-space ray endpoints (world frame, clipped to max range).
-        std::array<float, 2 * kMaxFreeRays> free_points_{};
-        int32_t free_points_count_ = 0;
 
         // Planned path storage (grid cells in map coordinates).
         std::array<int32_t, 2 * kMaxPlannedPath> planned_path_{};
