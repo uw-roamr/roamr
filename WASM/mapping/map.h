@@ -96,4 +96,8 @@ namespace mapping{
         // 0 = points are in robot/laser frame (default), 1 = points already in world/map frame.
         int32_t points_in_world_ = 0;
     };
+
+
+  constexpr double mapMinIntervalSeconds = 0.1; // seconds
+  WASM_IMPORT("host", "rerun_log_map_frame") void rerun_log_map_frame(const MapFrameMetadata *frame);
 };

@@ -23,8 +23,4 @@ namespace mapping{
     int32_t origin_initialized;
   };
 
-  constexpr double mapMinIntervalSeconds = 0.1; // seconds
-
-
-  WASM_IMPORT("host", "rerun_log_map_frame") void rerun_log_map_frame(const MapFrameMetadata *frame);
 }; //namespace mapping
