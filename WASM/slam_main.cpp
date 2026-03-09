@@ -283,7 +283,7 @@ int main(){
         g_imu_preintegrator.update_bias();
         g_last_calib_timestamp = g_imu_calib.last_calibrated;
         g_imu_ready.store(true, std::memory_order_release);
-        wasm_log_line("IMU ready");
+        wasm_log_line("IMU initialized");
 
         static sensors::IMUData imu_copy;
         auto last_sample_time = Clock::now();
@@ -380,7 +380,7 @@ int main(){
       }
 
       mapping::initialize_map(g_map);
-      wasm_log_line("Initialized map");
+      wasm_log_line("Map initialized");
 
       while(true){
 
