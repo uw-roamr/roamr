@@ -107,7 +107,12 @@ static constexpr OuterLoopTurnPidConfig kScan4x90TurnPidCfg{
     0.5 * core::pi,
     0.2,
     0.6,
-    4.0 * core::pi / 180.0};
+    1.5 * core::pi / 180.0};
+
+static constexpr double kScan4x90FinalMinOmegaRadS = 0.05;
+static constexpr double kScan4x90SlowdownErrorRad = 12.0 * core::pi / 180.0;
+static constexpr double kScan4x90SettleYawRateRadS = 6.0 * core::pi / 180.0;
+static constexpr int kScan4x90SettleSamplesRequired = 3;
 
 static bool read_scan_odom_sample(sensors::WheelOdometryData* out) {
     if (!out) {
@@ -140,6 +145,8 @@ void scan_4x90(controls::MotorController& motors) {
         target_yaw += kQuarterTurnRad;
         double integral_term = 0.0;
         double prev_error = target_yaw - yaw_odom;
+        double prev_yaw = yaw_odom;
+        int settle_samples = 0;
 
         while (true) {
             sensors::WheelOdometryData next_odom{};
@@ -148,19 +155,26 @@ void scan_4x90(controls::MotorController& motors) {
                 continue;
             }
             last_seq = next_odom.seq;
-            const double measured_yaw = core::quat_to_euler_yaw(g_latest_quat_odom);
-            yaw_odom = core::unwrap_angle_near(measured_yaw, yaw_odom);
-
-            const double yaw_error = target_yaw - yaw_odom;
-            if (std::abs(yaw_error) <= kScan4x90TurnPidCfg.yaw_tolerance_rad) {
-                motors.stop();
-                motors.reset_twist_controller();
-                break;
-            }
-
             const double dt_seconds = std::max(
                 1e-3,
                 static_cast<double>(std::max(1, next_odom.sample_period_ms)) * 1e-3);
+            const double measured_yaw = core::quat_to_euler_yaw(g_latest_quat_odom);
+            yaw_odom = core::unwrap_angle_near(measured_yaw, yaw_odom);
+            const double yaw_rate = (yaw_odom - prev_yaw) / dt_seconds;
+            prev_yaw = yaw_odom;
+
+            const double yaw_error = target_yaw - yaw_odom;
+            if (std::abs(yaw_error) <= kScan4x90TurnPidCfg.yaw_tolerance_rad &&
+                std::abs(yaw_rate) <= kScan4x90SettleYawRateRadS) {
+                motors.stop();
+                motors.reset_twist_controller();
+                if (++settle_samples >= kScan4x90SettleSamplesRequired) {
+                    break;
+                }
+                continue;
+            }
+            settle_samples = 0;
+
             integral_term += yaw_error * dt_seconds;
             const double max_integral_term = kScan4x90TurnPidCfg.integral_limit_rad_s /
                 std::max(1e-6, kScan4x90TurnPidCfg.ki_omega_per_rad_s);
@@ -177,8 +191,17 @@ void scan_4x90(controls::MotorController& motors) {
                 omega_cmd,
                 -kScan4x90TurnPidCfg.max_omega_rad_s,
                 kScan4x90TurnPidCfg.max_omega_rad_s);
-            if (std::abs(omega_cmd) < kScan4x90TurnPidCfg.min_omega_rad_s) {
-                omega_cmd = std::copysign(kScan4x90TurnPidCfg.min_omega_rad_s, yaw_error);
+
+            double min_omega = kScan4x90TurnPidCfg.min_omega_rad_s;
+            if (std::abs(yaw_error) < kScan4x90SlowdownErrorRad) {
+                const double blend =
+                    std::clamp(std::abs(yaw_error) / kScan4x90SlowdownErrorRad, 0.0, 1.0);
+                min_omega =
+                    kScan4x90FinalMinOmegaRadS +
+                    (blend * (kScan4x90TurnPidCfg.min_omega_rad_s - kScan4x90FinalMinOmegaRadS));
+            }
+            if (std::abs(omega_cmd) < min_omega) {
+                omega_cmd = std::copysign(min_omega, yaw_error);
             }
 
             motors.drive_twist(0.0, omega_cmd, next_odom, kTurnHoldMs);
