@@ -237,7 +237,7 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
 
 // Tiny planner demo: set a fixed map-view pixel goal at startup.
 // Toggle off when using host-provided goal clicks.
-static constexpr bool kEnablePlannerDemoGoal = true;
+static constexpr bool kEnablePlannerDemoGoal = false;
 static constexpr int kPlannerDemoGoalPixelX = 160;
 static constexpr int kPlannerDemoGoalPixelY = 128;
 static constexpr int32_t kRenderWidth = 256;
