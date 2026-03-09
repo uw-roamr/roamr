@@ -138,17 +138,19 @@ namespace mapping {
     rerun_out.colors_size = static_cast<size_t>(used_points_rerun * 3);
   }
 
-  void initialize_map(){
-    reset_map();
-    reset_points();
-    reset_poses();
-    set_points_world(1);
+  void initialize_map(Map& map){
+    map.reset_map();
+    map.reset_points();
+    map.reset_poses();
+    map.clear_planned_path();
+    map.set_points_world(1);
     g_pose_history_count = 0;
     g_last_pose_yaw = 0.0;
   }
 
-  void update_map_from_lidar(const sensors::LidarCameraData& lc_data,
-                             MapFrame& map_frame,
+  void update_map_from_lidar(Map& map,
+                             const sensors::LidarCameraData& lc_data,
+                             MapFrameMetadata& map_frame,
                              const core::PoseSE3d& body_to_world
                             ) {
     const auto call_start = std::chrono::steady_clock::now();
@@ -174,10 +176,10 @@ namespace mapping {
     // Applying here guarantees map, z filtering, and rerun all use the same corrected geometry.
     const core::Vector4d q_point_to_body = core::quat_from_euler_zyx(core::pi * 0.5, 0.0, 0.0);
     if (g_pose_history_count < kMaxMapPoses) {
-      set_pose(g_pose_history_count, t_body_to_world.x, t_body_to_world.y, yaw);
+      map.set_pose(g_pose_history_count, t_body_to_world.x, t_body_to_world.y, yaw);
       g_pose_history_count += 1;
     } else {
-      set_pose(kMaxMapPoses - 1, t_body_to_world.x, t_body_to_world.y, yaw);
+      map.set_pose(kMaxMapPoses - 1, t_body_to_world.x, t_body_to_world.y, yaw);
     }
 
     // for determining yaw of points
@@ -217,12 +219,13 @@ namespace mapping {
         core::Vector3d map_point = core::quat_rotate(q_point_to_world_yaw, sensor_point);
         map_point.x += t_body_to_world.x;
         map_point.y += t_body_to_world.y;
-        set_point(used_points, map_point.x, map_point.y);
+        map.set_point(used_points, map_point.x, map_point.y);
         used_points += 1;
       }
     }
 
     visualization::render_map_frame(
+        map,
         g_pose_history_count, used_points, mapWidth, mapHeight,
         lc_data.timestamp, map_frame);
   }

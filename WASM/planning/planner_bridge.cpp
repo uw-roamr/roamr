@@ -6,7 +6,7 @@
 #include <mutex>
 #include <vector>
 
-#include "mapping/map_api.h"
+#include "mapping/map.h"
 #include "planning/frontier_explorer.h"
 #include "planning/planner.h"
 
@@ -73,12 +73,12 @@ inline int32_t clampi(int32_t v, int32_t lo, int32_t hi) {
   return v;
 }
 
-bool load_planner_grid(GridMap2D* out_map) {
+bool load_planner_grid(const mapping::Map& map, GridMap2D* out_map) {
   if (!out_map) {
     return false;
   }
-  mapping::OccupancyGridMeta meta{};
-  if (!mapping::get_occupancy_meta(&meta)) {
+  mapping::OccupancyGridMetadata meta{};
+  if (!map.get_occupancy_meta(&meta)) {
     return false;
   }
   if (meta.width <= 0 || meta.height <= 0 || meta.resolution_m <= 0.0) {
@@ -93,7 +93,7 @@ bool load_planner_grid(GridMap2D* out_map) {
       static_cast<size_t>(meta.width * meta.height),
       static_cast<int8_t>(-1));
   const int32_t copied =
-      mapping::get_occupancy_grid(
+      map.get_occupancy_grid(
           out_map->data.data(),
           static_cast<int32_t>(out_map->data.size()));
   if (copied != meta.width * meta.height) {
@@ -103,6 +103,7 @@ bool load_planner_grid(GridMap2D* out_map) {
 }
 
 bool render_pixel_to_map_cell(
+    const mapping::Map& map,
     int32_t pixel_x,
     int32_t pixel_y,
     int32_t render_width,
@@ -116,8 +117,8 @@ bool render_pixel_to_map_cell(
     return false;
   }
 
-  mapping::OccupancyGridMeta meta{};
-  if (!mapping::get_occupancy_meta(&meta) || meta.width <= 0 || meta.height <= 0) {
+  mapping::OccupancyGridMetadata meta{};
+  if (!map.get_occupancy_meta(&meta) || meta.width <= 0 || meta.height <= 0) {
     return false;
   }
   const double scale_x = static_cast<double>(render_width) / meta.width;
@@ -171,40 +172,42 @@ void update_cached_path_world(const std::vector<core::Vector3d>& path_world) {
   ++g_planned_path_revision;
 }
 
-void update_overlay_from_plan_result(const PlanResult& planned) {
-  mapping::clear_planned_path();
+void update_overlay_from_plan_result(mapping::Map& map, const PlanResult& planned) {
+  map.clear_planned_path();
   if (!planned.success || planned.path_grid.empty()) {
     update_cached_path_world({});
     return;
   }
 
   const GridCoord& goal_cell = planned.path_grid.back();
-  mapping::set_planned_goal_cell(goal_cell.x, goal_cell.y, 1);
+  map.set_planned_goal_cell(goal_cell.x, goal_cell.y, 1);
 
   const int32_t limit = std::min<int32_t>(
       static_cast<int32_t>(planned.path_grid.size()),
       kMaxPlannedPathCells);
   for (int32_t i = 0; i < limit; ++i) {
     const GridCoord& c = planned.path_grid[static_cast<size_t>(i)];
-    mapping::set_planned_path_cell(i, c.x, c.y);
+    map.set_planned_path_cell(i, c.x, c.y);
   }
   update_cached_path_world(planned.path_world);
 }
 
-void update_overlay_from_frontier_result(const FrontierPlanResult& planned) {
-  mapping::clear_planned_path();
+void update_overlay_from_frontier_result(
+    mapping::Map& map,
+    const FrontierPlanResult& planned) {
+  map.clear_planned_path();
   if (!planned.success || planned.path_grid.empty()) {
     update_cached_path_world({});
     return;
   }
 
-  mapping::set_planned_goal_cell(planned.goal_cell.x, planned.goal_cell.y, 1);
+  map.set_planned_goal_cell(planned.goal_cell.x, planned.goal_cell.y, 1);
   const int32_t limit = std::min<int32_t>(
       static_cast<int32_t>(planned.path_grid.size()),
       kMaxPlannedPathCells);
   for (int32_t i = 0; i < limit; ++i) {
     const GridCoord& c = planned.path_grid[static_cast<size_t>(i)];
-    mapping::set_planned_path_cell(i, c.x, c.y);
+    map.set_planned_path_cell(i, c.x, c.y);
   }
   update_cached_path_world(planned.path_world);
 }
@@ -224,6 +227,7 @@ void clear_goal() {
 }
 
 void update_plan_overlay(
+    mapping::Map& map,
     const core::PoseSE3d& body_to_world,
     int32_t render_width,
     int32_t render_height) {
@@ -235,13 +239,13 @@ void update_plan_overlay(
 
   GridMap2D planner_map;
   GridCoord start_cell{};
-  if (!load_planner_grid(&planner_map) ||
+  if (!load_planner_grid(map, &planner_map) ||
       !world_to_grid(
           planner_map,
           body_to_world.translation.x,
           body_to_world.translation.y,
           &start_cell)) {
-    mapping::clear_planned_path();
+    map.clear_planned_path();
     update_cached_path_world({});
     return;
   }
@@ -258,23 +262,24 @@ void update_plan_overlay(
     const int32_t goal_x = clampi(goal.x, 0, render_width - 1);
     const int32_t goal_y = clampi(goal.y, 0, render_height - 1);
     if (!render_pixel_to_map_cell(
+            map,
             goal_x,
             goal_y,
             render_width,
             render_height,
             &goal_cell)) {
-      mapping::clear_planned_path();
+      map.clear_planned_path();
       update_cached_path_world({});
       return;
     }
 
     const PlanResult planned = g_planner.plan_to_grid(planner_map, start_cell, goal_cell);
-    update_overlay_from_plan_result(planned);
+    update_overlay_from_plan_result(map, planned);
     return;
   }
 
   if (!kEnableAutoFrontierExploration) {
-    mapping::clear_planned_path();
+    map.clear_planned_path();
     update_cached_path_world({});
     return;
   }
@@ -292,7 +297,7 @@ void update_plan_overlay(
       planner_map,
       body_to_world.translation,
       build_frontier_config());
-  update_overlay_from_frontier_result(planned);
+  update_overlay_from_frontier_result(map, planned);
 }
 
 uint64_t copy_latest_plan_world(std::vector<core::Vector3d>* out_path) {
