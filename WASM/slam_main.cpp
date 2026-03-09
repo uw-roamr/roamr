@@ -54,8 +54,6 @@ static std::mutex g_lc_cv_mutex;
 static std::condition_variable g_lc_cv;
 
 // motor encoder odometry globals
-static core::Vector3d g_latest_translation_odom = {0.0, 0.0, 0.0};
-static core::Vector4d g_latest_quat_odom = core::quat_identity();
 static std::atomic<bool> g_wheel_odom_ready{false};
 static std::mutex g_latest_wheel_odom_mutex;
 static sensors::WheelOdometryData g_latest_wheel_odom = {0.0, -1, 0, 0, 0};
@@ -101,16 +99,16 @@ struct OuterLoopTurnPidConfig {
 };
 
 static constexpr OuterLoopTurnPidConfig kScan4x90TurnPidCfg{
-    5.0,
+    18.0,
     0.05,
-    0.12,
+    1.0,
     0.5 * core::pi,
     0.2,
     0.6,
     1.5 * core::pi / 180.0};
 
 static constexpr double kScan4x90FinalMinOmegaRadS = 0.05;
-static constexpr double kScan4x90SlowdownErrorRad = 12.0 * core::pi / 180.0;
+static constexpr double kScan4x90YawDeadzoneRad = 2.0 * core::pi / 180.0;
 static constexpr double kScan4x90SettleYawRateRadS = 6.0 * core::pi / 180.0;
 static constexpr int kScan4x90SettleSamplesRequired = 3;
 
@@ -121,7 +119,7 @@ static bool read_scan_odom_sample(sensors::WheelOdometryData* out) {
     return read_latest_wheel_odom_snapshot(out);
 }
 
-void scan_4x90(controls::MotorController& motors) {
+void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
     wasm_log_line("[autonomy][scan] starting 4x90 scan");
     constexpr int kSegments = 4;
     constexpr double kQuarterTurnRad = 0.5 * core::pi;
@@ -134,18 +132,24 @@ void scan_4x90(controls::MotorController& motors) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kPollSleepMs));
     }
 
-    double yaw_odom = core::quat_to_euler_yaw(g_latest_quat_odom);
+    sensors::PoseLog pose_copy{};
+    {
+        std::lock_guard<std::mutex> lk(m_pose);
+        pose_copy = g_pose;
+    }
+    double yaw = core::quat_to_euler_yaw(pose_copy.quaternion);
     int32_t last_seq = odom.seq;
-    double target_yaw = yaw_odom;
+    double target_yaw = yaw;
 
     motors.stop();
     motors.reset_twist_controller();
 
     for (int segment = 0; segment < kSegments; ++segment) {
+        const double segment_start_yaw = yaw;
         target_yaw += kQuarterTurnRad;
         double integral_term = 0.0;
-        double prev_error = target_yaw - yaw_odom;
-        double prev_yaw = yaw_odom;
+        double prev_error = target_yaw - yaw;
+        double prev_yaw = yaw;
         int settle_samples = 0;
 
         while (true) {
@@ -158,18 +162,37 @@ void scan_4x90(controls::MotorController& motors) {
             const double dt_seconds = std::max(
                 1e-3,
                 static_cast<double>(std::max(1, next_odom.sample_period_ms)) * 1e-3);
-            const double measured_yaw = core::quat_to_euler_yaw(g_latest_quat_odom);
-            yaw_odom = core::unwrap_angle_near(measured_yaw, yaw_odom);
-            const double yaw_rate = (yaw_odom - prev_yaw) / dt_seconds;
-            prev_yaw = yaw_odom;
+            {
+                std::lock_guard<std::mutex> lk(m_pose);
+                pose_copy = g_pose;
+            }
+            const double measured_yaw = core::quat_to_euler_yaw(pose_copy.quaternion);
+            yaw = core::unwrap_angle_near(measured_yaw, yaw);
+            const double yaw_rate = (yaw - prev_yaw) / dt_seconds;
+            prev_yaw = yaw;
 
-            const double yaw_error = target_yaw - yaw_odom;
-            if (std::abs(yaw_error) <= kScan4x90TurnPidCfg.yaw_tolerance_rad &&
-                std::abs(yaw_rate) <= kScan4x90SettleYawRateRadS) {
+            const double yaw_error = target_yaw - yaw;
+            if (std::abs(yaw_error) <= kScan4x90YawDeadzoneRad) {
                 motors.stop();
                 motors.reset_twist_controller();
-                if (++settle_samples >= kScan4x90SettleSamplesRequired) {
-                    break;
+                integral_term = 0.0;
+                prev_error = yaw_error;
+                if (std::abs(yaw_rate) <= kScan4x90SettleYawRateRadS) {
+                    if (++settle_samples >= kScan4x90SettleSamplesRequired) {
+                        std::ostringstream segment_log;
+                        const double turned_deg = (yaw - segment_start_yaw) * (180.0 / core::pi);
+                        const double target_deg = (target_yaw - segment_start_yaw) * (180.0 / core::pi);
+                        const double error_deg = yaw_error * (180.0 / core::pi);
+                        // segment_log << "[autonomy][scan] phase "
+                        //             << (segment + 1)
+                        //             << " turned_deg=" << turned_deg
+                        //             << " target_deg=" << target_deg
+                        //             << " error_deg=" << error_deg;
+                        // wasm_log_line(segment_log.str());
+                        break;
+                    }
+                } else {
+                    settle_samples = 0;
                 }
                 continue;
             }
@@ -193,13 +216,6 @@ void scan_4x90(controls::MotorController& motors) {
                 kScan4x90TurnPidCfg.max_omega_rad_s);
 
             double min_omega = kScan4x90TurnPidCfg.min_omega_rad_s;
-            if (std::abs(yaw_error) < kScan4x90SlowdownErrorRad) {
-                const double blend =
-                    std::clamp(std::abs(yaw_error) / kScan4x90SlowdownErrorRad, 0.0, 1.0);
-                min_omega =
-                    kScan4x90FinalMinOmegaRadS +
-                    (blend * (kScan4x90TurnPidCfg.min_omega_rad_s - kScan4x90FinalMinOmegaRadS));
-            }
             if (std::abs(omega_cmd) < min_omega) {
                 omega_cmd = std::copysign(min_omega, yaw_error);
             }
@@ -242,7 +258,7 @@ int main(){
         planning::bridge::clear_goal();
     }
 
-    std::thread autonomy_thread([&motors](){
+    std::thread autonomy_thread([&motors, &m_pose](){
         constexpr int kAutonomyFSMSleepMs = 100;
 
         // the main high level thread
@@ -263,7 +279,7 @@ int main(){
         }
 
         if (!g_initial_spin_done.load(std::memory_order_acquire)) {
-            scan_4x90(motors);
+            scan_4x90(motors, m_pose);
             g_initial_spin_done.store(true, std::memory_order_release);
         }
 
@@ -305,6 +321,10 @@ int main(){
                     {
                         std::lock_guard<std::mutex> lk(m_pose);
                         g_pose.quaternion = pose_copy.quaternion;
+                        if (pose_source == PoseSource::IMU) {
+                            g_pose.timestamp = pose_copy.timestamp;
+                        }
+                        pose_copy = g_pose;
                     }
                     rerun_log_pose(&pose_copy);
                 }
@@ -402,14 +422,15 @@ int main(){
             std::this_thread::yield();
             continue;
         }
-        core::PoseSE3d body_to_world;
-        double pose_timestamp;
+        sensors::PoseLog pose_snapshot{};
         {
             std::lock_guard<std::mutex> lk(m_pose);
-            body_to_world.quaternion = g_pose.quaternion;
-            body_to_world.translation = g_pose.translation;
-            pose_timestamp = g_pose.timestamp;
+            pose_snapshot = g_pose;
         }
+        core::PoseSE3d body_to_world;
+        body_to_world.quaternion = pose_snapshot.quaternion;
+        body_to_world.translation = pose_snapshot.translation;
+        const double pose_timestamp = pose_snapshot.timestamp;
 
         map_timestamp = std::max(lc_data.timestamp, pose_timestamp);
         const bool do_map_update = (map_timestamp - last_map_timestamp >= mapping::mapMinIntervalSeconds);
@@ -491,21 +512,21 @@ int main(){
             }
 
             sensors::integrate_wheel_odometry(odom, &x, &y, &yaw_odom);
-            g_latest_translation_odom = {x, y, 0.0};
-            g_latest_quat_odom = {
+            const core::Vector3d wheel_translation{x, y, 0.0};
+            const core::Vector4d wheel_quaternion{
                 0.0, 0.0, std::sin(yaw_odom * 0.5), std::cos(yaw_odom * 0.5)};
 
-            sensors::PoseLog pose_copy = {};
-            if(pose_source == PoseSource::wheel_odom || pose_source == PoseSource::fused_IMU_wheel_odom)
-            {
+            sensors::PoseLog pose_copy{};
+            if (pose_source == PoseSource::wheel_odom || pose_source == PoseSource::fused_IMU_wheel_odom) {
                 std::lock_guard<std::mutex> lk(m_pose);
                 g_pose.timestamp = odom.timestamp;
-                g_pose.translation = g_latest_translation_odom;
-
-                // IMU is used for rotation in fused
-                if (pose_source == PoseSource::wheel_odom){
-                    g_pose.quaternion = g_latest_quat_odom;
+                g_pose.translation = wheel_translation;
+                if (pose_source == PoseSource::wheel_odom) {
+                    g_pose.quaternion = wheel_quaternion;
                 }
+                pose_copy = g_pose;
+            } else {
+                std::lock_guard<std::mutex> lk(m_pose);
                 pose_copy = g_pose;
             }
 
@@ -546,7 +567,10 @@ int main(){
                 continue;
             }
 
-            const controls::Pose2D fused_pose{x, y, yaw_odom};
+            const controls::Pose2D fused_pose{
+                pose_copy.translation.x,
+                pose_copy.translation.y,
+                core::quat_to_euler_yaw(pose_copy.quaternion)};
             const double dt_seconds = std::max(
                 1e-3,
                 static_cast<double>(std::max(1, odom.sample_period_ms)) * 1e-3);
