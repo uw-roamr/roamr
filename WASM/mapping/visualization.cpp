@@ -91,7 +91,7 @@ void draw_pose_layer(
                 snapshot.meta, gx1, gy1, s_cur_w, s_cur_h, scale, off_x, off_y, &px1, &py1)) {
             continue;
         }
-        draw_line(px0, py0, px1, py1, 255, 255, 255, 255, painted);
+        draw_line(px0, py0, px1, py1, 80, 0, 128, 255, painted);
     }
 
     const core::PoseSE2d& pose = snapshot.pose;
