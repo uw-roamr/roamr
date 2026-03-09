@@ -150,6 +150,8 @@ int main(){
     });
 
     std::thread imu_thread([&m_imu, &m_pose](){
+        using Clock = std::chrono::steady_clock;
+        const auto target_interval = std::chrono::microseconds(sensors::IMUIntervalMicrosecond);
         double g_last_logged_imu_timestamp = -1.0;
         double g_last_calib_timestamp = -1.0;
 
@@ -162,8 +164,8 @@ int main(){
         wasm_log_line("IMU ready");
 
         static sensors::IMUData imu_copy;
+        auto last_sample_time = Clock::now();
         while(true){
-            std::this_thread::sleep_for(std::chrono::microseconds(sensors::IMUIntervalMicrosecond));
             {
                 std::lock_guard<std::mutex> lk(m_imu);
                 read_imu(&g_imu_calib.new_write_slot());
@@ -186,21 +188,27 @@ int main(){
                 // wasm_log_line("imu: " + std::to_string(imu_copy.timestamp) + ", " + std::to_string(imu_copy.gyro_z));
             }
             g_imu_preintegrator.integrate(imu_copy);
+            const auto curr_time = Clock::now();
+            const auto elapsed = curr_time - last_sample_time;
+            if (elapsed < target_interval) {
+                std::this_thread::sleep_for(target_interval - elapsed);
+            }
+            last_sample_time = Clock::now();
         }
     });
     std::thread lidar_camera_thread([&m_lc](){
+        using Clock = std::chrono::steady_clock;
+        const auto target_interval = std::chrono::milliseconds(sensors::LidarCameraIntervalMs);
         int write_idx = 0;
+        auto last_sample_time = Clock::now();
 
         while(true){
-            std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(sensors::LidarCameraIntervalMs)));
-
             const int in_use = g_lc_in_use_idx.load(std::memory_order_acquire);
             if (write_idx == in_use) {
                 write_idx = 1 - write_idx;
             }
             if (write_idx == in_use) {
                 // Both slots claimed — shouldn't happen with 2 buffers but yield defensively.
-                std::this_thread::yield();
                 continue;
             }
 
@@ -226,6 +234,12 @@ int main(){
             }
 
             write_idx = 1 - write_idx;
+            const auto curr_time = Clock::now();
+            const auto elapsed = curr_time - last_sample_time;
+            if (elapsed < target_interval) {
+                std::this_thread::sleep_for(target_interval - elapsed);
+            }
+            last_sample_time = Clock::now();
         }
     });
 
@@ -254,12 +268,14 @@ int main(){
             ready_idx = g_lc_ready_idx.exchange(kUnusedIdx, std::memory_order_acq_rel);
         }
         if (ready_idx < 0) {
+            std::this_thread::yield();
             continue;
         }
         g_lc_in_use_idx.store(ready_idx, std::memory_order_release);
         const sensors::LidarCameraData& lc_data = g_lc_buffers[ready_idx];
         if (lc_data.points_size <= 0) {
             g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
+            std::this_thread::yield();
             continue;
         }
         core::PoseSE3d body_to_world;
@@ -275,6 +291,7 @@ int main(){
         const bool do_map_update = (map_timestamp - last_map_timestamp >= mapping::mapMinIntervalSeconds);
         if (!do_map_update) {
             g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
+            std::this_thread::yield();
             continue;
         }
         last_map_timestamp = map_timestamp;
@@ -290,7 +307,7 @@ int main(){
         }
         g_map_update_revision.fetch_add(1, std::memory_order_acq_rel);
 
-        wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
+        // wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
 
         // planning::bridge::update_plan_overlay(
         //     body_to_world,
@@ -313,12 +330,10 @@ int main(){
 
 
     // std::thread telemetry_thread([](){
-    //     // Dedicated visualization thread: blocks until the mapping thread
-    //     // enqueues a render request, then draws the occupancy grid and ships
-    //     // the RGBA frame to the host — completely decoupled from scan ingestion.
-    //     while(true){
-    //         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    //         // mapping::visualization::wait_and_render(g_map_frame);
+    //     // Dedicated vis thread: blocks until the mapping thread publishes a
+    //     // new MapSnapshot, then renders + ships the RGBA frame to the host.
+    //     // Completely decoupled from scan ingestion.
+    //     while (true) {
     //     }
     // });
 

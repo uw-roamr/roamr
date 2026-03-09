@@ -68,5 +68,5 @@ namespace sensors{
   WASM_IMPORT("host", "read_lidar_camera") void read_lidar_camera(LidarCameraData *data);
 
   constexpr double LidarCameraRefreshHz = 10.0;
-  constexpr int LidarCameraIntervalMs = static_cast<int>(1000.0 / LidarCameraRefreshHz);
+  constexpr int LidarCameraIntervalMs = static_cast<int>(1000.0 / (LidarCameraRefreshHz * 2.1));
 }; //namespace sensors
