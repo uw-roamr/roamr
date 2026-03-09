@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "controls/motors.h"
+#include "core/math_utils.h"
 #include "controls/path_following.h"
 #include "core/telemetry.h"
 #include "mapping/map_update.h"
@@ -30,7 +31,6 @@ enum class RobotState{
 };
 static std::atomic<RobotState> g_state{RobotState::SENSOR_INIT};
 
-static bool g_map_initialized = false;
 static mapping::Map g_map;
 static mapping::MapImage g_map_image;
 static std::atomic<bool> g_first_map_update_done{false};
@@ -44,10 +44,9 @@ static std::atomic<bool> g_imu_ready{false};
 
 // lidar camera globals
 static sensors::CameraConfig g_cam_config;
-static sensors::LidarCameraData g_lc_buffers[2];
+static std::array<sensors::LidarCameraData, 2> g_lc_buffers;
 static std::atomic<int> g_lc_ready_idx{-1};
 static std::atomic<int> g_lc_in_use_idx{-1};
-static sensors::LidarCameraData g_rerun_lc;
 static std::atomic<bool> g_lc_ready{false};
 static std::mutex g_lc_cv_mutex;
 static std::condition_variable g_lc_cv;
@@ -394,9 +393,11 @@ int main(){
       double last_map_timestamp = -1.0;
       double map_timestamp = -1;
 
-      while (g_state != RobotState::AUTONOMY_ENGAGED && g_state != RobotState::AUTONOMY_INIT) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
+      RobotState state;
+      do{
+        state = g_state.load(std::memory_order_acquire);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      } while (state != RobotState::AUTONOMY_ENGAGED && state != RobotState::AUTONOMY_INIT);
 
       mapping::initialize_map(g_map);
       wasm_log_line("Map initialized");
@@ -432,12 +433,6 @@ int main(){
         const double pose_timestamp = pose_snapshot.timestamp;
 
         map_timestamp = std::max(lc_data.timestamp, pose_timestamp);
-        const bool do_map_update = (map_timestamp - last_map_timestamp >= mapping::mapMinIntervalSeconds);
-        if (!do_map_update) {
-            g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
-            std::this_thread::yield();
-            continue;
-        }
         last_map_timestamp = map_timestamp;
 
         // project all lc_data to map
@@ -458,6 +453,23 @@ int main(){
       }
     });
 
+    // only runs after a map update has occurred
+    std::thread planner_thread([](){
+        RobotState state;
+        do{
+            state = g_state.load(std::memory_order_acquire);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        } while (state != RobotState::AUTONOMY_INIT);
+
+        wasm_log_line("Planner initialized");
+
+        while(true){
+            // planning::bridge::update_plan_overlay
+        }
+
+
+    });
+
 
     // std::thread telemetry_thread([](){
     //     // Dedicated vis thread: blocks until the mapping thread publishes a
@@ -473,9 +485,7 @@ int main(){
         controls::PathFollower path_follower;
         std::vector<core::Vector3d> planned_path_world;
         uint64_t planned_path_revision = 0;
-        double x = 0.0;
-        double y = 0.0;
-        double yaw_odom = 0.0;
+        core::PoseSE2d wheel_pose{};
         double last_wheel_pose_log_timestamp = -1.0;
         bool goal_reached_logged = false;
 
@@ -494,10 +504,21 @@ int main(){
                 g_latest_wheel_odom = odom;
             }
 
-            sensors::integrate_wheel_odometry(odom, &x, &y, &yaw_odom);
-            const core::Vector3d wheel_translation{x, y, 0.0};
-            const core::Vector4d wheel_quaternion{
-                0.0, 0.0, std::sin(yaw_odom * 0.5), std::cos(yaw_odom * 0.5)};
+            if (pose_source == PoseSource::fused_IMU_wheel_odom) {
+                core::Vector4d imu_quat_copy;
+                {
+                    std::lock_guard<std::mutex> lk(m_pose);
+                    imu_quat_copy = g_pose.quaternion;
+                }
+                const double imu_yaw = core::quat_to_euler_yaw(
+                        core::quat_normalize(imu_quat_copy));
+                // In fused mode, wheel odometry contributes distance while IMU yaw
+                // is used continuously as the robot heading.
+                sensors::integrate_wheel_odometry(odom, imu_yaw, wheel_pose);
+            } else {
+                sensors::integrate_wheel_odometry(odom, wheel_pose);
+            }
+            const core::Vector3d wheel_translation{wheel_pose.x, wheel_pose.y, 0.0};
 
             sensors::PoseLog pose_copy{};
             if (pose_source == PoseSource::wheel_odom || pose_source == PoseSource::fused_IMU_wheel_odom) {
@@ -505,6 +526,8 @@ int main(){
                 g_pose.timestamp = odom.timestamp;
                 g_pose.translation = wheel_translation;
                 if (pose_source == PoseSource::wheel_odom) {
+                    const core::Vector4d wheel_quaternion{
+                        0.0, 0.0, std::sin(wheel_pose.theta * 0.5), std::cos(wheel_pose.theta * 0.5)};
                     g_pose.quaternion = wheel_quaternion;
                 }
                 pose_copy = g_pose;
@@ -582,6 +605,7 @@ int main(){
     imu_thread.join();
     lidar_camera_thread.join();
     mapping_thread.join();
+    planner_thread.join();
     // telemetry_thread.join();
-    // control_thread.join();
+    control_thread.join();
 }

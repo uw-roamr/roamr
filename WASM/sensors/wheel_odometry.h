@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdint>
 
+#include "core/pose/se2.h"
 #include "core/wasm_utils.h"
 
 namespace sensors {
@@ -59,24 +60,31 @@ inline WheelSpeedMetersPerSec wheel_speed_from_odometry(const WheelOdometryData&
   };
 }
 
-void integrate_wheel_odometry(
+inline void integrate_wheel_odometry(
     const WheelOdometryData& odom,
-    double* x,
-    double* y,
-    double* yaw) {
-    if (!x || !y || !yaw) {
-        return;
-    }
-    const WheelDeltaMeters delta = wheel_delta_meters_from_ticks(odom);
-    const double dl = delta.left;
-    const double dr = delta.right;
+    core::PoseSE2d& pose) {
+  const WheelDeltaMeters delta = wheel_delta_meters_from_ticks(odom);
+  const double dl = delta.left;
+  const double dr = delta.right;
 
-    const double ds = 0.5 * (dl + dr);
-    const double dtheta = (dr - dl) / kWheelBaseMeters;
-    const double heading_mid = *yaw + (0.5 * dtheta);
+  const double ds = 0.5 * (dl + dr);
+  const double dtheta = (dr - dl) / kWheelBaseMeters;
+  const double heading_mid = pose.theta + (0.5 * dtheta);
 
-    *x += ds * std::cos(heading_mid);
-    *y += ds * std::sin(heading_mid);
-    *yaw += dtheta;
+  pose.x += ds * std::cos(heading_mid);
+  pose.y += ds * std::sin(heading_mid);
+  pose.theta += dtheta;
+}
+
+inline void integrate_wheel_odometry(
+    const WheelOdometryData& odom,
+    double heading,
+    core::PoseSE2d& pose) {
+  const WheelDeltaMeters delta = wheel_delta_meters_from_ticks(odom);
+  const double ds = 0.5 * (delta.left + delta.right);
+
+  pose.x -= ds * std::cos(heading);
+  pose.y -= ds * std::sin(heading);
+  pose.theta = heading;
 }
 } // namespace sensors
