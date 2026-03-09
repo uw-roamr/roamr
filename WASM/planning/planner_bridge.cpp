@@ -4,8 +4,10 @@
 #include <chrono>
 #include <cmath>
 #include <mutex>
+#include <sstream>
 #include <vector>
 
+#include "core/telemetry.h"
 #include "mapping/map.h"
 #include "planning/frontier_explorer.h"
 #include "planning/planner.h"
@@ -274,6 +276,13 @@ void update_plan_overlay(
     }
 
     const PlanResult planned = g_planner.plan_to_grid(planner_map, start_cell, goal_cell);
+    std::ostringstream plan_log;
+    plan_log << "[planning] direct goal result success=" << (planned.success ? 1 : 0)
+             << " start=(" << start_cell.x << "," << start_cell.y << ")"
+             << " goal=(" << goal_cell.x << "," << goal_cell.y << ")"
+             << " path_cells=" << planned.path_grid.size()
+             << " message=" << planned.message;
+    wasm_log_line(plan_log.str());
     update_overlay_from_plan_result(map, planned);
     return;
   }

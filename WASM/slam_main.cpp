@@ -79,7 +79,7 @@ enum class PoseSource{
 };
 // IMU preintegration drifts over time, so the shared autonomy/map pose should
 // not treat it as a drop-in orientation estimate.
-static constexpr PoseSource pose_source = PoseSource::IMU;
+static constexpr PoseSource pose_source = PoseSource::fused_IMU_wheel_odom;
 static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
 static constexpr int32_t kPathFollowHoldMs = 120;
@@ -232,7 +232,7 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
 
 // Tiny planner demo: set a fixed map-view pixel goal at startup.
 // Toggle off when using host-provided goal clicks.
-static constexpr bool kEnablePlannerDemoGoal = false;
+static constexpr bool kEnablePlannerDemoGoal = true;
 static constexpr int kPlannerDemoGoalPixelX = 160;
 static constexpr int kPlannerDemoGoalPixelY = 128;
 }; //namespace
@@ -283,7 +283,7 @@ int main(){
         }
 
         wasm_log_line("AUTONOMY_INIT -> AUTONOMY_ENGAGED");
-        // g_state.store(RobotState::AUTONOMY_ENGAGED, std::memory_order_release);
+        g_state.store(RobotState::AUTONOMY_ENGAGED, std::memory_order_release);
     });
 
     std::thread imu_thread([&m_imu, &m_pose](){

@@ -145,8 +145,7 @@ inline std::vector<int8_t> inflate_obstacles(
     for (int32_t x = 0; x < map.width; ++x) {
       const int8_t cell = map.data[map.index(x, y)];
       const bool is_occupied = cell >= cfg.occupied_threshold;
-      const bool is_unknown_and_blocking = cell < 0 && cfg.treat_unknown_as_occupied;
-      if (!is_occupied && !is_unknown_and_blocking) {
+      if (!is_occupied) {
         continue;
       }
       for (const GridCoord& d : offsets) {

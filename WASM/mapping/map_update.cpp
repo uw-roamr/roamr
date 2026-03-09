@@ -2,6 +2,7 @@
 
 #include "mapping/map_metadata.h"
 #include "mapping/visualization.h"
+#include "planning/planner_bridge.h"
 
 #include <algorithm>
 #include <chrono>
@@ -134,6 +135,11 @@ namespace mapping {
     }
 
     map.draw_map(g_pose_history_count, used_points);
+    planning::bridge::update_plan_overlay(
+        map,
+        body_to_world,
+        mapWidth,
+        mapHeight);
 
     visualization::render_map_frame(
         map,
