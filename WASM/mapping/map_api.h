@@ -4,6 +4,9 @@
 
 
 namespace mapping{
+  constexpr int mapMaxPoints = 20000;
+  constexpr int kMapMaxPoses = 4096;
+
   struct MapFrame {
     double timestamp;
     int32_t width;
