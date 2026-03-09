@@ -2,9 +2,10 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <iostream>
-#include <mutex>
 #include <condition_variable>
+#include <iostream>
+#include <limits>
+#include <mutex>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -36,14 +37,9 @@ static mapping::MapImage g_map_image;
 static std::atomic<bool> g_first_map_update_done{false};
 static std::atomic<uint64_t> g_map_update_revision{0};
 static std::mutex g_map_publish_mutex;
-static std::condition_variable g_map_publish_cv;
 static mapping::MapSnapshot g_latest_map_snapshot;
-static uint64_t g_latest_map_snapshot_revision = 0;
 static std::mutex g_plan_publish_mutex;
-static std::condition_variable g_plan_publish_cv;
-static mapping::MapSnapshot g_latest_planned_snapshot;
 static planning::bridge::PlanningOverlay g_latest_plan_overlay;
-static uint64_t g_latest_completed_plan_revision = 0;
 
 // IMU globals
 static sensors::calibration::IMUHistoryBuffer g_imu_history;
@@ -64,6 +60,7 @@ static std::condition_variable g_lc_cv;
 static std::atomic<bool> g_wheel_odom_ready{false};
 static std::mutex g_latest_wheel_odom_mutex;
 static sensors::WheelOdometryData g_latest_wheel_odom = {0.0, -1, 0, 0, 0};
+static sensors::PoseLog g_pose;
 
 static bool read_latest_wheel_odom_snapshot(sensors::WheelOdometryData* out) {
     if (!out) {
@@ -79,7 +76,43 @@ static bool read_latest_wheel_odom_snapshot(sensors::WheelOdometryData* out) {
     return true;
 }
 
-static sensors::PoseLog g_pose;
+static bool read_latest_pose_snapshot(std::mutex& m_pose, sensors::PoseLog* out) {
+    if (!out) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lk(m_pose);
+    *out = g_pose;
+    return out->timestamp > 0.0;
+}
+
+static core::PoseSE2d pose_log_to_se2(const sensors::PoseLog& pose) {
+    return core::PoseSE2d{
+        pose.translation.x,
+        pose.translation.y,
+        core::quat_to_euler_yaw(core::quat_normalize(pose.quaternion))};
+}
+
+static bool pose_to_map_cell(
+    const mapping::MapSnapshot& snapshot,
+    const core::PoseSE2d& pose,
+    planning::GridCoord* out_cell) {
+    if (!out_cell ||
+        snapshot.meta.width <= 0 ||
+        snapshot.meta.height <= 0 ||
+        snapshot.meta.resolution_m <= 0.0) {
+        return false;
+    }
+    const int32_t gx = static_cast<int32_t>(
+        std::floor((pose.x - snapshot.meta.origin_x_m) / snapshot.meta.resolution_m));
+    const int32_t gy = static_cast<int32_t>(
+        std::floor((pose.y - snapshot.meta.origin_y_m) / snapshot.meta.resolution_m));
+    if (gx < 0 || gx >= snapshot.meta.width || gy < 0 || gy >= snapshot.meta.height) {
+        return false;
+    }
+    *out_cell = planning::GridCoord{gx, gy};
+    return true;
+}
+
 enum class PoseSource{
     IMU,
     wheel_odom,
@@ -94,6 +127,12 @@ static constexpr int32_t kPathFollowHoldMs = 120;
 static constexpr bool kEnableWheelPoseLogging = true;
 static constexpr double kWheelPoseLogIntervalSec = 0.2;
 static constexpr bool kEnableVerboseAutonomyLogs = false;
+static constexpr int32_t kPlannerPollMs = 50;
+static constexpr double kPlannerMinIntervalSec = 0.35;
+static constexpr int32_t kTelemetryRenderIntervalMs = 66;
+static constexpr double kPoseTrailMinDistanceM = 0.05;
+static constexpr double kPoseTrailMinYawDeltaRad = 10.0 * core::pi / 180.0;
+static constexpr double kPoseTrailMinIntervalSec = 0.15;
 
 struct OuterLoopTurnPidConfig {
     double kp_omega_per_rad;
@@ -403,12 +442,10 @@ int main(){
     });
 
 
-    std::thread mapping_thread([&m_lc, &m_pose](){
-      using Clock = std::chrono::steady_clock;
+    std::thread mapping_thread([&m_pose](){
       constexpr int kUnusedIdx = -1;
 
       double last_map_timestamp = -1.0;
-      double map_timestamp = -1;
 
       RobotState state;
       do{
@@ -448,11 +485,16 @@ int main(){
         body_to_world.quaternion = pose_snapshot.quaternion;
         body_to_world.translation = pose_snapshot.translation;
         const double pose_timestamp = pose_snapshot.timestamp;
+        const double candidate_timestamp = std::max(lc_data.timestamp, pose_timestamp);
+        if (candidate_timestamp <= 0.0 ||
+            (last_map_timestamp > 0.0 &&
+             (candidate_timestamp <= last_map_timestamp ||
+              (candidate_timestamp - last_map_timestamp) < mapping::mapMinIntervalSeconds))) {
+            g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
+            continue;
+        }
 
-        map_timestamp = std::max(lc_data.timestamp, pose_timestamp);
-        last_map_timestamp = map_timestamp;
-
-        // project all lc_data to map
+        // project the filtered lidar scan into the occupancy grid.
         mapping::update_map_from_lidar(
             g_map,
             lc_data,
@@ -467,15 +509,14 @@ int main(){
         if (mapping::build_map_snapshot(
                 g_map,
                 body_to_world,
-                map_timestamp,
+                candidate_timestamp,
                 map_revision,
                 &snapshot)) {
             {
                 std::lock_guard<std::mutex> lk(g_map_publish_mutex);
                 g_latest_map_snapshot = std::move(snapshot);
-                g_latest_map_snapshot_revision = map_revision;
             }
-            g_map_publish_cv.notify_one();
+            last_map_timestamp = candidate_timestamp;
         }
 
         // wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
@@ -485,7 +526,8 @@ int main(){
     });
 
     // only runs after a map update has occurred
-    std::thread planner_thread([](){
+    std::thread planner_thread([&m_pose](){
+        using Clock = std::chrono::steady_clock;
         RobotState state;
         do{
             state = g_state.load(std::memory_order_acquire);
@@ -494,18 +536,59 @@ int main(){
 
         wasm_log_line("Planner initialized");
         uint64_t last_planned_revision = 0;
+        uint64_t last_goal_revision = planning::bridge::latest_goal_revision();
+        planning::GridCoord last_start_cell{};
+        bool have_last_start_cell = false;
+        auto last_plan_time = Clock::time_point::min();
 
         while(true){
             mapping::MapSnapshot snapshot;
             {
-                std::unique_lock<std::mutex> lk(g_map_publish_mutex);
-                g_map_publish_cv.wait(lk, [&]{
-                    return g_latest_map_snapshot_revision > last_planned_revision;
-                });
+                std::lock_guard<std::mutex> lk(g_map_publish_mutex);
                 snapshot = g_latest_map_snapshot;
             }
-            wasm_log_line("planning");
+            if (!snapshot.valid()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(kPlannerPollMs));
+                continue;
+            }
 
+            sensors::PoseLog pose_snapshot{};
+            if (read_latest_pose_snapshot(m_pose, &pose_snapshot)) {
+                snapshot.pose = pose_log_to_se2(pose_snapshot);
+                snapshot.timestamp = std::max(snapshot.timestamp, pose_snapshot.timestamp);
+            }
+
+            const uint64_t goal_revision = planning::bridge::latest_goal_revision();
+            planning::GridCoord start_cell{};
+            const bool have_start_cell = pose_to_map_cell(snapshot, snapshot.pose, &start_cell);
+            const bool start_cell_changed =
+                have_start_cell &&
+                (!have_last_start_cell || !(start_cell == last_start_cell));
+            const bool map_changed = snapshot.map_revision != last_planned_revision;
+            const bool goal_changed = goal_revision != last_goal_revision;
+            const auto now = Clock::now();
+            const double elapsed_since_plan = (last_plan_time == Clock::time_point::min())
+                ? std::numeric_limits<double>::infinity()
+                : std::chrono::duration<double>(now - last_plan_time).count();
+            if (!goal_changed &&
+                !last_planned_revision &&
+                !map_changed &&
+                !start_cell_changed) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(kPlannerPollMs));
+                continue;
+            }
+            if (!goal_changed &&
+                last_planned_revision > 0 &&
+                !map_changed &&
+                !start_cell_changed) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(kPlannerPollMs));
+                continue;
+            }
+            if (!goal_changed &&
+                elapsed_since_plan < kPlannerMinIntervalSec) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(kPlannerPollMs));
+                continue;
+            }
 
             planning::bridge::PlanningOverlay overlay =
                 planning::bridge::update_plan_overlay(
@@ -513,35 +596,89 @@ int main(){
                     kRenderWidth,
                     kRenderHeight);
             last_planned_revision = snapshot.map_revision;
+            last_goal_revision = goal_revision;
+            last_plan_time = now;
+            if (have_start_cell) {
+                last_start_cell = start_cell;
+                have_last_start_cell = true;
+            }
             {
                 std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
-                g_latest_planned_snapshot = std::move(snapshot);
                 g_latest_plan_overlay = std::move(overlay);
-                g_latest_completed_plan_revision = last_planned_revision;
             }
-            g_plan_publish_cv.notify_one();
         }
 
 
     });
 
 
-    std::thread telemetry_thread([](){
+    std::thread telemetry_thread([&m_pose](){
         mapping::PoseTrailState pose_trail;
-        uint64_t last_rendered_revision = 0;
+        uint64_t last_rendered_map_revision = 0;
+        uint64_t last_rendered_path_revision = 0;
+        double last_rendered_pose_timestamp = -1.0;
+        double last_pose_trail_timestamp = -1.0;
+        core::PoseSE2d last_trail_pose{};
+        bool have_last_trail_pose = false;
         while (true) {
             mapping::MapSnapshot snapshot;
             planning::bridge::PlanningOverlay overlay;
             {
-                std::unique_lock<std::mutex> lk(g_plan_publish_mutex);
-                g_plan_publish_cv.wait(lk, [&]{
-                    return g_latest_completed_plan_revision > last_rendered_revision;
-                });
-                snapshot = g_latest_planned_snapshot;
+                std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+                snapshot = g_latest_map_snapshot;
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
                 overlay = g_latest_plan_overlay;
             }
+            if (!snapshot.valid()) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(kTelemetryRenderIntervalMs));
+                continue;
+            }
 
-            mapping::append_pose_to_trail(snapshot, &pose_trail);
+            sensors::PoseLog pose_snapshot{};
+            if (!read_latest_pose_snapshot(m_pose, &pose_snapshot)) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(kTelemetryRenderIntervalMs));
+                continue;
+            }
+            snapshot.pose = pose_log_to_se2(pose_snapshot);
+            snapshot.timestamp = std::max(snapshot.timestamp, pose_snapshot.timestamp);
+
+            const uint64_t path_revision = planning::bridge::copy_latest_plan_world(nullptr);
+            const bool map_changed = snapshot.map_revision != last_rendered_map_revision;
+            const bool path_changed = path_revision != last_rendered_path_revision;
+            const bool pose_changed = pose_snapshot.timestamp > last_rendered_pose_timestamp;
+            if (!map_changed && !path_changed && !pose_changed) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(kTelemetryRenderIntervalMs));
+                continue;
+            }
+
+            const bool time_gate =
+                (last_pose_trail_timestamp < 0.0) ||
+                ((pose_snapshot.timestamp - last_pose_trail_timestamp) >=
+                 kPoseTrailMinIntervalSec);
+            const double dx = snapshot.pose.x - last_trail_pose.x;
+            const double dy = snapshot.pose.y - last_trail_pose.y;
+            const double dist = std::sqrt(dx * dx + dy * dy);
+            const double dyaw = have_last_trail_pose
+                ? std::abs(core::normalize_angle(snapshot.pose.theta - last_trail_pose.theta))
+                : std::numeric_limits<double>::infinity();
+            if (time_gate &&
+                (!have_last_trail_pose ||
+                 dist >= kPoseTrailMinDistanceM ||
+                 dyaw >= kPoseTrailMinYawDeltaRad)) {
+                if (pose_trail.poses.size() >=
+                    static_cast<size_t>(mapping::kMaxPoseTrailPoints)) {
+                    pose_trail.poses.erase(pose_trail.poses.begin());
+                }
+                pose_trail.poses.push_back(snapshot.pose);
+                last_trail_pose = snapshot.pose;
+                last_pose_trail_timestamp = pose_snapshot.timestamp;
+                have_last_trail_pose = true;
+            }
             mapping::visualization::render_map_frame(
                 snapshot,
                 pose_trail,
@@ -549,7 +686,11 @@ int main(){
                 kRenderWidth,
                 kRenderHeight,
                 g_map_image);
-            last_rendered_revision = snapshot.map_revision;
+            last_rendered_map_revision = snapshot.map_revision;
+            last_rendered_path_revision = path_revision;
+            last_rendered_pose_timestamp = pose_snapshot.timestamp;
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kTelemetryRenderIntervalMs));
         }
     });
 
@@ -663,6 +804,7 @@ int main(){
                 }
                 path_follower.clear_path();
                 motors.stop();
+                scan_4x90(motors, m_pose);
                 continue;
             }
             goal_reached_logged = false;

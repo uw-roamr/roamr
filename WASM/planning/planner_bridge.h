@@ -18,6 +18,7 @@ struct PlanningOverlay {
 
 void set_goal_map_pixel(int32_t x, int32_t y);
 void clear_goal();
+uint64_t latest_goal_revision();
 
 PlanningOverlay update_plan_overlay(
     const mapping::MapSnapshot& snapshot,

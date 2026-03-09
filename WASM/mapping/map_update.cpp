@@ -3,9 +3,11 @@
 #include "mapping/map_metadata.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <limits>
 
 namespace mapping {
   constexpr int mapWidth = 256;
@@ -24,6 +26,7 @@ namespace mapping {
   // Color map-eligible 3D points in rerun for fast filter debugging.
   constexpr bool kRerunHighlightFiltered = true;
   constexpr double kMapLogIntervalSec = 0.1;
+  constexpr int kOccupancyRayBins = 360;
 
 
   struct MapPerfWindow {
@@ -38,9 +41,33 @@ namespace mapping {
 
   static MapPerfWindow g_map_perf_window;
 
+  struct RayBinSample {
+    bool has_hit = false;
+    bool has_free = false;
+    double hit_range2 = std::numeric_limits<double>::infinity();
+    double free_range2 = std::numeric_limits<double>::infinity();
+    double hit_world_x = 0.0;
+    double hit_world_y = 0.0;
+    double free_world_x = 0.0;
+    double free_world_y = 0.0;
+  };
+
   inline double elapsed_ms(const std::chrono::steady_clock::time_point& start,
                            const std::chrono::steady_clock::time_point& end) {
     return std::chrono::duration<double, std::milli>(end - start).count();
+  }
+
+  inline int ray_bin_from_angle(double angle_rad) {
+    const double wrapped = core::normalize_angle(angle_rad);
+    const double unit = (wrapped + core::pi) / (2.0 * core::pi);
+    int bin = static_cast<int>(std::floor(unit * static_cast<double>(kOccupancyRayBins)));
+    if (bin < 0) {
+      bin = 0;
+    }
+    if (bin >= kOccupancyRayBins) {
+      bin = kOccupancyRayBins - 1;
+    }
+    return bin;
   }
 
   void initialize_map(Map& map){
@@ -121,8 +148,10 @@ namespace mapping {
     constexpr float max_range2 = mapMaxRangeMeters * mapMaxRangeMeters;
     int used_points = 0;
     int free_points = 0;
+    std::array<RayBinSample, kOccupancyRayBins> ray_bins{};
 
-    for (int i = 0; i < total_points; i += 3) {
+    for (int point_idx = 0; point_idx < total_points; ++point_idx) {
+      const int i = point_idx * 3;
       const float x = lc_data.points[i + 0];
       const float y = lc_data.points[i + 1];
       const float z = lc_data.points[i + 2];
@@ -130,6 +159,11 @@ namespace mapping {
       if (points_rdf) {
         sensor_point = core::rdf_to_flu(sensor_point);
       }
+
+      const core::Vector3d body_point = core::quat_rotate(q_point_to_body, sensor_point);
+      const double planar_range2 =
+          body_point.x * body_point.x + body_point.y * body_point.y;
+      const int ray_bin = ray_bin_from_angle(std::atan2(body_point.y, body_point.x));
 
       core::Vector3d world_point = core::quat_rotate(q_point_to_world, sensor_point);
       world_point += t_body_to_world;
@@ -145,20 +179,42 @@ namespace mapping {
       const bool in_range = (r2 <= max_range2);
       const bool filtered = keep && in_range;
 
-      if (filtered && used_points < kMaxMapPoints) {
+      if (filtered) {
         core::Vector3d map_point = core::quat_rotate(q_point_to_world_yaw, sensor_point);
         map_point.x += t_body_to_world.x;
         map_point.y += t_body_to_world.y;
-        map.set_point(used_points, map_point.x, map_point.y);
-        used_points += 1;
-      } else if (keep && !in_range && free_points < kMaxFreeRays) {
+        RayBinSample& bin = ray_bins[ray_bin];
+        if (!bin.has_hit || planar_range2 < bin.hit_range2) {
+          bin.has_hit = true;
+          bin.hit_range2 = planar_range2;
+          bin.hit_world_x = map_point.x;
+          bin.hit_world_y = map_point.y;
+        }
+      } else if (keep && !in_range && r2 > 1e-9) {
         // Clip the ray to the max-range radius and register it as free-space
         // evidence. No occupancy hit will be recorded at the endpoint.
         const double r = std::sqrt(static_cast<double>(r2));
         const double clip_x = t_body_to_world.x + rdx / r * mapMaxRangeMeters;
         const double clip_y = t_body_to_world.y + rdy / r * mapMaxRangeMeters;
-        map.set_free_point(free_points, clip_x, clip_y);
-        free_points += 1;
+        RayBinSample& bin = ray_bins[ray_bin];
+        if (!bin.has_hit && (!bin.has_free || planar_range2 < bin.free_range2)) {
+          bin.has_free = true;
+          bin.free_range2 = planar_range2;
+          bin.free_world_x = clip_x;
+          bin.free_world_y = clip_y;
+        }
+      }
+    }
+
+    for (const RayBinSample& bin : ray_bins) {
+      if (bin.has_hit && used_points < kMaxMapPoints) {
+        map.set_point(used_points, bin.hit_world_x, bin.hit_world_y);
+        ++used_points;
+        continue;
+      }
+      if (bin.has_free && free_points < kMaxFreeRays) {
+        map.set_free_point(free_points, bin.free_world_x, bin.free_world_y);
+        ++free_points;
       }
     }
 

@@ -1,6 +1,7 @@
 #include "planning/planner_bridge.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <mutex>
@@ -28,6 +29,7 @@ struct PlannerGoalPixel {
 
 std::mutex g_planner_goal_mutex;
 PlannerGoalPixel g_planner_goal;
+std::atomic<uint64_t> g_goal_revision{0};
 std::mutex g_planned_path_mutex;
 std::vector<core::Vector3d> g_planned_path_world;
 uint64_t g_planned_path_revision = 0;
@@ -215,11 +217,19 @@ void set_goal_map_pixel(int32_t x, int32_t y) {
   g_planner_goal.active = true;
   g_planner_goal.x = x;
   g_planner_goal.y = y;
+  g_goal_revision.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void clear_goal() {
   std::lock_guard<std::mutex> lk(g_planner_goal_mutex);
-  g_planner_goal.active = false;
+  if (g_planner_goal.active) {
+    g_planner_goal.active = false;
+    g_goal_revision.fetch_add(1, std::memory_order_acq_rel);
+  }
+}
+
+uint64_t latest_goal_revision() {
+  return g_goal_revision.load(std::memory_order_acquire);
 }
 
 PlanningOverlay update_plan_overlay(
