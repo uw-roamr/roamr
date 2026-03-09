@@ -260,6 +260,56 @@
             color: #667eea;
         }
 
+        .teleop-metrics {
+            width: 100%;
+            max-width: 560px;
+            background: white;
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: inset 0 0 0 1px rgba(102, 126, 234, 0.08);
+        }
+
+        .teleop-metrics-title {
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 12px;
+        }
+
+        .teleop-metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px;
+        }
+
+        .teleop-metric-card {
+            background: #f5f7ff;
+            border-radius: 10px;
+            padding: 12px;
+        }
+
+        .teleop-metric-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: #6a6f85;
+            margin-bottom: 6px;
+        }
+
+        .teleop-metric-value {
+            font-family: monospace;
+            font-size: 18px;
+            font-weight: bold;
+            color: #334;
+        }
+
+        .teleop-metric-footnote {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #666;
+            font-family: monospace;
+        }
+
         .video-section {
             display: none;
             margin: 30px 0;
@@ -376,6 +426,28 @@
                         <span id="rightMotor" class="motor-number">0%</span>
                     </div>
                 </div>
+                <div class="teleop-metrics">
+                    <div class="teleop-metrics-title">Teleop Latency</div>
+                    <div class="teleop-metrics-grid">
+                        <div class="teleop-metric-card">
+                            <div class="teleop-metric-label">WS RTT</div>
+                            <div id="teleopRtt" class="teleop-metric-value">-</div>
+                        </div>
+                        <div class="teleop-metric-card">
+                            <div class="teleop-metric-label">Phone -> BLE</div>
+                            <div id="teleopPhoneBle" class="teleop-metric-value">-</div>
+                        </div>
+                        <div class="teleop-metric-card">
+                            <div class="teleop-metric-label">BLE -> Odom</div>
+                            <div id="teleopBleOdom" class="teleop-metric-value">-</div>
+                        </div>
+                        <div class="teleop-metric-card">
+                            <div class="teleop-metric-label">Est. End-to-Motion</div>
+                            <div id="teleopEstimated" class="teleop-metric-value">-</div>
+                        </div>
+                    </div>
+                    <div id="teleopMetricDetails" class="teleop-metric-footnote">seq -, waiting for samples</div>
+                </div>
             </div>
         </div>
 
@@ -432,11 +504,27 @@
         const messageLog = document.getElementById('messageLog');
         const joystickContainer = document.getElementById('joystickContainer');
         const videoSection = document.getElementById('videoSection');
+        const teleopRttEl = document.getElementById('teleopRtt');
+        const teleopPhoneBleEl = document.getElementById('teleopPhoneBle');
+        const teleopBleOdomEl = document.getElementById('teleopBleOdom');
+        const teleopEstimatedEl = document.getElementById('teleopEstimated');
+        const teleopMetricDetailsEl = document.getElementById('teleopMetricDetails');
 
         // Joystick variables
         let joystickTimer = null;
         const SEND_INTERVAL = 50; // 50ms
         const HOLD_DURATION = 100; // 100ms
+        let nextTeleopSeq = 1;
+        const pendingTeleopSamples = new Map();
+
+        const teleopMetrics = {
+            lastSeq: null,
+            lastRttMs: null,
+            lastPhoneRxToBleMs: null,
+            lastBleToOdomMs: null,
+            lastEstimatedEndToMotionMs: null
+        };
+        let joystickInitialized = false;
 
         // Video streaming variables
         let videoFrameCount = 0;
@@ -470,6 +558,13 @@
                 document.getElementById('videoPlaceholder').style.display = 'block';
                 videoFrameCount = 0;
                 videoFpsCounter = 0;
+                pendingTeleopSamples.clear();
+                teleopMetrics.lastSeq = null;
+                teleopMetrics.lastRttMs = null;
+                teleopMetrics.lastPhoneRxToBleMs = null;
+                teleopMetrics.lastBleToOdomMs = null;
+                teleopMetrics.lastEstimatedEndToMotionMs = null;
+                updateTeleopMetricDisplay();
             }
         }
 
@@ -510,7 +605,7 @@
                     if (event.data instanceof ArrayBuffer) {
                         handleVideoFrame(event.data);
                     } else {
-                        addLog(`📱 Received: ${event.data}`);
+                        handleServerTextMessage(event.data);
                     }
                 };
 
@@ -586,8 +681,130 @@
             }
         }
 
+        function handleServerTextMessage(message) {
+            let parsed = null;
+            try {
+                parsed = JSON.parse(message);
+            } catch (_) {
+                parsed = null;
+            }
+
+            if (!parsed || typeof parsed !== 'object' || !parsed.type) {
+                addLog(`📱 Received: ${message}`);
+                return;
+            }
+
+            if (parsed.type === 'teleop_ack') {
+                handleTeleopAck(parsed);
+                return;
+            }
+
+            if (parsed.type === 'teleop_latency') {
+                handleTeleopLatency(parsed);
+                return;
+            }
+
+            if (parsed.type === 'teleop_latency_timeout') {
+                handleTeleopLatencyTimeout(parsed);
+                return;
+            }
+
+            addLog(`📱 Received: ${message}`);
+        }
+
+        function handleTeleopAck(message) {
+            const pending = pendingTeleopSamples.get(message.seq);
+            if (!pending) {
+                return;
+            }
+
+            pending.rttMs = performance.now() - pending.sentAtMs;
+            teleopMetrics.lastSeq = message.seq;
+            teleopMetrics.lastRttMs = pending.rttMs;
+            updateTeleopMetricDisplay();
+
+            if (!message.forwarded || !message.sampled_for_latency) {
+                pendingTeleopSamples.delete(message.seq);
+            }
+        }
+
+        function handleTeleopLatency(message) {
+            const pending = pendingTeleopSamples.get(message.seq);
+            const rttMs =
+                pending && Number.isFinite(pending.rttMs) ? pending.rttMs : teleopMetrics.lastRttMs;
+            const estimatedEndToMotionMs =
+                Number.isFinite(rttMs) ? (rttMs / 2.0) + message.phone_rx_to_odom_ms : null;
+
+            teleopMetrics.lastSeq = message.seq;
+            teleopMetrics.lastPhoneRxToBleMs = message.phone_rx_to_ble_ms;
+            teleopMetrics.lastBleToOdomMs = message.ble_to_odom_ms;
+            teleopMetrics.lastEstimatedEndToMotionMs = estimatedEndToMotionMs;
+            teleopMetricDetailsEl.textContent =
+                `seq ${message.seq}, odom ${message.odom_seq}, ticks (${message.sum_dl_ticks}, ${message.sum_dr_ticks})`;
+            updateTeleopMetricDisplay();
+            pendingTeleopSamples.delete(message.seq);
+        }
+
+        function handleTeleopLatencyTimeout(message) {
+            teleopMetrics.lastSeq = message.seq;
+            teleopMetricDetailsEl.textContent = `seq ${message.seq}, timeout waiting for odom`;
+            updateTeleopMetricDisplay();
+            pendingTeleopSamples.delete(message.seq);
+        }
+
+        function updateTeleopMetricDisplay() {
+            teleopRttEl.textContent = formatMetricMs(teleopMetrics.lastRttMs);
+            teleopPhoneBleEl.textContent = formatMetricMs(teleopMetrics.lastPhoneRxToBleMs);
+            teleopBleOdomEl.textContent = formatMetricMs(teleopMetrics.lastBleToOdomMs);
+            teleopEstimatedEl.textContent = formatMetricMs(teleopMetrics.lastEstimatedEndToMotionMs);
+
+            if (teleopMetrics.lastSeq === null && pendingTeleopSamples.size === 0) {
+                teleopMetricDetailsEl.textContent = 'seq -, waiting for samples';
+            }
+        }
+
+        function formatMetricMs(value) {
+            return Number.isFinite(value) ? `${value.toFixed(1)} ms` : '-';
+        }
+
+        function sendTeleopCommand(left, right, holdMs) {
+            if (!(ws && ws.readyState === WebSocket.OPEN)) {
+                return;
+            }
+
+            const seq = nextTeleopSeq++;
+            pendingTeleopSamples.set(seq, {
+                sentAtMs: performance.now(),
+                left,
+                right,
+                holdMs,
+                rttMs: null
+            });
+            trimPendingTeleopSamples();
+            ws.send(`TELEOP ${seq} ${left} ${right} ${holdMs}`);
+        }
+
+        function trimPendingTeleopSamples() {
+            const now = performance.now();
+            for (const [seq, pending] of pendingTeleopSamples.entries()) {
+                if ((now - pending.sentAtMs) > 5000) {
+                    pendingTeleopSamples.delete(seq);
+                }
+            }
+
+            while (pendingTeleopSamples.size > 128) {
+                const oldestSeq = pendingTeleopSamples.keys().next().value;
+                pendingTeleopSamples.delete(oldestSeq);
+            }
+        }
+
         // Joystick functionality
         function initJoystick() {
+            if (joystickInitialized) {
+                return;
+            }
+            joystickInitialized = true;
+
             const canvas = document.getElementById('joystick');
             const ctx = canvas.getContext('2d');
             const centerX = canvas.width / 2;
@@ -667,8 +884,7 @@
             function sendMotorCommand() {
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     const motors = calculateMotorValues();
-                    const message = `${motors.left} ${motors.right} ${HOLD_DURATION}`;
-                    ws.send(message);
+                    sendTeleopCommand(motors.left, motors.right, HOLD_DURATION);
                 }
             }
 
@@ -684,7 +900,7 @@
                 }
                 // Send stop command
                 if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(`0 0 ${HOLD_DURATION}`);
+                    sendTeleopCommand(0, 0, HOLD_DURATION);
                 }
             }
 
@@ -773,6 +989,7 @@
         // Focus message input when page loads
         window.addEventListener('load', () => {
             ipInput.focus();
+            updateTeleopMetricDisplay();
         });
     </script>
 </body>

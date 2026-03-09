@@ -10,6 +10,13 @@ import Network
 import Combine
 import CryptoKit
 
+private struct IncomingTeleopCommand {
+    let seq: Int
+    let left: Int
+    let right: Int
+    let holdMs: Int
+}
+
 class WebSocketManager: ObservableObject {
     static let shared = WebSocketManager()
 
@@ -174,13 +181,7 @@ class WebSocketManager: ObservableObject {
                         self.lastMessage = message
                         print("📱 Received WebSocket message: \(message)")
 
-                        // Forward to Bluetooth
-                        if let btManager = self.bluetoothManager {
-                            btManager.sendMessage(message)
-                            print("📤 Forwarded to Bluetooth: \(message)")
-                        } else {
-                            print("⚠️ Bluetooth manager not available")
-                        }
+                        self.handleIncomingMessage(message)
                     }
                 }
             }
@@ -323,6 +324,35 @@ class WebSocketManager: ObservableObject {
         }
     }
 
+    func publishTeleopLatencyMetric(_ metric: TeleopLatencyMetric) {
+        guard let payload = makeJSONString([
+            "type": "teleop_latency",
+            "seq": metric.seq,
+            "phone_rx_to_ble_ms": metric.phoneRxToBleMs,
+            "ble_to_odom_ms": metric.bleToOdomMs,
+            "phone_rx_to_odom_ms": metric.phoneRxToOdomMs,
+            "odom_seq": metric.odomSeq,
+            "sum_dl_ticks": metric.sumDlTicks,
+            "sum_dr_ticks": metric.sumDrTicks,
+            "left_percent": metric.leftPercent,
+            "right_percent": metric.rightPercent,
+            "hold_ms": metric.holdMs
+        ]) else {
+            return
+        }
+        broadcastTextMessage(payload)
+    }
+
+    func publishTeleopLatencyTimeout(seq: Int) {
+        guard let payload = makeJSONString([
+            "type": "teleop_latency_timeout",
+            "seq": seq
+        ]) else {
+            return
+        }
+        broadcastTextMessage(payload)
+    }
+
     // MARK: - WebSocket Frame Creation
 
     private func createBinaryFrame(data: Data) -> Data {
@@ -378,4 +408,75 @@ class WebSocketManager: ObservableObject {
 
         return frame
     }
+
+    private func handleIncomingMessage(_ message: String) {
+        if let teleopCommand = parseTeleopCommand(message) {
+            let phoneReceivedAt = Date().timeIntervalSince1970
+            if let btManager = bluetoothManager {
+                let result = btManager.sendTeleopMotorCommand(
+                    left: teleopCommand.left,
+                    right: teleopCommand.right,
+                    holdMs: teleopCommand.holdMs,
+                    seq: teleopCommand.seq,
+                    phoneReceivedAt: phoneReceivedAt
+                )
+                publishTeleopAck(
+                    seq: teleopCommand.seq,
+                    forwarded: result.forwarded,
+                    sampledForLatency: result.sampledForLatency
+                )
+                if result.forwarded {
+                    print("📤 Forwarded teleop seq \(teleopCommand.seq) to Bluetooth")
+                } else {
+                    print("⚠️ Failed to forward teleop seq \(teleopCommand.seq)")
+                }
+            } else {
+                publishTeleopAck(seq: teleopCommand.seq, forwarded: false, sampledForLatency: false)
+                print("⚠️ Bluetooth manager not available")
+            }
+            return
+        }
+
+        // Forward any legacy/raw messages to Bluetooth unchanged.
+        if let btManager = bluetoothManager {
+            btManager.sendMessage(message)
+            print("📤 Forwarded to Bluetooth: \(message)")
+        } else {
+            print("⚠️ Bluetooth manager not available")
+        }
+    }
+
+    private func publishTeleopAck(seq: Int, forwarded: Bool, sampledForLatency: Bool) {
+        guard let payload = makeJSONString([
+            "type": "teleop_ack",
+            "seq": seq,
+            "forwarded": forwarded,
+            "sampled_for_latency": sampledForLatency
+        ]) else {
+            return
+        }
+        broadcastTextMessage(payload)
+    }
+
+    private func makeJSONString(_ object: [String: Any]) -> String? {
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object, options: []),
+              let text = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return text
+    }
+}
+
+private func parseTeleopCommand(_ text: String) -> IncomingTeleopCommand? {
+    let tokens = text.split(whereSeparator: { $0.isWhitespace })
+    guard tokens.count == 5,
+          String(tokens[0]) == "TELEOP",
+          let seq = Int(tokens[1]),
+          let left = Int(tokens[2]),
+          let right = Int(tokens[3]),
+          let holdMs = Int(tokens[4]) else {
+        return nil
+    }
+    return IncomingTeleopCommand(seq: seq, left: left, right: right, holdMs: holdMs)
 }

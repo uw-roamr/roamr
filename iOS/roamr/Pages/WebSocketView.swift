@@ -140,8 +140,21 @@ struct WebSocketView: View {
 							.background(Color(.systemGray6))
 							.cornerRadius(10)
 					}
-					.padding(.horizontal)
+						.padding(.horizontal)
 				}
+
+				VStack(alignment: .leading, spacing: 8) {
+					Text("Teleop Latency")
+						.font(.headline)
+
+					Text(bluetoothManager.lastTeleopLatencyText)
+						.font(.system(.body, design: .monospaced))
+						.padding()
+						.frame(maxWidth: .infinity, alignment: .leading)
+						.background(Color(.systemGray6))
+						.cornerRadius(10)
+				}
+				.padding(.horizontal)
             } else {
 				Spacer()
 

@@ -90,9 +90,9 @@ static constexpr int32_t kInitialSpinHoldMs = 120;
 static constexpr int32_t kInitialSpinMapWaitTimeoutMs = 1500;
 static constexpr double kInitialSpinStepRad = core::pi * 0.5;
 static constexpr controls::TurnInPlaceConfig kInitialSpinTurnCfg{
-    2.2,
-    1.2,
-    0.25,
+    5.0,
+    core::pi,
+    0.5 * core::pi,
     4.0 * core::pi / 180.0};
 static constexpr int32_t kPathFollowHoldMs = 120;
 static constexpr bool kEnableWheelPoseLogging = true;
