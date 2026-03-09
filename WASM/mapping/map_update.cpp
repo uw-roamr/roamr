@@ -1,7 +1,7 @@
-#include "map_update.h"
+#include "mapping/map_update.h"
 
-#include "map_api.h"
-#include "visualization.h"
+#include "mapping/map_metadata.h"
+#include "mapping/visualization.h"
 
 #include <algorithm>
 #include <chrono>
@@ -47,97 +47,6 @@ namespace mapping {
     return std::chrono::duration<double, std::milli>(end - start).count();
   }
 
-
-
-  void build_rerun_frame_from_lidar(const sensors::LidarCameraData& lc_data,
-                                    sensors::LidarCameraData& rerun_out,
-                                    const core::PoseSE3d& body_to_world) {
-    const int total_points = static_cast<int>(lc_data.points_size / 3);
-    rerun_out.timestamp = lc_data.timestamp;
-    rerun_out.points_size = 0;
-    rerun_out.colors_size = 0;
-    rerun_out.image_size = 0;
-    rerun_out.points_frame_id = static_cast<core::CoordinateFrameId_t>(core::CoordinateFrameId::kFLU);
-    rerun_out.image_frame_id = lc_data.image_frame_id;
-
-    if (kRerunIncludeImage && lc_data.image_size > 0) {
-      const size_t copy_size = std::min(lc_data.image_size, rerun_out.image.size());
-      std::copy(lc_data.image.begin(), lc_data.image.begin() + copy_size, rerun_out.image.begin());
-      rerun_out.image_size = copy_size;
-    }
-
-    if (total_points <= 0) {
-      return;
-    }
-
-    const int max_rerun_points = std::max(1, std::min(kRerunMaxPoints, sensors::max_points_per_scan));
-    const int rerun_stride = std::max(1, total_points / max_rerun_points);
-    const bool points_rdf =
-        lc_data.points_frame_id == static_cast<core::CoordinateFrameId_t>(core::CoordinateFrameId::kRDF);
-    const core::Vector4d q_body_to_world = core::quat_normalize(body_to_world.quaternion);
-    const core::Vector3d& t_body_to_world = body_to_world.translation;
-    const core::Vector4d q_point_to_body = core::quat_from_euler_zyx(core::pi * 0.5, 0.0, 0.0);
-    const core::Vector4d q_point_to_world = core::quat_mul(q_body_to_world, q_point_to_body);
-    const float max_range2 = mapMaxRangeMeters * mapMaxRangeMeters;
-
-    int used_points_rerun = 0;
-    for (int i = 0; i < total_points && used_points_rerun < sensors::max_points_per_scan; i += rerun_stride) {
-      const int in_base = i * 3;
-      const int out_base = used_points_rerun * 3;
-
-      float x = lc_data.points[in_base + 0];
-      float y = lc_data.points[in_base + 1];
-      float z = lc_data.points[in_base + 2];
-      if (points_rdf) {
-        core::rdf_to_flu(x, y, z, &x, &y, &z);
-      }
-
-      // Apply camera-to-body mounting correction:
-      // (x, y, z) -> (x, -z, y)
-      const float corrected_x = x;
-      const float corrected_y = -z;
-      const float corrected_z = y;
-
-      rerun_out.points[out_base + 0] = corrected_x;
-      rerun_out.points[out_base + 1] = corrected_y;
-      rerun_out.points[out_base + 2] = corrected_z;
-
-      const core::Vector3d sensor_point = {x, y, z};
-      core::Vector3d world_point = core::quat_rotate(q_point_to_world, sensor_point);
-      world_point.x += t_body_to_world.x;
-      world_point.y += t_body_to_world.y;
-      world_point.z += t_body_to_world.z;
-      const float z_world = world_point.z + sensorHeightMeters;
-      const bool keep = !(z_world < mapMinZ || z_world > mapMaxZ);
-      // Range relative to the robot (sensor) position, not the world origin.
-      const double rdx = world_point.x - t_body_to_world.x;
-      const double rdy = world_point.y - t_body_to_world.y;
-      const float r2 = static_cast<float>(rdx * rdx + rdy * rdy);
-      const bool in_range = (r2 <= max_range2);
-      const bool filtered = keep && in_range;
-
-      uint8_t r = 200, g = 200, b = 200;
-      const int color_base = i * 3;
-      if (lc_data.colors_size >= static_cast<size_t>(color_base + 3)) {
-        r = lc_data.colors[color_base + 0];
-        g = lc_data.colors[color_base + 1];
-        b = lc_data.colors[color_base + 2];
-      }
-      if (kRerunHighlightFiltered && filtered) {
-        r = 255;
-        g = 0;
-        b = 255;
-      }
-      rerun_out.colors[out_base + 0] = r;
-      rerun_out.colors[out_base + 1] = g;
-      rerun_out.colors[out_base + 2] = b;
-      used_points_rerun += 1;
-    }
-
-    rerun_out.points_size = static_cast<size_t>(used_points_rerun * 3);
-    rerun_out.colors_size = static_cast<size_t>(used_points_rerun * 3);
-  }
-
   void initialize_map(Map& map){
     map.reset_map();
     map.reset_points();
@@ -150,7 +59,7 @@ namespace mapping {
 
   void update_map_from_lidar(Map& map,
                              const sensors::LidarCameraData& lc_data,
-                             MapFrameMetadata& map_frame,
+                             MapImage& map_frame,
                              const core::PoseSE3d& body_to_world
                             ) {
     const auto call_start = std::chrono::steady_clock::now();
@@ -224,9 +133,11 @@ namespace mapping {
       }
     }
 
+    map.draw_map(g_pose_history_count, used_points);
+
     visualization::render_map_frame(
         map,
-        g_pose_history_count, used_points, mapWidth, mapHeight,
+        g_pose_history_count, mapWidth, mapHeight,
         lc_data.timestamp, map_frame);
   }
 }//namespace mapping

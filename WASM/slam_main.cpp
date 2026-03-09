@@ -22,7 +22,6 @@
 #include "sensors/wheel_odometry.h"
 
 namespace {
-constexpr bool kLogToRerun = false;
 
 enum class RobotState{
     SENSOR_INIT,
@@ -33,7 +32,7 @@ static std::atomic<RobotState> g_state{RobotState::SENSOR_INIT};
 
 static bool g_map_initialized = false;
 static mapping::Map g_map;
-static mapping::MapFrameMetadata g_map_frame;
+static mapping::MapImage g_map_image;
 static std::atomic<bool> g_first_map_update_done{false};
 static std::atomic<uint64_t> g_map_update_revision{0};
 
@@ -80,7 +79,7 @@ enum class PoseSource{
 };
 // IMU preintegration drifts over time, so the shared autonomy/map pose should
 // not treat it as a drop-in orientation estimate.
-static constexpr PoseSource pose_source = PoseSource::fused_IMU_wheel_odom;
+static constexpr PoseSource pose_source = PoseSource::IMU;
 static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
 static constexpr int32_t kPathFollowHoldMs = 120;
@@ -445,7 +444,7 @@ int main(){
         mapping::update_map_from_lidar(
             g_map,
             lc_data,
-            g_map_frame,
+            g_map_image,
             body_to_world
         );
         if (!g_first_map_update_done.load(std::memory_order_relaxed)) {
@@ -455,23 +454,7 @@ int main(){
 
         // wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
 
-        // planning::bridge::update_plan_overlay(
-        //     g_map,
-        //     body_to_world,
-        //     g_map_frame.width,
-        //     g_map_frame.height);
         g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
-
-        // if (g_rerun_lc.points_size > 0) {
-        //     mapping::build_rerun_frame_from_lidar(lc_data, g_rerun_lc, body_to_world);
-        //     const auto rerun_log_start = Clock::now();
-        //     rerun_log_lidar_frame(&g_rerun_lc);
-        //     const auto rerun_log_end = Clock::now();
-        // }
-
-
-
-
       }
     });
 
