@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "core/coordinate_frames.h"
+#include "core/pose/se3.h"
 
 namespace planning::bridge {
 

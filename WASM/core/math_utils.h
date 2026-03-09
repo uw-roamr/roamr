@@ -201,11 +201,18 @@ inline double unwrap_angle_near(double angle, double reference) noexcept {
   return reference + normalize_angle(angle - reference);
 }
 
+inline double quat_to_euler_yaw(const Vector4d& unit_quat){
+  const Vector4d& n = unit_quat;
+  const double siny_cosp = 2.0 * (n.w * n.z + n.x * n.y);
+  const double cosy_cosp = 1.0 - 2.0 * (n.y * n.y + n.z * n.z);
+  return std::atan2(siny_cosp, cosy_cosp);
+}
+
 inline void quat_to_euler_zyx(
     const Vector4d& q,
-    double* roll,
-    double* pitch,
-    double* yaw) noexcept {
+    double& roll,
+    double& pitch,
+    double& yaw) noexcept {
   if (!roll || !pitch || !yaw) {
     return;
   }
@@ -213,18 +220,16 @@ inline void quat_to_euler_zyx(
   const Vector4d n = quat_normalize(q);
   const double sinr_cosp = 2.0 * (n.w * n.x + n.y * n.z);
   const double cosr_cosp = 1.0 - 2.0 * (n.x * n.x + n.y * n.y);
-  *roll = std::atan2(sinr_cosp, cosr_cosp);
+  roll = std::atan2(sinr_cosp, cosr_cosp);
 
   const double sinp = 2.0 * (n.w * n.y - n.z * n.x);
   if (std::abs(sinp) >= 1.0) {
-    *pitch = std::copysign(pi * 0.5, sinp);
+    pitch = std::copysign(pi * 0.5, sinp);
   } else {
-    *pitch = std::asin(sinp);
+    pitch = std::asin(sinp);
   }
 
-  const double siny_cosp = 2.0 * (n.w * n.z + n.x * n.y);
-  const double cosy_cosp = 1.0 - 2.0 * (n.y * n.y + n.z * n.z);
-  *yaw = std::atan2(siny_cosp, cosy_cosp);
+  yaw = quat_to_euler_yaw(n);
 }
 
 }  // namespace core
