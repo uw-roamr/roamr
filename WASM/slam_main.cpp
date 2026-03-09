@@ -22,7 +22,6 @@
 #include "sensors/wheel_odometry.h"
 
 namespace {
-constexpr bool kLogToRerun = false;
 
 enum class RobotState{
     SENSOR_INIT,
@@ -435,17 +434,6 @@ int main(){
         // wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
 
         g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
-
-        // if (g_rerun_lc.points_size > 0) {
-        //     mapping::build_rerun_frame_from_lidar(lc_data, g_rerun_lc, body_to_world);
-        //     const auto rerun_log_start = Clock::now();
-        //     rerun_log_lidar_frame(&g_rerun_lc);
-        //     const auto rerun_log_end = Clock::now();
-        // }
-
-
-
-
       }
     });
 

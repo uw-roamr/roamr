@@ -8,7 +8,7 @@
 namespace mapping {
 
 void Map::reset_poses() {
-  poses_.fill(0.0);
+  poses_.fill(core::PoseSE2d{});
 }
 
 void Map::reset_points() {
@@ -89,10 +89,7 @@ void Map::set_pose(int32_t idx, double x, double y, double theta) {
   if (idx < 0 || idx >= kMaxMapPoses) {
     return;
   }
-  const int32_t base = idx * 3;
-  poses_[base + 0] = x;
-  poses_[base + 1] = y;
-  poses_[base + 2] = theta;
+  poses_[idx] = core::PoseSE2d{x, y, theta};
 }
 
 void Map::set_point(int32_t idx, double x, double y) {
@@ -183,25 +180,23 @@ void Map::integrate_ray(int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
 }
 
 void Map::integrate_scan(
-    double pose_x,
-    double pose_y,
-    double pose_theta,
+	const core::PoseSE2d& pose,
     int32_t point_count,
     int32_t points_in_world) {
   if (point_count <= 0) {
     return;
   }
-  maybe_init_origin(pose_x, pose_y);
+  maybe_init_origin(pose.x, pose.y);
 
   int32_t start_x = 0;
   int32_t start_y = 0;
-  if (!world_to_grid(pose_x, pose_y, &start_x, &start_y)) {
+  if (!world_to_grid(pose.x, pose.y, &start_x, &start_y)) {
     return;
   }
 
   const double min_range2 = static_cast<double>(kMinRange) * static_cast<double>(kMinRange);
-  const double c = std::cos(pose_theta);
-  const double s = std::sin(pose_theta);
+  const double c = std::cos(pose.theta);
+  const double s = std::sin(pose.theta);
 
   for (int32_t i = 0; i < point_count; ++i) {
     const int32_t base = i * 2;
@@ -214,12 +209,12 @@ void Map::integrate_scan(
     double wx = lx;
     double wy = ly;
     if (!points_in_world) {
-      wx = pose_x + c * lx - s * ly;
-      wy = pose_y + s * lx + c * ly;
+      wx = pose.x + c * lx - s * ly;
+      wy = pose.y + s * lx + c * ly;
     }
 
-    const double dx = wx - pose_x;
-    const double dy = wy - pose_y;
+    const double dx = wx - pose.x;
+    const double dy = wy - pose.y;
     if ((dx * dx + dy * dy) < min_range2) {
       continue;
     }
@@ -275,13 +270,8 @@ void Map::draw_map(int32_t pose_count, int32_t point_count) {
 
   const int32_t used_points = (point_count < points_count_) ? point_count : points_count_;
   if (used_points > 0 && pose_count > 0) {
-    const int32_t base = (pose_count - 1) * 3;
-    integrate_scan(
-        poses_[base + 0],
-        poses_[base + 1],
-        poses_[base + 2],
-        used_points,
-        points_in_world_);
+    const core::PoseSE2d& p = poses_[pose_count - 1];
+    integrate_scan(p, used_points, points_in_world_);
   }
 
   // Rendering is handled by visualization::render_map_frame.

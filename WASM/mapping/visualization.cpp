@@ -1,5 +1,6 @@
 #include "mapping/visualization.h"
 #include "mapping/map.h"
+#include "core/pose/se2.h"
 #include "core/telemetry.h"
 
 #include <array>
@@ -63,11 +64,10 @@ void draw_pose_layer(
 {
     if (pose_count <= 0) return;
 
-    const double* poses = map.get_pose_data();
-    const int32_t base  = (pose_count - 1) * 3;
-    const double wx     = poses[base + 0];
-    const double wy     = poses[base + 1];
-    const double theta  = poses[base + 2];
+    const core::PoseSE2d& pose = map.get_pose_data()[pose_count - 1];
+    const double wx    = pose.x;
+    const double wy    = pose.y;
+    const double theta = pose.theta;
 
     int32_t gx = 0, gy = 0;
     if (!map.world_to_grid(wx, wy, &gx, &gy)) return;

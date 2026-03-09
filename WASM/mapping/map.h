@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "mapping/map_metadata.h"
+#include "core/pose/se2.h"
 
 namespace mapping{
 
@@ -56,7 +57,7 @@ namespace mapping{
             int32_t* py) const;
 
         // Read-only data accessors for visualization layers.
-        const double*  get_pose_data()            const { return poses_.data(); }
+        const core::PoseSE2d* get_pose_data()     const { return poses_.data(); }
         const uint8_t* get_visited_data()         const { return visited_.data(); }
         const uint8_t* get_confirmed_data()       const { return confirmed_.data(); }
         int32_t        get_planned_path_count()   const { return planned_path_count_; }
@@ -72,14 +73,12 @@ namespace mapping{
         void maybe_init_origin(double x, double y);
         void integrate_ray(int32_t x0, int32_t y0, int32_t x1, int32_t y1);
         void integrate_scan(
-            double pose_x,
-            double pose_y,
-            double pose_theta,
+            const core::PoseSE2d& pose,
             int32_t point_count,
             int32_t points_in_world);
 
         // Pose storage for drawing trajectory.
-        std::array<double, 3 * kMaxMapPoses> poses_{}; // x,y,theta triples
+        std::array<core::PoseSE2d, kMaxMapPoses> poses_{}; // x,y,theta triples
 
         // LiDAR points storage (2D projection x,y).
         std::array<float, 2 * kMaxMapPoints> points_{};
