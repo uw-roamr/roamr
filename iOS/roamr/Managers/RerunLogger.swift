@@ -301,6 +301,14 @@ private final class WasmRerunTelemetryBridge {
             colorsPointer: hasUsableColors ? UnsafePointer(frame.colorsPointer) : nil,
             colorsCount: hasUsableColors ? requiredColorCount : 0
         )
+
+        WebSocketManager.shared.broadcastPointCloud(
+            timestamp: frame.timestamp,
+            pointsPointer: UnsafePointer(frame.pointsPointer),
+            pointCount: pointCount,
+            colorsPointer: hasUsableColors ? UnsafePointer(frame.colorsPointer) : nil,
+            colorsCount: hasUsableColors ? requiredColorCount : 0
+        )
     }
 
     private func logCameraImage(_ frame: WasmLidarFrameView) {
@@ -499,6 +507,7 @@ private final class WasmRerunMapBridge {
         }
 
         WasmManager.shared.updateMapPreview(jpegData: jpegData, timestamp: frame.timestamp)
+        WebSocketManager.shared.publishMapFrame(timestamp: frame.timestamp, jpegData: jpegData)
         RerunWebSocketClient.shared.logMapFrame(timestamp: frame.timestamp, jpegData: jpegData)
     }
 }

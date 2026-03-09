@@ -260,6 +260,7 @@ final class WasmManager: ObservableObject {
     func appendLogLine(_ line: String) {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        WebSocketManager.shared.publishWasmConsoleLine(trimmed)
         DispatchQueue.main.async {
             self.logLines.append(trimmed)
             if self.logLines.count > Self.maxLogLines {

@@ -10,6 +10,16 @@ import Network
 import Combine
 import CryptoKit
 
+private enum RoamrBinaryPointCloudProtocol {
+    static let magic: [UInt8] = [0x52, 0x52, 0x42, 0x31]  // "RRB1"
+    static let messageTypePoints: UInt8 = 1
+    static let flagsOffset = 5
+    static let timestampOffset = 8
+    static let pointCountOffset = 16
+    static let headerSize = 20
+    static let hasColorsFlag: UInt8 = 1
+}
+
 private struct IncomingTeleopCommand {
     let seq: Int
     let left: Int
@@ -19,6 +29,7 @@ private struct IncomingTeleopCommand {
 
 class WebSocketManager: ObservableObject {
     static let shared = WebSocketManager()
+    private static let maxRecentWasmLogs = 200
 
     @Published var isServerRunning = false
     @Published var localIPAddress: String = "Not available"
@@ -29,6 +40,9 @@ class WebSocketManager: ObservableObject {
     private var listener: NWListener?
     private var connections: [NWConnection] = []
     private var connectionStates: [ObjectIdentifier: Bool] = [:] // Track handshake completion
+    private var latestPointCloudData: Data?
+    private var latestMapFrameMessage: String?
+    private var recentWasmLogMessages: [String] = []
     private let port: NWEndpoint.Port = 8080
 
     // Bluetooth manager for forwarding messages
@@ -118,6 +132,8 @@ class WebSocketManager: ObservableObject {
                     self.sendHandshakeResponse(to: connection, key: wsKey)
                     self.connectionStates[ObjectIdentifier(connection)] = true
                     print("✅ WebSocket handshake complete")
+
+                    self.sendLatestTelemetryState(to: connection)
 
                     // Start receiving WebSocket frames
                     self.receiveWebSocketFrame(on: connection)
@@ -233,6 +249,7 @@ class WebSocketManager: ObservableObject {
 
     private func removeConnection(_ connection: NWConnection) {
         connections.removeAll { $0 === connection }
+        connectionStates.removeValue(forKey: ObjectIdentifier(connection))
         DispatchQueue.main.async {
             self.connectedClients = self.connections.count
         }
@@ -308,6 +325,38 @@ class WebSocketManager: ObservableObject {
         }
     }
 
+    func broadcastPointCloud(
+        timestamp: Double,
+        pointsPointer: UnsafePointer<Float32>,
+        pointCount: Int,
+        colorsPointer: UnsafePointer<UInt8>?,
+        colorsCount: Int
+    ) {
+        guard let payload = makeBinaryPointCloudPayload(
+            timestamp: timestamp,
+            pointsPointer: pointsPointer,
+            pointCount: pointCount,
+            colorsPointer: colorsPointer,
+            colorsCount: colorsCount
+        ) else {
+            return
+        }
+
+        latestPointCloudData = payload
+        let frame = createBinaryFrame(data: payload)
+
+        for connection in connections {
+            guard connectionStates[ObjectIdentifier(connection)] == true else { continue }
+
+            connection.send(content: frame, completion: .contentProcessed { error in
+                if let error = error {
+                    print("❌ Failed to send point cloud: \(error)")
+                    self.removeConnection(connection)
+                }
+            })
+        }
+    }
+
     func broadcastTextMessage(_ message: String) {
         guard let data = message.data(using: .utf8) else { return }
         let frame = createTextFrame(data: data)
@@ -353,6 +402,37 @@ class WebSocketManager: ObservableObject {
         broadcastTextMessage(payload)
     }
 
+    func publishMapFrame(timestamp: Double, jpegData: Data) {
+        guard !jpegData.isEmpty,
+              let payload = makeJSONString([
+                "type": "map_frame",
+                "timestamp": timestamp,
+                "jpeg_b64": jpegData.base64EncodedString()
+              ]) else {
+            return
+        }
+        latestMapFrameMessage = payload
+        broadcastTextMessage(payload)
+    }
+
+    func publishWasmConsoleLine(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let payload = makeJSONString([
+                "type": "wasm_log",
+                "text": trimmed
+              ]) else {
+            return
+        }
+
+        recentWasmLogMessages.append(payload)
+        if recentWasmLogMessages.count > Self.maxRecentWasmLogs {
+            recentWasmLogMessages.removeFirst(recentWasmLogMessages.count - Self.maxRecentWasmLogs)
+        }
+
+        broadcastTextMessage(payload)
+    }
+
     // MARK: - WebSocket Frame Creation
 
     private func createBinaryFrame(data: Data) -> Data {
@@ -380,6 +460,38 @@ class WebSocketManager: ObservableObject {
         frame.append(data)
 
         return frame
+    }
+
+    private func sendLatestTelemetryState(to connection: NWConnection) {
+        if let latestMapFrameMessage {
+            sendTextFrame(latestMapFrameMessage, to: connection, label: "latest map frame")
+        }
+
+        for payload in recentWasmLogMessages {
+            sendTextFrame(payload, to: connection, label: "recent wasm log")
+        }
+
+        sendLatestPointCloud(to: connection)
+    }
+
+    private func sendLatestPointCloud(to connection: NWConnection) {
+        guard let latestPointCloudData else { return }
+        let frame = createBinaryFrame(data: latestPointCloudData)
+        connection.send(content: frame, completion: .contentProcessed { error in
+            if let error = error {
+                print("❌ Failed to send latest point cloud: \(error)")
+            }
+        })
+    }
+
+    private func sendTextFrame(_ message: String, to connection: NWConnection, label: String) {
+        guard let data = message.data(using: .utf8) else { return }
+        let frame = createTextFrame(data: data)
+        connection.send(content: frame, completion: .contentProcessed { error in
+            if let error = error {
+                print("❌ Failed to send \(label): \(error)")
+            }
+        })
     }
 
     private func createTextFrame(data: Data) -> Data {
@@ -465,6 +577,84 @@ class WebSocketManager: ObservableObject {
             return nil
         }
         return text
+    }
+
+    private func makeBinaryPointCloudPayload(
+        timestamp: Double,
+        pointsPointer: UnsafePointer<Float32>,
+        pointCount: Int,
+        colorsPointer: UnsafePointer<UInt8>?,
+        colorsCount: Int
+    ) -> Data? {
+        guard pointCount > 0 else { return nil }
+
+        let packedPointCount = pointCount * 3
+        let pointsByteCount = packedPointCount * MemoryLayout<Float32>.size
+        let hasColors = colorsPointer != nil && colorsCount >= packedPointCount
+        let colorsByteCount = hasColors ? packedPointCount : 0
+        let totalByteCount = RoamrBinaryPointCloudProtocol.headerSize + pointsByteCount + colorsByteCount
+
+        var payload = Data(count: totalByteCount)
+        payload.withUnsafeMutableBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else { return }
+            let rawPointer = baseAddress.assumingMemoryBound(to: UInt8.self)
+
+            RoamrBinaryPointCloudProtocol.magic.withUnsafeBytes { magicBytes in
+                if let magicBase = magicBytes.baseAddress {
+                    memcpy(rawPointer, magicBase, RoamrBinaryPointCloudProtocol.magic.count)
+                }
+            }
+
+            rawPointer[4] = RoamrBinaryPointCloudProtocol.messageTypePoints
+            rawPointer[RoamrBinaryPointCloudProtocol.flagsOffset] = hasColors
+                ? RoamrBinaryPointCloudProtocol.hasColorsFlag
+                : 0
+
+            var reserved: UInt16 = 0
+            withUnsafeBytes(of: &reserved) { bytes in
+                if let src = bytes.baseAddress {
+                    memcpy(rawPointer.advanced(by: 6), src, MemoryLayout<UInt16>.size)
+                }
+            }
+
+            var timestampBits = timestamp.bitPattern.littleEndian
+            withUnsafeBytes(of: &timestampBits) { bytes in
+                if let src = bytes.baseAddress {
+                    memcpy(
+                        rawPointer.advanced(by: RoamrBinaryPointCloudProtocol.timestampOffset),
+                        src,
+                        MemoryLayout<UInt64>.size
+                    )
+                }
+            }
+
+            var pointCountLE = UInt32(pointCount).littleEndian
+            withUnsafeBytes(of: &pointCountLE) { bytes in
+                if let src = bytes.baseAddress {
+                    memcpy(
+                        rawPointer.advanced(by: RoamrBinaryPointCloudProtocol.pointCountOffset),
+                        src,
+                        MemoryLayout<UInt32>.size
+                    )
+                }
+            }
+
+            memcpy(
+                rawPointer.advanced(by: RoamrBinaryPointCloudProtocol.headerSize),
+                pointsPointer,
+                pointsByteCount
+            )
+
+            if hasColors, let colorsPointer {
+                memcpy(
+                    rawPointer.advanced(by: RoamrBinaryPointCloudProtocol.headerSize + pointsByteCount),
+                    colorsPointer,
+                    colorsByteCount
+                )
+            }
+        }
+
+        return payload
     }
 }
 

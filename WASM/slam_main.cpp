@@ -349,6 +349,7 @@ int main(){
         using Clock = std::chrono::steady_clock;
         const auto target_interval = std::chrono::milliseconds(sensors::LidarCameraIntervalMs);
         int write_idx = 0;
+        double last_lidar_log_timestamp = -1.0;
         auto last_sample_time = Clock::now();
 
         while(true){
@@ -369,6 +370,14 @@ int main(){
             sensors::ensure_points_flu(g_lc_buffers[write_idx]);
 
             if (g_lc_buffers[write_idx].points_size > 0) {
+                if (g_lc_buffers[write_idx].timestamp > 0.0 &&
+                    (last_lidar_log_timestamp < 0.0 ||
+                     (g_lc_buffers[write_idx].timestamp - last_lidar_log_timestamp) >=
+                         kLidarLogIntervalSec)) {
+                    rerun_log_lidar_frame(&g_lc_buffers[write_idx]);
+                    last_lidar_log_timestamp = g_lc_buffers[write_idx].timestamp;
+                }
+
                 // Timestamp deduplication is intentionally omitted here: the mapping
                 // thread's do_map_update interval check (mapMinInterval) handles
                 // rate-limiting and will drop frames whose timestamps haven't advanced

@@ -25,21 +25,43 @@
             background: white;
             border-radius: 20px;
             padding: 40px;
-            max-width: 900px;
+            max-width: 1400px;
             width: 100%;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
         }
 
         h1 {
             color: #333;
-            margin-bottom: 30px;
-            text-align: center;
+            margin: 0;
+        }
+
+        .top-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 24px;
+            margin-bottom: 24px;
+        }
+
+        .title-block {
+            flex: 1 1 auto;
+            min-width: 0;
+        }
+
+        .title-block h1 {
+            margin-bottom: 18px;
+        }
+
+        .connection-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            max-width: 420px;
         }
 
         .status {
             padding: 15px;
             border-radius: 10px;
-            margin-bottom: 20px;
             text-align: center;
             font-weight: 600;
             display: flex;
@@ -83,6 +105,10 @@
             margin-bottom: 20px;
         }
 
+        .connection-panel .input-group {
+            margin-bottom: 0;
+        }
+
         label {
             display: block;
             margin-bottom: 8px;
@@ -114,6 +140,10 @@
             cursor: pointer;
             transition: all 0.3s;
             margin-bottom: 10px;
+        }
+
+        .connection-panel button {
+            margin-bottom: 0;
         }
 
         button:disabled {
@@ -191,15 +221,14 @@
             background: #e3f2fd;
             padding: 15px;
             border-radius: 10px;
-            margin-bottom: 20px;
             font-size: 14px;
             color: #1976d2;
         }
 
         .joystick-container {
             display: none;
-            margin: 30px 0;
-            padding: 20px;
+            width: min(100%, 600px);
+            padding: 16px 18px;
             background: #f5f5f5;
             border-radius: 15px;
         }
@@ -209,17 +238,16 @@
         }
 
         .joystick-title {
-            text-align: center;
             font-weight: 600;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
             color: #333;
         }
 
         .joystick-wrapper {
-            display: flex;
-            flex-direction: column;
+            display: grid;
+            grid-template-columns: auto minmax(240px, 1fr);
             align-items: center;
-            gap: 15px;
+            gap: 14px;
         }
 
         #joystick {
@@ -230,15 +258,23 @@
             touch-action: none;
         }
 
+        .teleop-control-panel {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
         .motor-display {
             display: flex;
-            gap: 20px;
+            flex-direction: column;
+            gap: 10px;
             justify-content: center;
             font-family: monospace;
             font-size: 14px;
-            padding: 10px;
+            padding: 12px 10px;
             background: white;
             border-radius: 8px;
+            min-width: 88px;
         }
 
         .motor-value {
@@ -262,7 +298,6 @@
 
         .teleop-metrics {
             width: 100%;
-            max-width: 560px;
             background: white;
             border-radius: 12px;
             padding: 16px;
@@ -310,44 +345,67 @@
             font-family: monospace;
         }
 
-        .video-section {
+        .video-section,
+        .point-cloud-section,
+        .map-section,
+        .console-section {
             display: none;
-            margin: 30px 0;
             padding: 20px;
             background: #f5f5f5;
             border-radius: 15px;
         }
 
-        .video-section.active {
+        .video-section.active,
+        .point-cloud-section.active,
+        .map-section.active,
+        .console-section.active {
             display: block;
         }
 
-        .video-header {
+        .video-header,
+        .point-cloud-header,
+        .map-header,
+        .console-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 15px;
+            gap: 12px;
+            flex-wrap: wrap;
         }
 
-        .video-title {
+        .video-title,
+        .point-cloud-title,
+        .map-title,
+        .console-title {
             font-weight: 600;
             color: #333;
         }
 
-        .video-stats {
+        .video-stats,
+        .point-cloud-stats,
+        .map-stats,
+        .console-stats {
             display: flex;
             gap: 10px;
             font-size: 12px;
+            flex-wrap: wrap;
         }
 
-        .video-stat {
+        .video-stat,
+        .point-cloud-stat,
+        .map-stat,
+        .console-stat {
             background: white;
             padding: 4px 10px;
             border-radius: 5px;
             color: #666;
         }
 
-        .video-stat strong {
+        .video-stat strong,
+        .point-cloud-stat strong,
+        .map-stat strong,
+        .console-stat strong {
             color: #667eea;
         }
 
@@ -379,94 +437,337 @@
             font-size: 3rem;
             margin-bottom: 10px;
         }
+
+        .viewer-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 24px;
+            margin: 30px 0;
+            align-items: start;
+        }
+
+        .map-container {
+            position: relative;
+            background: #0d1118;
+            border-radius: 12px;
+            overflow: hidden;
+            aspect-ratio: 1 / 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #mapPreview {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: none;
+            image-rendering: crisp-edges;
+        }
+
+        .point-cloud-container {
+            position: relative;
+            background:
+                radial-gradient(circle at top, rgba(102, 126, 234, 0.12), transparent 48%),
+                linear-gradient(180deg, #10131d 0%, #05070c 100%);
+            border-radius: 12px;
+            overflow: hidden;
+            min-height: 420px;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+        }
+
+        #pointCloudCanvas {
+            width: 100%;
+            height: 420px;
+            display: block;
+            touch-action: none;
+            cursor: grab;
+        }
+
+        #pointCloudCanvas.dragging {
+            cursor: grabbing;
+        }
+
+        .point-cloud-placeholder {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.72);
+            pointer-events: none;
+            padding: 24px;
+        }
+
+        .point-cloud-placeholder-icon {
+            font-size: 2.8rem;
+            margin-bottom: 12px;
+        }
+
+        .point-cloud-help {
+            margin-top: 12px;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.55);
+        }
+
+        .map-placeholder,
+        .console-placeholder {
+            text-align: center;
+            padding: 30px;
+        }
+
+        .map-placeholder {
+            color: rgba(255, 255, 255, 0.72);
+        }
+
+        .map-placeholder-icon,
+        .console-placeholder-icon {
+            font-size: 2.8rem;
+            margin-bottom: 12px;
+        }
+
+        .console-container {
+            background: #0b1220;
+            border-radius: 12px;
+            min-height: 420px;
+            overflow: hidden;
+            box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.14);
+        }
+
+        .console-log {
+            max-height: 420px;
+            min-height: 420px;
+            overflow-y: auto;
+            padding: 14px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 12px;
+            line-height: 1.45;
+            color: #dbe7ff;
+        }
+
+        .console-line {
+            padding: 8px 10px;
+            border-radius: 8px;
+            background: rgba(15, 23, 42, 0.85);
+            margin-bottom: 8px;
+            border-left: 3px solid #667eea;
+            word-break: break-word;
+        }
+
+        .console-line-time {
+            color: #8fa6d8;
+            font-size: 11px;
+            margin-bottom: 3px;
+        }
+
+        .console-line-text {
+            color: #eef4ff;
+        }
+
+        .console-placeholder {
+            color: rgba(219, 231, 255, 0.72);
+        }
+
+        @media (max-width: 700px) {
+            .container {
+                padding: 24px;
+            }
+
+            .top-bar {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .joystick-container {
+                width: 100%;
+            }
+
+            .joystick-wrapper {
+                grid-template-columns: 1fr;
+            }
+
+            .teleop-control-panel {
+                justify-content: center;
+            }
+
+            .motor-display {
+                flex-direction: row;
+                min-width: 0;
+            }
+
+            .viewer-grid {
+                grid-template-columns: 1fr;
+                gap: 18px;
+            }
+
+            #pointCloudCanvas {
+                height: 320px;
+            }
+
+            .console-container,
+            .console-log {
+                min-height: 320px;
+                max-height: 320px;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🚀 Roamr WebSocket Client</h1>
+        <div class="top-bar">
+            <div class="title-block">
+                <h1>🚀 Roamr WebSocket Client</h1>
 
-        <div id="status" class="status disconnected">
-            <span class="status-dot"></span>
-            <span>Disconnected</span>
-        </div>
-
-        <div class="info-box">
-            💡 Enter the IP address shown on your iPhone app (e.g., 192.168.1.100)
-        </div>
-
-        <div class="input-group">
-            <label for="ipAddress">iPhone IP Address:</label>
-            <input
-                type="text"
-                id="ipAddress"
-                placeholder="192.168.1.100"
-                value="192.168.1.100"
-            >
-        </div>
-
-        <button id="connectBtn" class="btn-connect" onclick="connect()">
-            Connect to iPhone
-        </button>
-
-        <button id="disconnectBtn" class="btn-disconnect" onclick="disconnect()" style="display: none;">
-            Disconnect
-        </button>
-
-        <div id="joystickContainer" class="joystick-container">
-            <div class="joystick-title">🕹️ Motor Control</div>
-            <div class="joystick-wrapper">
-                <canvas id="joystick" width="250" height="250"></canvas>
-                <div class="motor-display">
-                    <div class="motor-value">
-                        <span class="motor-label">LEFT</span>
-                        <span id="leftMotor" class="motor-number">0%</span>
+                <div class="connection-panel">
+                    <div id="status" class="status disconnected">
+                        <span class="status-dot"></span>
+                        <span>Disconnected</span>
                     </div>
-                    <div class="motor-value">
-                        <span class="motor-label">RIGHT</span>
-                        <span id="rightMotor" class="motor-number">0%</span>
+
+                    <div class="info-box">
+                        💡 Enter the IP address shown on your iPhone app (e.g., 192.168.1.100)
                     </div>
+
+                    <div class="input-group">
+                        <label for="ipAddress">iPhone IP Address:</label>
+                        <input
+                            type="text"
+                            id="ipAddress"
+                            placeholder="10.40.224.37"
+                            value="10.40.224.37"
+                        >
+                    </div>
+
+                    <button id="connectBtn" class="btn-connect" onclick="connect()">
+                        Connect to iPhone
+                    </button>
+
+                    <button id="disconnectBtn" class="btn-disconnect" onclick="disconnect()" style="display: none;">
+                        Disconnect
+                    </button>
                 </div>
-                <div class="teleop-metrics">
-                    <div class="teleop-metrics-title">Teleop Latency</div>
-                    <div class="teleop-metrics-grid">
-                        <div class="teleop-metric-card">
-                            <div class="teleop-metric-label">WS RTT</div>
-                            <div id="teleopRtt" class="teleop-metric-value">-</div>
-                        </div>
-                        <div class="teleop-metric-card">
-                            <div class="teleop-metric-label">Phone -> BLE</div>
-                            <div id="teleopPhoneBle" class="teleop-metric-value">-</div>
-                        </div>
-                        <div class="teleop-metric-card">
-                            <div class="teleop-metric-label">BLE -> Odom</div>
-                            <div id="teleopBleOdom" class="teleop-metric-value">-</div>
-                        </div>
-                        <div class="teleop-metric-card">
-                            <div class="teleop-metric-label">Est. End-to-Motion</div>
-                            <div id="teleopEstimated" class="teleop-metric-value">-</div>
+            </div>
+
+            <div id="joystickContainer" class="joystick-container">
+                <div class="joystick-title">🕹️ Teleoperation</div>
+                <div class="joystick-wrapper">
+                    <div class="teleop-control-panel">
+                        <canvas id="joystick" width="180" height="180"></canvas>
+                        <div class="motor-display">
+                            <div class="motor-value">
+                                <span class="motor-label">LEFT</span>
+                                <span id="leftMotor" class="motor-number">0%</span>
+                            </div>
+                            <div class="motor-value">
+                                <span class="motor-label">RIGHT</span>
+                                <span id="rightMotor" class="motor-number">0%</span>
+                            </div>
                         </div>
                     </div>
-                    <div id="teleopMetricDetails" class="teleop-metric-footnote">seq -, waiting for samples</div>
+                    <div class="teleop-metrics">
+                        <div class="teleop-metrics-title">Teleop Latency</div>
+                        <div class="teleop-metrics-grid">
+                            <div class="teleop-metric-card">
+                                <div class="teleop-metric-label">WS RTT</div>
+                                <div id="teleopRtt" class="teleop-metric-value">-</div>
+                            </div>
+                            <div class="teleop-metric-card">
+                                <div class="teleop-metric-label">Phone -> BLE</div>
+                                <div id="teleopPhoneBle" class="teleop-metric-value">-</div>
+                            </div>
+                            <div class="teleop-metric-card">
+                                <div class="teleop-metric-label">BLE -> Odom</div>
+                                <div id="teleopBleOdom" class="teleop-metric-value">-</div>
+                            </div>
+                            <div class="teleop-metric-card">
+                                <div class="teleop-metric-label">Est. End-to-Motion</div>
+                                <div id="teleopEstimated" class="teleop-metric-value">-</div>
+                            </div>
+                        </div>
+                        <div id="teleopMetricDetails" class="teleop-metric-footnote">seq -, waiting for samples</div>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <div id="videoSection" class="video-section">
-            <div class="video-header">
-                <div class="video-title">📹 Live Video Stream</div>
-                <div class="video-stats">
-                    <span class="video-stat">FPS: <strong id="videoFps">0</strong></span>
-                    <span class="video-stat">Frames: <strong id="videoFrames">0</strong></span>
-                    <span class="video-stat"><strong id="videoSize">0 KB</strong></span>
+        <div class="viewer-grid">
+            <div id="videoSection" class="video-section">
+                <div class="video-header">
+                    <div class="video-title">📹 Live Video Stream</div>
+                    <div class="video-stats">
+                        <span class="video-stat">FPS: <strong id="videoFps">0</strong></span>
+                        <span class="video-stat">Frames: <strong id="videoFrames">0</strong></span>
+                        <span class="video-stat"><strong id="videoSize">0 KB</strong></span>
+                    </div>
+                </div>
+                <div class="video-container">
+                    <img id="videoStream" alt="Video Stream">
+                    <div class="video-placeholder" id="videoPlaceholder">
+                        <div class="video-placeholder-icon">📹</div>
+                        <div>Waiting for video stream...</div>
+                        <div style="font-size: 12px; margin-top: 10px; color: #999;">
+                            Start video streaming from the iPhone app
+                        </div>
+                    </div>
                 </div>
             </div>
-            <div class="video-container">
-                <img id="videoStream" alt="Video Stream">
-                <div class="video-placeholder" id="videoPlaceholder">
-                    <div class="video-placeholder-icon">📹</div>
-                    <div>Waiting for video stream...</div>
-                    <div style="font-size: 12px; margin-top: 10px; color: #999;">
-                        Start video streaming from the iPhone app
+
+            <div id="pointCloudSection" class="point-cloud-section">
+                <div class="point-cloud-header">
+                    <div class="point-cloud-title">🌐 WASM Point Cloud</div>
+                    <div class="point-cloud-stats">
+                        <span class="point-cloud-stat">FPS: <strong id="pointCloudFps">0</strong></span>
+                        <span class="point-cloud-stat">Frames: <strong id="pointCloudFrames">0</strong></span>
+                        <span class="point-cloud-stat">Points: <strong id="pointCloudPoints">0</strong></span>
+                        <span class="point-cloud-stat">Radius: <strong id="pointCloudRadius">0.00 m</strong></span>
+                        <span class="point-cloud-stat">Time: <strong id="pointCloudTimestamp">-</strong></span>
+                    </div>
+                </div>
+                <div class="point-cloud-container">
+                    <canvas id="pointCloudCanvas"></canvas>
+                    <div class="point-cloud-placeholder" id="pointCloudPlaceholder">
+                        <div class="point-cloud-placeholder-icon">✳️</div>
+                        <div id="pointCloudStatusText">Waiting for the current WASM point cloud...</div>
+                        <div id="pointCloudHelpText" class="point-cloud-help">Drag to orbit. Scroll to zoom.</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="viewer-grid">
+            <div id="mapSection" class="map-section">
+                <div class="map-header">
+                    <div class="map-title">🗺️ WASM Map Preview</div>
+                    <div class="map-stats">
+                        <span class="map-stat">Frames: <strong id="mapFrames">0</strong></span>
+                        <span class="map-stat">Size: <strong id="mapSize">0 KB</strong></span>
+                        <span class="map-stat">Time: <strong id="mapTimestamp">-</strong></span>
+                    </div>
+                </div>
+                <div class="map-container">
+                    <img id="mapPreview" alt="WASM Map Preview">
+                    <div class="map-placeholder" id="mapPlaceholder">
+                        <div class="map-placeholder-icon">🗺️</div>
+                        <div>Waiting for map preview...</div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="consoleSection" class="console-section">
+                <div class="console-header">
+                    <div class="console-title">🧾 WASM Console</div>
+                    <div class="console-stats">
+                        <span class="console-stat">Lines: <strong id="consoleLineCount">0</strong></span>
+                    </div>
+                </div>
+                <div class="console-container">
+                    <div class="console-log" id="consoleLog">
+                        <div class="console-placeholder" id="consolePlaceholder">
+                            <div class="console-placeholder-icon">🧾</div>
+                            <div>Waiting for WASM console output...</div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -504,11 +805,38 @@
         const messageLog = document.getElementById('messageLog');
         const joystickContainer = document.getElementById('joystickContainer');
         const videoSection = document.getElementById('videoSection');
+        const pointCloudSection = document.getElementById('pointCloudSection');
+        const mapSection = document.getElementById('mapSection');
+        const consoleSection = document.getElementById('consoleSection');
         const teleopRttEl = document.getElementById('teleopRtt');
         const teleopPhoneBleEl = document.getElementById('teleopPhoneBle');
         const teleopBleOdomEl = document.getElementById('teleopBleOdom');
         const teleopEstimatedEl = document.getElementById('teleopEstimated');
         const teleopMetricDetailsEl = document.getElementById('teleopMetricDetails');
+        const pointCloudCanvas = document.getElementById('pointCloudCanvas');
+        const pointCloudPlaceholder = document.getElementById('pointCloudPlaceholder');
+        const pointCloudStatusTextEl = document.getElementById('pointCloudStatusText');
+        const pointCloudHelpTextEl = document.getElementById('pointCloudHelpText');
+        const pointCloudFpsEl = document.getElementById('pointCloudFps');
+        const pointCloudFramesEl = document.getElementById('pointCloudFrames');
+        const pointCloudPointsEl = document.getElementById('pointCloudPoints');
+        const pointCloudRadiusEl = document.getElementById('pointCloudRadius');
+        const pointCloudTimestampEl = document.getElementById('pointCloudTimestamp');
+        const pointCloudCtx = pointCloudCanvas.getContext('2d');
+        const mapPreviewEl = document.getElementById('mapPreview');
+        const mapPlaceholderEl = document.getElementById('mapPlaceholder');
+        const mapFramesEl = document.getElementById('mapFrames');
+        const mapSizeEl = document.getElementById('mapSize');
+        const mapTimestampEl = document.getElementById('mapTimestamp');
+        const consoleLogEl = document.getElementById('consoleLog');
+        const consolePlaceholderEl = document.getElementById('consolePlaceholder');
+        const consoleLineCountEl = document.getElementById('consoleLineCount');
+
+        const POINTS_BINARY_MAGIC = [0x52, 0x52, 0x42, 0x31];
+        const POINTS_BINARY_TYPE_POINTS = 1;
+        const POINTS_BINARY_FLAG_COLORS = 1;
+        const POINTS_BINARY_HEADER_SIZE = 20;
+        const MAX_CONSOLE_LINES = 200;
 
         // Joystick variables
         let joystickTimer = null;
@@ -530,6 +858,29 @@
         let videoFrameCount = 0;
         let videoFpsCounter = 0;
         let lastVideoFpsUpdate = Date.now();
+        let pointCloudViewerInitialized = false;
+        let pointCloudDiagnosticTimer = null;
+        let mapFrameCount = 0;
+
+        const pointCloudState = {
+            points: null,
+            colors: null,
+            pointCount: 0,
+            frameCount: 0,
+            fpsCounter: 0,
+            lastFpsUpdateMs: performance.now(),
+            timestamp: null,
+            center: { x: 0, y: 0, z: 0 },
+            radius: 1,
+            yaw: 0.8,
+            pitch: -0.45,
+            zoom: 2.6,
+            hasReceivedFrame: false,
+            dragActive: false,
+            lastPointerX: 0,
+            lastPointerY: 0,
+            renderQueued: false
+        };
 
         function updateStatus(connected) {
             if (connected) {
@@ -542,7 +893,13 @@
                 sendBtn.disabled = false;
                 joystickContainer.classList.add('active');
                 videoSection.classList.add('active');
+                pointCloudSection.classList.add('active');
+                mapSection.classList.add('active');
+                consoleSection.classList.add('active');
                 initJoystick();
+                initPointCloudViewer();
+                startPointCloudDiagnosticTimer();
+                schedulePointCloudRender();
             } else {
                 statusEl.className = 'status disconnected';
                 statusEl.innerHTML = '<span class="status-dot"></span><span>Disconnected</span>';
@@ -553,11 +910,21 @@
                 sendBtn.disabled = true;
                 joystickContainer.classList.remove('active');
                 videoSection.classList.remove('active');
+                pointCloudSection.classList.remove('active');
+                mapSection.classList.remove('active');
+                consoleSection.classList.remove('active');
                 // Reset video
                 document.getElementById('videoStream').style.display = 'none';
                 document.getElementById('videoPlaceholder').style.display = 'block';
                 videoFrameCount = 0;
                 videoFpsCounter = 0;
+                pointCloudState.frameCount = 0;
+                pointCloudState.fpsCounter = 0;
+                pointCloudState.lastFpsUpdateMs = performance.now();
+                clearPointCloudDiagnosticTimer();
+                resetPointCloudData();
+                resetMapPreview();
+                resetConsoleOutput();
                 pendingTeleopSamples.clear();
                 teleopMetrics.lastSeq = null;
                 teleopMetrics.lastRttMs = null;
@@ -601,9 +968,8 @@
                 };
 
                 ws.onmessage = function(event) {
-                    // Check if it's binary data (video frame) or text message
                     if (event.data instanceof ArrayBuffer) {
-                        handleVideoFrame(event.data);
+                        handleBinaryMessage(event.data);
                     } else {
                         handleServerTextMessage(event.data);
                     }
@@ -623,6 +989,24 @@
                 addLog(`❌ Failed to connect: ${error.message}`);
                 console.error('Connection error:', error);
             }
+        }
+
+        function handleBinaryMessage(arrayBuffer) {
+            if (isPointCloudBinaryMessage(arrayBuffer)) {
+                handlePointCloudBinaryFrame(arrayBuffer);
+                return;
+            }
+            handleVideoFrame(arrayBuffer);
+        }
+
+        function isPointCloudBinaryMessage(arrayBuffer) {
+            if (!(arrayBuffer instanceof ArrayBuffer) || arrayBuffer.byteLength < POINTS_BINARY_HEADER_SIZE) {
+                return false;
+            }
+
+            const bytes = new Uint8Array(arrayBuffer, 0, 5);
+            return POINTS_BINARY_MAGIC.every((value, index) => bytes[index] === value)
+                && bytes[4] === POINTS_BINARY_TYPE_POINTS;
         }
 
         function handleVideoFrame(arrayBuffer) {
@@ -709,7 +1093,245 @@
                 return;
             }
 
+            if (parsed.type === 'points3d') {
+                handlePointCloudJsonMessage(parsed);
+                return;
+            }
+
+            if (parsed.type === 'map_frame') {
+                handleMapFrameMessage(parsed);
+                return;
+            }
+
+            if (parsed.type === 'wasm_log') {
+                handleWasmLogMessage(parsed);
+                return;
+            }
+
             addLog(`📱 Received: ${message}`);
+        }
+
+        function handleMapFrameMessage(message) {
+            if (typeof message.jpeg_b64 !== 'string' || message.jpeg_b64.length === 0) {
+                return;
+            }
+
+            mapPreviewEl.src = `data:image/jpeg;base64,${message.jpeg_b64}`;
+            mapPreviewEl.style.display = 'block';
+            mapPlaceholderEl.style.display = 'none';
+            mapFrameCount += 1;
+            mapFramesEl.textContent = mapFrameCount.toLocaleString();
+            mapSizeEl.textContent = `${((message.jpeg_b64.length * 3) / 4 / 1024).toFixed(1)} KB`;
+            mapTimestampEl.textContent = formatPointCloudTimestamp(message.timestamp);
+        }
+
+        function handleWasmLogMessage(message) {
+            if (typeof message.text !== 'string' || message.text.trim().length === 0) {
+                return;
+            }
+            appendConsoleLine(message.text.trim());
+        }
+
+        function handlePointCloudBinaryFrame(arrayBuffer) {
+            const view = new DataView(arrayBuffer);
+            const flags = view.getUint8(5);
+            const timestamp = view.getFloat64(8, true);
+            const pointCount = view.getUint32(16, true);
+            const pointsByteCount = pointCount * 3 * 4;
+            const colorsByteCount = (flags & POINTS_BINARY_FLAG_COLORS) ? pointCount * 3 : 0;
+            const expectedByteCount = POINTS_BINARY_HEADER_SIZE + pointsByteCount + colorsByteCount;
+
+            if (pointCount === 0 || arrayBuffer.byteLength < expectedByteCount) {
+                return;
+            }
+
+            const points = new Float32Array(arrayBuffer.slice(POINTS_BINARY_HEADER_SIZE, POINTS_BINARY_HEADER_SIZE + pointsByteCount));
+            const colors = colorsByteCount > 0
+                ? new Uint8Array(arrayBuffer.slice(POINTS_BINARY_HEADER_SIZE + pointsByteCount, expectedByteCount))
+                : null;
+
+            applyPointCloudFrame(points, colors, timestamp);
+        }
+
+        function handlePointCloudJsonMessage(message) {
+            if (!Array.isArray(message.points) || message.points.length < 3) {
+                return;
+            }
+
+            const points = new Float32Array(message.points);
+            let colors = null;
+            if (Array.isArray(message.colors) && message.colors.length >= points.length) {
+                colors = new Uint8Array(message.colors.slice(0, points.length));
+            }
+
+            applyPointCloudFrame(points, colors, Number.isFinite(message.timestamp) ? message.timestamp : null);
+        }
+
+        function applyPointCloudFrame(points, colors, timestamp) {
+            if (!(points instanceof Float32Array) || points.length < 3) {
+                return;
+            }
+
+            const isFirstFrame = !pointCloudState.hasReceivedFrame;
+            pointCloudState.hasReceivedFrame = true;
+            pointCloudState.points = points;
+            pointCloudState.colors = colors;
+            pointCloudState.pointCount = Math.floor(points.length / 3);
+            pointCloudState.timestamp = timestamp;
+            pointCloudState.frameCount += 1;
+            pointCloudState.fpsCounter += 1;
+
+            const bounds = computePointCloudBounds(points);
+            pointCloudState.center = bounds.center;
+            pointCloudState.radius = bounds.radius;
+
+            pointCloudPlaceholder.style.display = 'none';
+            pointCloudStatusTextEl.textContent = 'Streaming current WASM point cloud';
+            pointCloudHelpTextEl.textContent = 'Drag to orbit. Scroll to zoom.';
+            pointCloudPointsEl.textContent = pointCloudState.pointCount.toLocaleString();
+            pointCloudFramesEl.textContent = pointCloudState.frameCount.toLocaleString();
+            pointCloudRadiusEl.textContent = `${bounds.radius.toFixed(2)} m`;
+            pointCloudTimestampEl.textContent = formatPointCloudTimestamp(timestamp);
+
+            if (isFirstFrame) {
+                clearPointCloudDiagnosticTimer();
+                addLog('🌐 Point cloud stream active');
+            }
+
+            const now = performance.now();
+            if ((now - pointCloudState.lastFpsUpdateMs) >= 1000) {
+                pointCloudFpsEl.textContent = pointCloudState.fpsCounter.toString();
+                pointCloudState.fpsCounter = 0;
+                pointCloudState.lastFpsUpdateMs = now;
+            }
+
+            schedulePointCloudRender();
+        }
+
+        function computePointCloudBounds(points) {
+            let minX = Infinity;
+            let minY = Infinity;
+            let minZ = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            let maxZ = -Infinity;
+
+            for (let i = 0; i < points.length; i += 3) {
+                const x = points[i];
+                const y = points[i + 1];
+                const z = points[i + 2];
+                if (x < minX) minX = x;
+                if (y < minY) minY = y;
+                if (z < minZ) minZ = z;
+                if (x > maxX) maxX = x;
+                if (y > maxY) maxY = y;
+                if (z > maxZ) maxZ = z;
+            }
+
+            const center = {
+                x: (minX + maxX) * 0.5,
+                y: (minY + maxY) * 0.5,
+                z: (minZ + maxZ) * 0.5
+            };
+            const dx = maxX - minX;
+            const dy = maxY - minY;
+            const dz = maxZ - minZ;
+            const radius = Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz) * 0.5, 0.05);
+
+            return { center, radius };
+        }
+
+        function formatPointCloudTimestamp(timestamp) {
+            if (!Number.isFinite(timestamp)) {
+                return '-';
+            }
+            return `${timestamp.toFixed(3)} s`;
+        }
+
+        function resetPointCloudData() {
+            pointCloudState.points = null;
+            pointCloudState.colors = null;
+            pointCloudState.pointCount = 0;
+            pointCloudState.frameCount = 0;
+            pointCloudState.center = { x: 0, y: 0, z: 0 };
+            pointCloudState.radius = 1;
+            pointCloudState.hasReceivedFrame = false;
+            pointCloudState.timestamp = null;
+            pointCloudPointsEl.textContent = '0';
+            pointCloudFramesEl.textContent = '0';
+            pointCloudFpsEl.textContent = '0';
+            pointCloudRadiusEl.textContent = '0.00 m';
+            pointCloudTimestampEl.textContent = '-';
+            pointCloudStatusTextEl.textContent = 'Waiting for the current WASM point cloud...';
+            pointCloudHelpTextEl.textContent = 'Drag to orbit. Scroll to zoom.';
+            pointCloudPlaceholder.style.display = 'flex';
+            schedulePointCloudRender();
+        }
+
+        function resetMapPreview() {
+            mapFrameCount = 0;
+            mapFramesEl.textContent = '0';
+            mapSizeEl.textContent = '0 KB';
+            mapTimestampEl.textContent = '-';
+            mapPreviewEl.removeAttribute('src');
+            mapPreviewEl.style.display = 'none';
+            mapPlaceholderEl.style.display = 'block';
+        }
+
+        function resetConsoleOutput() {
+            consoleLineCountEl.textContent = '0';
+            consoleLogEl.innerHTML = '';
+            consoleLogEl.appendChild(consolePlaceholderEl);
+            consolePlaceholderEl.style.display = 'block';
+        }
+
+        function appendConsoleLine(text) {
+            if (consolePlaceholderEl.parentElement === consoleLogEl) {
+                consolePlaceholderEl.style.display = 'none';
+            }
+
+            const lineEl = document.createElement('div');
+            lineEl.className = 'console-line';
+            lineEl.innerHTML = `
+                <div class="console-line-time">${new Date().toLocaleTimeString()}</div>
+                <div class="console-line-text"></div>
+            `;
+            lineEl.querySelector('.console-line-text').textContent = text;
+            consoleLogEl.appendChild(lineEl);
+
+            while (consoleLogEl.querySelectorAll('.console-line').length > MAX_CONSOLE_LINES) {
+                const firstLine = consoleLogEl.querySelector('.console-line');
+                if (!firstLine) {
+                    break;
+                }
+                firstLine.remove();
+            }
+
+            consoleLineCountEl.textContent =
+                consoleLogEl.querySelectorAll('.console-line').length.toLocaleString();
+            consoleLogEl.scrollTop = consoleLogEl.scrollHeight;
+        }
+
+        function startPointCloudDiagnosticTimer() {
+            clearPointCloudDiagnosticTimer();
+            pointCloudStatusTextEl.textContent = 'Waiting for the current WASM point cloud...';
+            pointCloudHelpTextEl.textContent = 'Drag to orbit. Scroll to zoom.';
+            pointCloudDiagnosticTimer = setTimeout(() => {
+                const isConnected = ws && ws.readyState === WebSocket.OPEN;
+                if (!isConnected || pointCloudState.hasReceivedFrame) {
+                    return;
+                }
+                pointCloudStatusTextEl.textContent = 'No point-cloud frames received from the iPhone yet.';
+                pointCloudHelpTextEl.textContent =
+                    'Rebuild the iPhone app with the websocket point-cloud changes and make sure the WASM pipeline is running.';
+            }, 3000);
+        }
+
+        function clearPointCloudDiagnosticTimer() {
+            if (pointCloudDiagnosticTimer) {
+                clearTimeout(pointCloudDiagnosticTimer);
+                pointCloudDiagnosticTimer = null;
+            }
         }
 
         function handleTeleopAck(message) {
@@ -986,10 +1608,175 @@
             updateMotorDisplay();
         }
 
+        function initPointCloudViewer() {
+            if (pointCloudViewerInitialized) {
+                return;
+            }
+            pointCloudViewerInitialized = true;
+
+            pointCloudCanvas.addEventListener('pointerdown', (event) => {
+                pointCloudState.dragActive = true;
+                pointCloudState.lastPointerX = event.clientX;
+                pointCloudState.lastPointerY = event.clientY;
+                pointCloudCanvas.classList.add('dragging');
+                pointCloudCanvas.setPointerCapture(event.pointerId);
+            });
+
+            pointCloudCanvas.addEventListener('pointermove', (event) => {
+                if (!pointCloudState.dragActive) {
+                    return;
+                }
+
+                const dx = event.clientX - pointCloudState.lastPointerX;
+                const dy = event.clientY - pointCloudState.lastPointerY;
+                pointCloudState.lastPointerX = event.clientX;
+                pointCloudState.lastPointerY = event.clientY;
+                pointCloudState.yaw += dx * 0.01;
+                pointCloudState.pitch = Math.max(-1.4, Math.min(1.4, pointCloudState.pitch + dy * 0.01));
+                schedulePointCloudRender();
+            });
+
+            const stopDragging = (event) => {
+                if (!pointCloudState.dragActive) {
+                    return;
+                }
+                pointCloudState.dragActive = false;
+                pointCloudCanvas.classList.remove('dragging');
+                if (event && typeof event.pointerId === 'number') {
+                    pointCloudCanvas.releasePointerCapture(event.pointerId);
+                }
+            };
+
+            pointCloudCanvas.addEventListener('pointerup', stopDragging);
+            pointCloudCanvas.addEventListener('pointercancel', stopDragging);
+            pointCloudCanvas.addEventListener('pointerleave', stopDragging);
+
+            pointCloudCanvas.addEventListener('wheel', (event) => {
+                event.preventDefault();
+                const zoomDelta = event.deltaY > 0 ? 0.18 : -0.18;
+                pointCloudState.zoom = Math.max(1.2, Math.min(7.0, pointCloudState.zoom + zoomDelta));
+                schedulePointCloudRender();
+            }, { passive: false });
+
+            window.addEventListener('resize', schedulePointCloudRender);
+        }
+
+        function schedulePointCloudRender() {
+            if (pointCloudState.renderQueued) {
+                return;
+            }
+            pointCloudState.renderQueued = true;
+            requestAnimationFrame(renderPointCloud);
+        }
+
+        function renderPointCloud() {
+            pointCloudState.renderQueued = false;
+
+            const rect = pointCloudCanvas.getBoundingClientRect();
+            const cssWidth = Math.max(1, Math.floor(rect.width));
+            const cssHeight = Math.max(1, Math.floor(rect.height));
+            const dpr = window.devicePixelRatio || 1;
+            const displayWidth = Math.max(1, Math.floor(cssWidth * dpr));
+            const displayHeight = Math.max(1, Math.floor(cssHeight * dpr));
+
+            if (pointCloudCanvas.width !== displayWidth || pointCloudCanvas.height !== displayHeight) {
+                pointCloudCanvas.width = displayWidth;
+                pointCloudCanvas.height = displayHeight;
+            }
+
+            pointCloudCtx.setTransform(1, 0, 0, 1, 0, 0);
+            pointCloudCtx.clearRect(0, 0, displayWidth, displayHeight);
+
+            const background = pointCloudCtx.createLinearGradient(0, 0, 0, displayHeight);
+            background.addColorStop(0, '#111827');
+            background.addColorStop(1, '#030712');
+            pointCloudCtx.fillStyle = background;
+            pointCloudCtx.fillRect(0, 0, displayWidth, displayHeight);
+
+            drawPointCloudGuide(displayWidth, displayHeight);
+
+            if (!(pointCloudState.points instanceof Float32Array) || pointCloudState.pointCount === 0) {
+                return;
+            }
+
+            const projected = [];
+            const { points, colors } = pointCloudState;
+            const { center, radius, yaw, pitch, zoom } = pointCloudState;
+            const cosYaw = Math.cos(yaw);
+            const sinYaw = Math.sin(yaw);
+            const cosPitch = Math.cos(pitch);
+            const sinPitch = Math.sin(pitch);
+            const normalizedRadius = Math.max(radius, 0.05);
+            const cameraDistance = zoom;
+            const focalLength = Math.min(displayWidth, displayHeight) * 0.72;
+
+            for (let i = 0; i < points.length; i += 3) {
+                const normalizedX = (points[i] - center.x) / normalizedRadius;
+                const normalizedY = (points[i + 1] - center.y) / normalizedRadius;
+                const normalizedZ = (points[i + 2] - center.z) / normalizedRadius;
+
+                const yawX = normalizedX * cosYaw - normalizedZ * sinYaw;
+                const yawZ = normalizedX * sinYaw + normalizedZ * cosYaw;
+                const pitchY = normalizedY * cosPitch - yawZ * sinPitch;
+                const pitchZ = normalizedY * sinPitch + yawZ * cosPitch;
+                const depth = pitchZ + cameraDistance;
+
+                if (depth <= 0.08) {
+                    continue;
+                }
+
+                const screenX = displayWidth * 0.5 + (yawX / depth) * focalLength;
+                const screenY = displayHeight * 0.5 - (pitchY / depth) * focalLength;
+
+                if (screenX < -8 || screenX > displayWidth + 8 || screenY < -8 || screenY > displayHeight + 8) {
+                    continue;
+                }
+
+                projected.push({
+                    x: screenX,
+                    y: screenY,
+                    depth,
+                    size: Math.max(1.2, Math.min(4.5, 4.2 / depth)),
+                    colorIndex: i
+                });
+            }
+
+            projected.sort((a, b) => b.depth - a.depth);
+
+            for (const point of projected) {
+                if (colors && colors.length >= point.colorIndex + 3) {
+                    pointCloudCtx.fillStyle = `rgba(${colors[point.colorIndex]}, ${colors[point.colorIndex + 1]}, ${colors[point.colorIndex + 2]}, 0.92)`;
+                } else {
+                    const mix = Math.max(0, Math.min(1, 1 - ((point.depth - 0.4) / 3.2)));
+                    const red = Math.round(90 + (155 * mix));
+                    const green = Math.round(130 + (70 * (1 - mix)));
+                    const blue = Math.round(255 - (150 * mix));
+                    pointCloudCtx.fillStyle = `rgba(${red}, ${green}, ${blue}, 0.92)`;
+                }
+
+                pointCloudCtx.fillRect(point.x, point.y, point.size, point.size);
+            }
+        }
+
+        function drawPointCloudGuide(width, height) {
+            pointCloudCtx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+            pointCloudCtx.lineWidth = 1;
+            pointCloudCtx.beginPath();
+            pointCloudCtx.moveTo(0, height * 0.5);
+            pointCloudCtx.lineTo(width, height * 0.5);
+            pointCloudCtx.moveTo(width * 0.5, 0);
+            pointCloudCtx.lineTo(width * 0.5, height);
+            pointCloudCtx.stroke();
+        }
+
         // Focus message input when page loads
         window.addEventListener('load', () => {
             ipInput.focus();
             updateTeleopMetricDisplay();
+            initPointCloudViewer();
+            resetPointCloudData();
+            resetMapPreview();
+            resetConsoleOutput();
         });
     </script>
 </body>
