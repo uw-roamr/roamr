@@ -228,6 +228,7 @@ int main(){
                 // returned a frame with the same timestamp as the previous call.
                 if (!g_lc_ready.load(std::memory_order_relaxed)) {
                     g_lc_ready.store(true, std::memory_order_release);
+                    wasm_log_line("Lidar camera initialized");
                 }
                 g_lc_ready_idx.store(write_idx, std::memory_order_release);
                 g_lc_cv.notify_one();

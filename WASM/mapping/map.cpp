@@ -23,7 +23,7 @@ namespace mapping{
 	static int32_t POINTS_COUNT = 0;
 
 	// Planned path storage (grid cells in map coordinates).
-	static const int32_t kMaxPlannedPath = kMapMaxPoses;
+	static const int32_t kMaxPlannedPath = kMaxMapPoses;
 	static int32_t PLANNED_PATH[2 * kMaxPlannedPath];
 	static int32_t PLANNED_PATH_COUNT = 0;
 	static int32_t PLANNED_GOAL_ENABLED = 0;
