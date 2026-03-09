@@ -5,7 +5,7 @@
 
 namespace mapping{
 
-  struct MapFrameMetadata {
+  struct MapImage {
     double timestamp;
     int32_t width;
     int32_t height;

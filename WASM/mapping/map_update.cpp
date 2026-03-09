@@ -1,7 +1,7 @@
-#include "map_update.h"
+#include "mapping/map_update.h"
 
-#include "map_api.h"
-#include "visualization.h"
+#include "mapping/map_metadata.h"
+#include "mapping/visualization.h"
 
 #include <algorithm>
 #include <chrono>
@@ -150,7 +150,7 @@ namespace mapping {
 
   void update_map_from_lidar(Map& map,
                              const sensors::LidarCameraData& lc_data,
-                             MapFrameMetadata& map_frame,
+                             MapImage& map_frame,
                              const core::PoseSE3d& body_to_world
                             ) {
     const auto call_start = std::chrono::steady_clock::now();
@@ -224,9 +224,11 @@ namespace mapping {
       }
     }
 
+    map.draw_map(g_pose_history_count, used_points);
+
     visualization::render_map_frame(
         map,
-        g_pose_history_count, used_points, mapWidth, mapHeight,
+        g_pose_history_count, mapWidth, mapHeight,
         lc_data.timestamp, map_frame);
   }
 }//namespace mapping

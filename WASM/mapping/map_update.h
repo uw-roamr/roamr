@@ -13,6 +13,6 @@ namespace mapping{
 
     void update_map_from_lidar(Map& map,
                                const sensors::LidarCameraData& lc_data,
-                               MapFrameMetadata& map_frame,
+                               MapImage& map_frame,
                                const core::PoseSE3d& body_to_world);
 };

@@ -234,20 +234,11 @@ void Map::integrate_scan(
   }
 }
 
-void Map::set_pixel(int32_t x, int32_t y, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
-  if (x < 0 || x >= cur_w_ || y < 0 || y >= cur_h_) {
-    return;
-  }
-  const int32_t offset = (y * cur_w_ + x) * 4;
-  image_[offset + 0] = r;
-  image_[offset + 1] = g;
-  image_[offset + 2] = b;
-  image_[offset + 3] = a;
-}
-
 int32_t Map::grid_to_pixel(
     int32_t gx,
     int32_t gy,
+    int32_t img_w,
+    int32_t img_h,
     float scale,
     float off_x,
     float off_y,
@@ -260,7 +251,7 @@ int32_t Map::grid_to_pixel(
   const float fy = off_y + (static_cast<float>(kMapSizeY - 1 - gy) + 0.5f) * scale;
   const int32_t ix = static_cast<int32_t>(fx);
   const int32_t iy = static_cast<int32_t>(fy);
-  if (ix < 0 || ix >= cur_w_ || iy < 0 || iy >= cur_h_) {
+  if (ix < 0 || ix >= img_w || iy < 0 || iy >= img_h) {
     return 0;
   }
   *px = ix;
@@ -268,7 +259,7 @@ int32_t Map::grid_to_pixel(
   return 1;
 }
 
-void Map::draw_map(int32_t pose_count, int32_t point_count, int32_t width, int32_t height) {
+void Map::draw_map(int32_t pose_count, int32_t point_count) {
   if (pose_count < 0) {
     pose_count = 0;
   }
@@ -281,20 +272,6 @@ void Map::draw_map(int32_t pose_count, int32_t point_count, int32_t width, int32
   if (point_count > kMaxMapPoints) {
     point_count = kMaxMapPoints;
   }
-  if (width <= 0) {
-    width = 256;
-  }
-  if (height <= 0) {
-    height = 256;
-  }
-  if (width > kMaxImageWidth) {
-    width = kMaxImageWidth;
-  }
-  if (height > kMaxImageHeight) {
-    height = kMaxImageHeight;
-  }
-  cur_w_ = width;
-  cur_h_ = height;
 
   const int32_t used_points = (point_count < points_count_) ? point_count : points_count_;
   if (used_points > 0 && pose_count > 0) {
@@ -307,79 +284,15 @@ void Map::draw_map(int32_t pose_count, int32_t point_count, int32_t width, int32
         points_in_world_);
   }
 
-  const float scale_x = static_cast<float>(cur_w_) / static_cast<float>(kMapSizeX);
-  const float scale_y = static_cast<float>(cur_h_) / static_cast<float>(kMapSizeY);
-  const float scale = (scale_x < scale_y) ? scale_x : scale_y;
-  const float off_x = (static_cast<float>(cur_w_) - static_cast<float>(kMapSizeX) * scale) * 0.5f;
-  const float off_y = (static_cast<float>(cur_h_) - static_cast<float>(kMapSizeY) * scale) * 0.5f;
-
-  for (int32_t py = 0; py < cur_h_; ++py) {
-    for (int32_t px = 0; px < cur_w_; ++px) {
-      const int32_t gx = static_cast<int32_t>((static_cast<float>(px) - off_x) / scale);
-      const int32_t gy =
-          kMapSizeY - 1 - static_cast<int32_t>((static_cast<float>(py) - off_y) / scale);
-
-      uint8_t v = 128;
-      if (gx >= 0 && gx < kMapSizeX && gy >= 0 && gy < kMapSizeY) {
-        const int32_t idx = grid_index(gx, gy);
-        if (visited_[idx]) {
-          v = confirmed_[idx] ? 255 : 0;
-        }
-      }
-
-      const int32_t offset = (py * cur_w_ + px) * 4;
-      image_[offset + 0] = v;
-      image_[offset + 1] = v;
-      image_[offset + 2] = v;
-      image_[offset + 3] = 255;
-    }
-  }
-
-  if (pose_count > 0) {
-    const int32_t base = (pose_count - 1) * 3;
-    int32_t gx = 0;
-    int32_t gy = 0;
-    if (world_to_grid(poses_[base + 0], poses_[base + 1], &gx, &gy)) {
-      int32_t ppx = 0;
-      int32_t ppy = 0;
-      if (grid_to_pixel(gx, gy, scale, off_x, off_y, &ppx, &ppy)) {
-        for (int32_t dy = -1; dy <= 1; ++dy) {
-          for (int32_t dx = -1; dx <= 1; ++dx) {
-            set_pixel(ppx + dx, ppy + dy, 0, 255, 0, 255);
-          }
-        }
-      }
-    }
-  }
+  // Rendering is handled by visualization::render_map_frame.
 }
 
-int32_t Map::get_image_width() const {
-  return cur_w_;
-}
-
-int32_t Map::get_image_height() const {
-  return cur_h_;
-}
-
-uint8_t* Map::get_image_rgba_ptr() {
-  return image_.data();
-}
-
-int32_t Map::get_image_rgba_size() const {
-  return cur_w_ * cur_h_ * 4;
-}
-
-int32_t Map::get_image_pixel_u32(int32_t index) const {
-  if (index < 0 || index >= (cur_w_ * cur_h_)) {
-    return 0;
-  }
-  const int32_t offset = index * 4;
-  const uint32_t r = image_[offset + 0];
-  const uint32_t g = image_[offset + 1];
-  const uint32_t b = image_[offset + 2];
-  const uint32_t a = image_[offset + 3];
-  const uint32_t packed = (a << 24) | (b << 16) | (g << 8) | r;
-  return static_cast<int32_t>(packed);
+void Map::compute_viewport(int32_t width, int32_t height, float& scale, float& off_x, float& off_y) {
+  const float scale_x = static_cast<float>(width)  / static_cast<float>(kMapSizeX);
+  const float scale_y = static_cast<float>(height) / static_cast<float>(kMapSizeY);
+  scale = (scale_x < scale_y) ? scale_x : scale_y;
+  off_x = (static_cast<float>(width)  - static_cast<float>(kMapSizeX) * scale) * 0.5f;
+  off_y = (static_cast<float>(height) - static_cast<float>(kMapSizeY) * scale) * 0.5f;
 }
 
 }  // namespace mapping

@@ -2,7 +2,7 @@
 #include <array>
 #include <cstdint>
 
-#include "mapping/map_api.h"
+#include "mapping/map_metadata.h"
 
 namespace mapping{
 
@@ -35,18 +35,40 @@ namespace mapping{
         void set_points_world(int32_t in_world);
         void set_pose(int32_t idx, double x, double y, double theta);
         void set_point(int32_t idx, double x, double y);
-        void draw_map(int32_t pose_count, int32_t point_count, int32_t width, int32_t height);
-        int32_t get_image_width() const;
-        int32_t get_image_height() const;
-        uint8_t* get_image_rgba_ptr();
-        int32_t get_image_rgba_size() const;
-        int32_t get_image_pixel_u32(int32_t index) const;
+        // Integrate the latest scan into the occupancy grid.
+        // width/height are no longer a Map concern; see visualization::render_map_frame.
+        void draw_map(int32_t pose_count, int32_t point_count);
+
+        // Viewport helpers used by the visualization layer.
+        static void compute_viewport(
+            int32_t width, int32_t height,
+            float& scale, float& off_x, float& off_y);
+        int32_t world_to_grid(double x, double y, int32_t* gx, int32_t* gy) const;
+        int32_t grid_to_pixel(
+            int32_t gx,
+            int32_t gy,
+            int32_t img_w,
+            int32_t img_h,
+            float scale,
+            float off_x,
+            float off_y,
+            int32_t* px,
+            int32_t* py) const;
+
+        // Read-only data accessors for visualization layers.
+        const double*  get_pose_data()            const { return poses_.data(); }
+        const uint8_t* get_visited_data()         const { return visited_.data(); }
+        const uint8_t* get_confirmed_data()       const { return confirmed_.data(); }
+        int32_t        get_planned_path_count()   const { return planned_path_count_; }
+        const int32_t* get_planned_path_data()    const { return planned_path_.data(); }
+        int32_t        get_planned_goal_enabled() const { return planned_goal_enabled_; }
+        int32_t        get_planned_goal_x()       const { return planned_goal_x_; }
+        int32_t        get_planned_goal_y()       const { return planned_goal_y_; }
 
       private:
         static int32_t is_finite(float v);
 
         int32_t grid_index(int32_t gx, int32_t gy) const;
-        int32_t world_to_grid(double x, double y, int32_t* gx, int32_t* gy) const;
         void maybe_init_origin(double x, double y);
         void integrate_ray(int32_t x0, int32_t y0, int32_t x1, int32_t y1);
         void integrate_scan(
@@ -55,23 +77,9 @@ namespace mapping{
             double pose_theta,
             int32_t point_count,
             int32_t points_in_world);
-        void set_pixel(int32_t x, int32_t y, uint8_t r, uint8_t g, uint8_t b, uint8_t a);
-        int32_t grid_to_pixel(
-            int32_t gx,
-            int32_t gy,
-            float scale,
-            float off_x,
-            float off_y,
-            int32_t* px,
-            int32_t* py) const;
 
         // Pose storage for drawing trajectory.
         std::array<double, 3 * kMaxMapPoses> poses_{}; // x,y,theta triples
-
-        // Image buffer (RGBA8888).
-        std::array<uint8_t, kMaxImageWidth * kMaxImageHeight * 4> image_{};
-        int32_t cur_w_ = 256;
-        int32_t cur_h_ = 256;
 
         // LiDAR points storage (2D projection x,y).
         std::array<float, 2 * kMaxMapPoints> points_{};
@@ -99,5 +107,5 @@ namespace mapping{
 
 
   constexpr double mapMinIntervalSeconds = 0.1; // seconds
-  WASM_IMPORT("host", "rerun_log_map_frame") void rerun_log_map_frame(const MapFrameMetadata *frame);
+  WASM_IMPORT("host", "rerun_log_map_frame") void rerun_log_map_frame(const MapImage *frame);
 };
