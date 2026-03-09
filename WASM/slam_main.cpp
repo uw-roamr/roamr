@@ -81,7 +81,7 @@ enum class PoseSource{
 };
 // IMU preintegration drifts over time, so the shared autonomy/map pose should
 // not treat it as a drop-in orientation estimate.
-static constexpr PoseSource pose_source = PoseSource::IMU;
+static constexpr PoseSource pose_source = PoseSource::wheel_odom;
 static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
 static constexpr int32_t kInitialSpinSegments = 4;
@@ -97,6 +97,124 @@ static constexpr int32_t kPathFollowHoldMs = 120;
 static constexpr bool kEnableWheelPoseLogging = true;
 static constexpr double kWheelPoseLogIntervalSec = 0.2;
 static constexpr bool kEnableVerboseAutonomyLogs = false;
+
+struct OuterLoopTurnPidConfig {
+    double kp_omega_per_rad;
+    double ki_omega_per_rad_s;
+    double kd_omega_per_rad;
+    double max_omega_rad_s;
+    double min_omega_rad_s;
+    double integral_limit_rad_s;
+    double yaw_tolerance_rad;
+};
+
+static constexpr OuterLoopTurnPidConfig kScan4x90TurnPidCfg{
+    5.0,
+    0.05,
+    0.12,
+    0.5 * core::pi,
+    0.2,
+    0.6,
+    4.0 * core::pi / 180.0};
+
+static bool read_scan_odom_sample(sensors::WheelOdometryData* out) {
+    if (!out) {
+        return false;
+    }
+    read_wheel_odometry(out);
+    if (out->seq < 0 || out->timestamp <= 0.0 || out->sample_period_ms <= 0) {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_latest_wheel_odom_mutex);
+        g_latest_wheel_odom = *out;
+    }
+    if (!g_wheel_odom_ready.load(std::memory_order_relaxed)) {
+        g_wheel_odom_ready.store(true, std::memory_order_release);
+    }
+    return true;
+}
+
+void scan_4x90(controls::MotorController& motors) {
+    wasm_log_line("[autonomy][scan] starting 4x90 scan");
+    constexpr int kSegments = 4;
+    constexpr double kQuarterTurnRad = 0.5 * core::pi;
+    constexpr int kTurnHoldMs = 150;
+    constexpr int kPollSleepMs = 5;
+    constexpr int kSegmentSettleMs = 100;
+
+    sensors::WheelOdometryData odom{};
+    while (!read_scan_odom_sample(&odom)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(kPollSleepMs));
+    }
+
+    double x = g_latest_translation_odom.x;
+    double y = g_latest_translation_odom.y;
+    double yaw_odom = core::quat_to_euler_yaw(g_latest_quat_odom);
+    int32_t last_seq = odom.seq;
+    double target_yaw = yaw_odom;
+
+    motors.stop();
+    motors.reset_twist_controller();
+
+    for (int segment = 0; segment < kSegments; ++segment) {
+        target_yaw += kQuarterTurnRad;
+        double integral_term = 0.0;
+        double prev_error = target_yaw - yaw_odom;
+
+        while (true) {
+            sensors::WheelOdometryData next_odom{};
+            if (!read_scan_odom_sample(&next_odom) || next_odom.seq == last_seq) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(kPollSleepMs));
+                continue;
+            }
+            last_seq = next_odom.seq;
+
+            sensors::integrate_wheel_odometry(next_odom, &x, &y, &yaw_odom);
+            g_latest_translation_odom = {x, y, 0.0};
+            g_latest_quat_odom = {
+                0.0, 0.0, std::sin(yaw_odom * 0.5), std::cos(yaw_odom * 0.5)};
+
+            const double yaw_error = target_yaw - yaw_odom;
+            if (std::abs(yaw_error) <= kScan4x90TurnPidCfg.yaw_tolerance_rad) {
+                motors.stop();
+                motors.reset_twist_controller();
+                break;
+            }
+
+            const double dt_seconds = std::max(
+                1e-3,
+                static_cast<double>(std::max(1, next_odom.sample_period_ms)) * 1e-3);
+            integral_term += yaw_error * dt_seconds;
+            const double max_integral_term = kScan4x90TurnPidCfg.integral_limit_rad_s /
+                std::max(1e-6, kScan4x90TurnPidCfg.ki_omega_per_rad_s);
+            integral_term = std::clamp(integral_term, -max_integral_term, max_integral_term);
+
+            const double derivative = (yaw_error - prev_error) / dt_seconds;
+            prev_error = yaw_error;
+
+            double omega_cmd =
+                (kScan4x90TurnPidCfg.kp_omega_per_rad * yaw_error) +
+                (kScan4x90TurnPidCfg.ki_omega_per_rad_s * integral_term) +
+                (kScan4x90TurnPidCfg.kd_omega_per_rad * derivative);
+            omega_cmd = std::clamp(
+                omega_cmd,
+                -kScan4x90TurnPidCfg.max_omega_rad_s,
+                kScan4x90TurnPidCfg.max_omega_rad_s);
+            if (std::abs(omega_cmd) < kScan4x90TurnPidCfg.min_omega_rad_s) {
+                omega_cmd = std::copysign(kScan4x90TurnPidCfg.min_omega_rad_s, yaw_error);
+            }
+
+            motors.drive_twist(0.0, omega_cmd, next_odom, kTurnHoldMs);
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(kSegmentSettleMs));
+    }
+
+    motors.stop();
+    motors.reset_twist_controller();
+    wasm_log_line("[autonomy][scan] completed 4x90 scan");
+}
 
 // Tiny planner demo: set a fixed map-view pixel goal at startup.
 // Toggle off when using host-provided goal clicks.
@@ -125,7 +243,7 @@ int main(){
         planning::bridge::clear_goal();
     }
 
-    std::thread autonomy_thread([](){
+    std::thread autonomy_thread([&motors](){
         constexpr int kAutonomyFSMSleepMs = 100;
 
         // the main high level thread
@@ -135,16 +253,22 @@ int main(){
             std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
         }
         if (pose_source == PoseSource::wheel_odom || pose_source == PoseSource::fused){
-            while(!g_wheel_odom_ready.load(std::memory_order_acquire)){
+            sensors::WheelOdometryData initial_odom{};
+            while(!read_scan_odom_sample(&initial_odom)){
                 std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
             }
         }
         wasm_log_line("SENSOR_INIT -> AUTONOMY_INIT");
         g_state.store(RobotState::AUTONOMY_INIT, std::memory_order_release);
-        while(!g_first_map_update_done.load(std::memory_order_acquire) ||
-              !g_initial_spin_done.load(std::memory_order_acquire)){
+        while(!g_first_map_update_done.load(std::memory_order_acquire)){
             std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
         }
+
+        if (!g_initial_spin_done.load(std::memory_order_acquire)) {
+            scan_4x90(motors);
+            g_initial_spin_done.store(true, std::memory_order_release);
+        }
+
         wasm_log_line("AUTONOMY_INIT -> AUTONOMY_ENGAGED");
         g_state.store(RobotState::AUTONOMY_ENGAGED, std::memory_order_release);
     });
@@ -530,7 +654,7 @@ int main(){
 
     // TODO: remove once autonomy control loop is closed
     // controls::drive_forward_demo();
-    controls::drive_twist_demo(motors);
+    // controls::drive_twist_demo(motors);
 
     imu_thread.join();
     lidar_camera_thread.join();
