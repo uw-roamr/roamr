@@ -3,21 +3,24 @@
 #include <cstdint>
 #include <vector>
 
+#include "mapping/map_snapshot.h"
 #include "core/pose/se3.h"
-
-namespace mapping {
-class Map;
-}
+#include "planning/planner.h"
 
 namespace planning::bridge {
+
+struct PlanningOverlay {
+  uint64_t source_map_revision = 0;
+  bool goal_enabled = false;
+  GridCoord goal_cell{};
+  std::vector<GridCoord> path_grid;
+};
 
 void set_goal_map_pixel(int32_t x, int32_t y);
 void clear_goal();
 
-// Updates planner state and pushes the planned path overlay into map.cpp state.
-void update_plan_overlay(
-    mapping::Map& map,
-    const core::PoseSE3d& body_to_world,
+PlanningOverlay update_plan_overlay(
+    const mapping::MapSnapshot& snapshot,
     int32_t render_width,
     int32_t render_height);
 

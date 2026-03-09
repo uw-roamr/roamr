@@ -35,6 +35,15 @@ static mapping::Map g_map;
 static mapping::MapImage g_map_image;
 static std::atomic<bool> g_first_map_update_done{false};
 static std::atomic<uint64_t> g_map_update_revision{0};
+static std::mutex g_map_publish_mutex;
+static std::condition_variable g_map_publish_cv;
+static mapping::MapSnapshot g_latest_map_snapshot;
+static uint64_t g_latest_map_snapshot_revision = 0;
+static std::mutex g_plan_publish_mutex;
+static std::condition_variable g_plan_publish_cv;
+static mapping::MapSnapshot g_latest_planned_snapshot;
+static planning::bridge::PlanningOverlay g_latest_plan_overlay;
+static uint64_t g_latest_completed_plan_revision = 0;
 
 // IMU globals
 static sensors::calibration::IMUHistoryBuffer g_imu_history;
@@ -111,9 +120,6 @@ static constexpr double kScan4x90SettleYawRateRadS = 6.0 * core::pi / 180.0;
 static constexpr int kScan4x90SettleSamplesRequired = 3;
 
 static bool read_scan_odom_sample(sensors::WheelOdometryData* out) {
-    if (!out) {
-        return false;
-    }
     return read_latest_wheel_odom_snapshot(out);
 }
 
@@ -234,6 +240,8 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
 static constexpr bool kEnablePlannerDemoGoal = true;
 static constexpr int kPlannerDemoGoalPixelX = 160;
 static constexpr int kPlannerDemoGoalPixelY = 128;
+static constexpr int32_t kRenderWidth = 256;
+static constexpr int32_t kRenderHeight = 256;
 }; //namespace
 
 int main(){
@@ -399,7 +407,7 @@ int main(){
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
       } while (state != RobotState::AUTONOMY_ENGAGED && state != RobotState::AUTONOMY_INIT);
 
-      mapping::initialize_map(g_map);
+        mapping::initialize_map(g_map);
       wasm_log_line("Map initialized");
 
       while(true){
@@ -439,13 +447,27 @@ int main(){
         mapping::update_map_from_lidar(
             g_map,
             lc_data,
-            g_map_image,
             body_to_world
         );
         if (!g_first_map_update_done.load(std::memory_order_relaxed)) {
             g_first_map_update_done.store(true, std::memory_order_release);
         }
-        g_map_update_revision.fetch_add(1, std::memory_order_acq_rel);
+        const uint64_t map_revision =
+            g_map_update_revision.fetch_add(1, std::memory_order_acq_rel) + 1;
+        mapping::MapSnapshot snapshot;
+        if (mapping::build_map_snapshot(
+                g_map,
+                body_to_world,
+                map_timestamp,
+                map_revision,
+                &snapshot)) {
+            {
+                std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+                g_latest_map_snapshot = std::move(snapshot);
+                g_latest_map_snapshot_revision = map_revision;
+            }
+            g_map_publish_cv.notify_one();
+        }
 
         // wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
 
@@ -459,25 +481,68 @@ int main(){
         do{
             state = g_state.load(std::memory_order_acquire);
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        } while (state != RobotState::AUTONOMY_INIT);
+        } while (state != RobotState::AUTONOMY_ENGAGED);
 
         wasm_log_line("Planner initialized");
+        uint64_t last_planned_revision = 0;
 
         while(true){
-            // planning::bridge::update_plan_overlay
+            mapping::MapSnapshot snapshot;
+            {
+                std::unique_lock<std::mutex> lk(g_map_publish_mutex);
+                g_map_publish_cv.wait(lk, [&]{
+                    return g_latest_map_snapshot_revision > last_planned_revision;
+                });
+                snapshot = g_latest_map_snapshot;
+            }
+            wasm_log_line("planning");
+
+
+            planning::bridge::PlanningOverlay overlay =
+                planning::bridge::update_plan_overlay(
+                    snapshot,
+                    kRenderWidth,
+                    kRenderHeight);
+            last_planned_revision = snapshot.map_revision;
+            {
+                std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
+                g_latest_planned_snapshot = std::move(snapshot);
+                g_latest_plan_overlay = std::move(overlay);
+                g_latest_completed_plan_revision = last_planned_revision;
+            }
+            g_plan_publish_cv.notify_one();
         }
 
 
     });
 
 
-    // std::thread telemetry_thread([](){
-    //     // Dedicated vis thread: blocks until the mapping thread publishes a
-    //     // new MapSnapshot, then renders + ships the RGBA frame to the host.
-    //     // Completely decoupled from scan ingestion.
-    //     while (true) {
-    //     }
-    // });
+    std::thread telemetry_thread([](){
+        mapping::PoseTrailState pose_trail;
+        uint64_t last_rendered_revision = 0;
+        while (true) {
+            mapping::MapSnapshot snapshot;
+            planning::bridge::PlanningOverlay overlay;
+            {
+                std::unique_lock<std::mutex> lk(g_plan_publish_mutex);
+                g_plan_publish_cv.wait(lk, [&]{
+                    return g_latest_completed_plan_revision > last_rendered_revision;
+                });
+                snapshot = g_latest_planned_snapshot;
+                overlay = g_latest_plan_overlay;
+            }
+
+            mapping::append_pose_to_trail(snapshot, &pose_trail);
+            mapping::visualization::render_map_frame(
+                snapshot,
+                pose_trail,
+                overlay,
+                kRenderWidth,
+                kRenderHeight,
+                g_map_image);
+            last_rendered_revision = snapshot.map_revision;
+        }
+    });
 
     std::thread control_thread([&m_pose, &motors](){
         // responsible for reading encoder values and sending motor commands
@@ -606,6 +671,6 @@ int main(){
     lidar_camera_thread.join();
     mapping_thread.join();
     planner_thread.join();
-    // telemetry_thread.join();
+    telemetry_thread.join();
     control_thread.join();
 }

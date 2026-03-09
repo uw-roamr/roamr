@@ -7,10 +7,6 @@
 
 namespace mapping {
 
-void Map::reset_poses() {
-  poses_.fill(core::PoseSE2d{});
-}
-
 void Map::reset_points() {
   points_.fill(0.0f);
   points_count_ = 0;
@@ -63,38 +59,8 @@ int32_t Map::get_occupancy_meta(OccupancyGridMetadata* out_meta) const {
   return 1;
 }
 
-void Map::clear_planned_path() {
-  planned_path_count_ = 0;
-  planned_goal_enabled_ = 0;
-}
-
-void Map::set_planned_path_cell(int32_t idx, int32_t gx, int32_t gy) {
-  if (idx < 0 || idx >= kMaxPlannedPath) {
-    return;
-  }
-  const int32_t base = idx * 2;
-  planned_path_[base + 0] = gx;
-  planned_path_[base + 1] = gy;
-  if (idx + 1 > planned_path_count_) {
-    planned_path_count_ = idx + 1;
-  }
-}
-
-void Map::set_planned_goal_cell(int32_t gx, int32_t gy, int32_t enabled) {
-  planned_goal_x_ = gx;
-  planned_goal_y_ = gy;
-  planned_goal_enabled_ = enabled ? 1 : 0;
-}
-
 void Map::set_points_world(int32_t in_world) {
   points_in_world_ = in_world ? 1 : 0;
-}
-
-void Map::set_pose(int32_t idx, double x, double y, double theta) {
-  if (idx < 0 || idx >= kMaxMapPoses) {
-    return;
-  }
-  poses_[idx] = core::PoseSE2d{x, y, theta};
 }
 
 void Map::set_point(int32_t idx, double x, double y) {
@@ -288,34 +254,10 @@ void Map::integrate_free_scan(const core::PoseSE2d& pose, int32_t free_point_cou
   }
 }
 
-int32_t Map::grid_to_pixel(
-    int32_t gx,
-    int32_t gy,
-    int32_t img_w,
-    int32_t img_h,
-    float scale,
-    float off_x,
-    float off_y,
-    int32_t* px,
-    int32_t* py) const {
-  if (gx < 0 || gx >= kMapSizeX || gy < 0 || gy >= kMapSizeY) {
-    return 0;
-  }
-  const float fx = off_x + (static_cast<float>(gx) + 0.5f) * scale;
-  const float fy = off_y + (static_cast<float>(kMapSizeY - 1 - gy) + 0.5f) * scale;
-  const int32_t ix = static_cast<int32_t>(fx);
-  const int32_t iy = static_cast<int32_t>(fy);
-  if (ix < 0 || ix >= img_w || iy < 0 || iy >= img_h) {
-    return 0;
-  }
-  *px = ix;
-  *py = iy;
-  return 1;
-}
-
-void Map::draw_map(int32_t pose_count, int32_t point_count, int32_t free_point_count) {
-  if (pose_count < 0) pose_count = 0;
-  if (pose_count > kMaxMapPoses) pose_count = kMaxMapPoses;
+void Map::draw_map(
+    const core::PoseSE2d& pose,
+    int32_t point_count,
+    int32_t free_point_count) {
   if (point_count < 0) point_count = 0;
   if (point_count > kMaxMapPoints) point_count = kMaxMapPoints;
   if (free_point_count < 0) free_point_count = 0;
@@ -324,25 +266,12 @@ void Map::draw_map(int32_t pose_count, int32_t point_count, int32_t free_point_c
   const int32_t used_points = (point_count    < points_count_)      ? point_count    : points_count_;
   const int32_t used_free   = (free_point_count < free_points_count_) ? free_point_count : free_points_count_;
 
-  if (pose_count > 0) {
-    const core::PoseSE2d& p = poses_[pose_count - 1];
-    if (used_points > 0) {
-      integrate_scan(p, used_points, points_in_world_);
-    }
-    if (used_free > 0) {
-      integrate_free_scan(p, used_free);
-    }
+  if (used_points > 0) {
+    integrate_scan(pose, used_points, points_in_world_);
   }
-
-  // Rendering is handled by visualization::render_map_frame.
-}
-
-void Map::compute_viewport(int32_t width, int32_t height, float& scale, float& off_x, float& off_y) {
-  const float scale_x = static_cast<float>(width)  / static_cast<float>(kMapSizeX);
-  const float scale_y = static_cast<float>(height) / static_cast<float>(kMapSizeY);
-  scale = (scale_x < scale_y) ? scale_x : scale_y;
-  off_x = (static_cast<float>(width)  - static_cast<float>(kMapSizeX) * scale) * 0.5f;
-  off_y = (static_cast<float>(height) - static_cast<float>(kMapSizeY) * scale) * 0.5f;
+  if (used_free > 0) {
+    integrate_free_scan(pose, used_free);
+  }
 }
 
 }  // namespace mapping

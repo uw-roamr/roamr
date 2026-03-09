@@ -340,7 +340,7 @@ namespace controls{
             int32_t last_applied_seq = std::numeric_limits<int32_t>::min();
             while (std::chrono::steady_clock::now() < deadline) {
                 next_tick += std::chrono::milliseconds(kControlTickMs);
-                if (read_control_odometry(&odom) && odom.seq != last_applied_seq) {
+                if (read_control_odometry(odom) && odom.seq != last_applied_seq) {
                     drive_twist(v_mps, omega_rad_s, odom, safe_hold_ms);
                     last_applied_seq = odom.seq;
                 } else {
@@ -374,15 +374,13 @@ namespace controls{
         void stop() const { drive_percent(0, 0, 0); }
 
     private:
-        bool read_control_odometry(sensors::WheelOdometryData* odom) const {
-            if (!odom) {
-                return false;
-            }
+        bool read_control_odometry(sensors::WheelOdometryData& odom) const {
+
             if (odom_reader_) {
-                return odom_reader_(odom);
+                return odom_reader_(&odom);
             }
-            read_wheel_odometry(odom);
-            return odom->seq >= 0 && odom->timestamp > 0.0 && odom->sample_period_ms > 0;
+            read_wheel_odometry(&odom);
+            return odom.seq >= 0 && odom.timestamp > 0.0 && odom.sample_period_ms > 0;
         }
 
         void refresh_last_twist_command(int hold_ms) {
@@ -403,7 +401,7 @@ namespace controls{
         }
 
         WheelSpeedPercentController wheel_speed_controller_;
-        OdomSnapshotReader odom_reader_ = nullptr;
+        OdomSnapshotReader odom_reader_;
         MotorCommand last_twist_motor_cmd_{0, 0, 0};
         bool has_last_twist_motor_cmd_ = false;
     };
@@ -416,7 +414,7 @@ namespace controls{
         //     const int pct = i * 10;
         //     motors.drive_for(-pct, pct, 3000, true);
         // }
-        
+
         motors.drive_for(15, 15, 2000, true);
         motors.drive_for(-15, 15, 2000, true);
         // motors.drive_twist_for(0.15, 0.0, 2000, true);

@@ -1,8 +1,6 @@
 #include "mapping/map_update.h"
 
 #include "mapping/map_metadata.h"
-#include "mapping/visualization.h"
-#include "planning/planner_bridge.h"
 
 #include <algorithm>
 #include <chrono>
@@ -28,9 +26,6 @@ namespace mapping {
   constexpr double kMapLogIntervalSec = 0.1;
 
 
-  static int g_pose_history_count = 0;
-  static double g_last_pose_yaw = 0.0;
-
   struct MapPerfWindow {
     std::chrono::steady_clock::time_point window_start = std::chrono::steady_clock::now();
     int calls = 0;
@@ -52,16 +47,47 @@ namespace mapping {
     map.reset_map();
     map.reset_points();
     map.reset_free_points();
-    map.reset_poses();
-    map.clear_planned_path();
     map.set_points_world(1);
-    g_pose_history_count = 0;
-    g_last_pose_yaw = 0.0;
+  }
+
+  bool build_map_snapshot(const Map& map,
+                          const core::PoseSE3d& body_to_world,
+                          double timestamp,
+                          uint64_t map_revision,
+                          MapSnapshot* out_snapshot) {
+    if (!out_snapshot) {
+      return false;
+    }
+
+    OccupancyGridMetadata meta{};
+    if (!map.get_occupancy_meta(&meta)) {
+      return false;
+    }
+
+    MapSnapshot snapshot;
+    snapshot.meta = meta;
+    snapshot.timestamp = timestamp;
+    snapshot.map_revision = map_revision;
+    snapshot.pose = core::PoseSE2d{
+        body_to_world.translation.x,
+        body_to_world.translation.y,
+        core::quat_to_euler_yaw(core::quat_normalize(body_to_world.quaternion))};
+    snapshot.occupancy.assign(
+        static_cast<size_t>(meta.width * meta.height),
+        static_cast<int8_t>(-1));
+    const int32_t copied = map.get_occupancy_grid(
+        snapshot.occupancy.data(),
+        static_cast<int32_t>(snapshot.occupancy.size()));
+    if (copied != meta.width * meta.height) {
+      return false;
+    }
+
+    *out_snapshot = std::move(snapshot);
+    return true;
   }
 
   void update_map_from_lidar(Map& map,
                              const sensors::LidarCameraData& lc_data,
-                             MapImage& map_frame,
                              const core::PoseSE3d& body_to_world
                             ) {
     const auto call_start = std::chrono::steady_clock::now();
@@ -75,23 +101,15 @@ namespace mapping {
         lc_data.points_frame_id == static_cast<core::CoordinateFrameId_t>(core::CoordinateFrameId::kRDF);
 
     double yaw = core::quat_to_euler_yaw(q_body_to_world);
-
-    if (g_pose_history_count > 0) {
-      yaw = core::unwrap_angle_near(yaw, g_last_pose_yaw);
-    }
-    g_last_pose_yaw = yaw;
-
+    const core::PoseSE2d map_pose{
+        t_body_to_world.x,
+        t_body_to_world.y,
+        yaw};
 
     // Correct camera-to-body mounting by +90 deg roll:
     // (x, y, z) -> (x, -z, y)
     // Applying here guarantees map, z filtering, and rerun all use the same corrected geometry.
     const core::Vector4d q_point_to_body = core::quat_from_euler_zyx(core::pi * 0.5, 0.0, 0.0);
-    if (g_pose_history_count < kMaxMapPoses) {
-      map.set_pose(g_pose_history_count, t_body_to_world.x, t_body_to_world.y, yaw);
-      g_pose_history_count += 1;
-    } else {
-      map.set_pose(kMaxMapPoses - 1, t_body_to_world.x, t_body_to_world.y, yaw);
-    }
 
     // for determining yaw of points
     const core::Vector4d q_body_to_world_yaw = core::quat_from_euler_zyx(0.0f, 0.0f, yaw);
@@ -145,11 +163,6 @@ namespace mapping {
     }
 
 
-    map.draw_map(g_pose_history_count, used_points, free_points);
-
-    visualization::render_map_frame(
-        map,
-        g_pose_history_count, mapWidth, mapHeight,
-        lc_data.timestamp, map_frame);
+    map.draw_map(map_pose, used_points, free_points);
   }
 }//namespace mapping

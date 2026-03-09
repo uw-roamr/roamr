@@ -1,6 +1,5 @@
 #include "mapping/visualization.h"
 #include "mapping/map.h"
-#include "core/pose/se2.h"
 #include "core/telemetry.h"
 
 #include <array>
@@ -58,22 +57,57 @@ void draw_line(
 
 // red forward, green left (FLU convention)
 void draw_pose_layer(
-    const Map& map, int32_t pose_count,
+    const MapSnapshot& snapshot,
+    const PoseTrailState& pose_trail,
     float scale, float off_x, float off_y,
     std::array<uint8_t, kMaxPixels>& painted)
 {
-    if (pose_count <= 0) return;
+    for (size_t i = 1; i < pose_trail.poses.size(); ++i) {
+        int32_t gx0 = 0;
+        int32_t gy0 = 0;
+        int32_t gx1 = 0;
+        int32_t gy1 = 0;
+        const core::PoseSE2d& a = pose_trail.poses[i - 1];
+        const core::PoseSE2d& b = pose_trail.poses[i];
+        const int32_t iax = static_cast<int32_t>(
+            std::floor((a.x - snapshot.meta.origin_x_m) / snapshot.meta.resolution_m));
+        const int32_t iay = static_cast<int32_t>(
+            std::floor((a.y - snapshot.meta.origin_y_m) / snapshot.meta.resolution_m));
+        const int32_t ibx = static_cast<int32_t>(
+            std::floor((b.x - snapshot.meta.origin_x_m) / snapshot.meta.resolution_m));
+        const int32_t iby = static_cast<int32_t>(
+            std::floor((b.y - snapshot.meta.origin_y_m) / snapshot.meta.resolution_m));
+        gx0 = iax;
+        gy0 = iay;
+        gx1 = ibx;
+        gy1 = iby;
+        int32_t px0 = 0;
+        int32_t py0 = 0;
+        int32_t px1 = 0;
+        int32_t py1 = 0;
+        if (!snapshot_grid_to_pixel(
+                snapshot.meta, gx0, gy0, s_cur_w, s_cur_h, scale, off_x, off_y, &px0, &py0) ||
+            !snapshot_grid_to_pixel(
+                snapshot.meta, gx1, gy1, s_cur_w, s_cur_h, scale, off_x, off_y, &px1, &py1)) {
+            continue;
+        }
+        draw_line(px0, py0, px1, py1, 255, 255, 255, 255, painted);
+    }
 
-    const core::PoseSE2d& pose = map.get_pose_data()[pose_count - 1];
+    const core::PoseSE2d& pose = snapshot.pose;
     const double wx    = pose.x;
     const double wy    = pose.y;
     const double theta = pose.theta;
 
-    int32_t gx = 0, gy = 0;
-    if (!map.world_to_grid(wx, wy, &gx, &gy)) return;
+    const int32_t gx = static_cast<int32_t>(
+        std::floor((wx - snapshot.meta.origin_x_m) / snapshot.meta.resolution_m));
+    const int32_t gy = static_cast<int32_t>(
+        std::floor((wy - snapshot.meta.origin_y_m) / snapshot.meta.resolution_m));
+    if (gx < 0 || gx >= snapshot.meta.width || gy < 0 || gy >= snapshot.meta.height) return;
 
     int32_t ppx = 0, ppy = 0;
-    if (!map.grid_to_pixel(gx, gy, s_cur_w, s_cur_h, scale, off_x, off_y, &ppx, &ppy)) return;
+    if (!snapshot_grid_to_pixel(
+            snapshot.meta, gx, gy, s_cur_w, s_cur_h, scale, off_x, off_y, &ppx, &ppy)) return;
 
     const double c = std::cos(theta);
     const double s = std::sin(theta);
@@ -88,28 +122,42 @@ void draw_pose_layer(
 }
 
 void draw_path_layer(
-    const Map& map,
+    const MapSnapshot& snapshot,
+    const planning::bridge::PlanningOverlay& overlay,
     float scale, float off_x, float off_y,
     std::array<uint8_t, kMaxPixels>& painted)
 {
-    const int32_t path_count = map.get_planned_path_count();
-    if (path_count <= 0 && !map.get_planned_goal_enabled()) return;
+    if (overlay.path_grid.empty() && !overlay.goal_enabled) return;
 
-    const int32_t* path = map.get_planned_path_data();
-
-    for (int32_t i = 0; i < path_count; ++i) {
-        const int32_t gx = path[i * 2 + 0];
-        const int32_t gy = path[i * 2 + 1];
+    for (const planning::GridCoord& cell : overlay.path_grid) {
         int32_t ppx = 0, ppy = 0;
-        if (!map.grid_to_pixel(gx, gy, s_cur_w, s_cur_h, scale, off_x, off_y, &ppx, &ppy)) continue;
+        if (!snapshot_grid_to_pixel(
+                snapshot.meta,
+                cell.x,
+                cell.y,
+                s_cur_w,
+                s_cur_h,
+                scale,
+                off_x,
+                off_y,
+                &ppx,
+                &ppy)) continue;
         paint_pixel(ppx, ppy, 0, 150, 255, 255, painted); // blue path
     }
 
-    if (map.get_planned_goal_enabled()) {
+    if (overlay.goal_enabled) {
         int32_t ppx = 0, ppy = 0;
-        if (map.grid_to_pixel(
-                map.get_planned_goal_x(), map.get_planned_goal_y(),
-                s_cur_w, s_cur_h, scale, off_x, off_y, &ppx, &ppy)) {
+        if (snapshot_grid_to_pixel(
+                snapshot.meta,
+                overlay.goal_cell.x,
+                overlay.goal_cell.y,
+                s_cur_w,
+                s_cur_h,
+                scale,
+                off_x,
+                off_y,
+                &ppx,
+                &ppy)) {
             for (int32_t dy = -2; dy <= 2; ++dy) {
                 for (int32_t dx = -2; dx <= 2; ++dx) {
                     paint_pixel(ppx + dx, ppy + dy, 255, 200, 0, 255, painted); // yellow goal
@@ -120,27 +168,26 @@ void draw_path_layer(
 }
 
 void draw_map_layer(
-    const Map& map,
+    const MapSnapshot& snapshot,
     float scale, float off_x, float off_y,
     std::array<uint8_t, kMaxPixels>& painted)
 {
-    const uint8_t* visited   = map.get_visited_data();
-    const uint8_t* confirmed = map.get_confirmed_data();
-
     for (int32_t py = 0; py < s_cur_h; ++py) {
         for (int32_t px = 0; px < s_cur_w; ++px) {
             if (painted[py * s_cur_w + px]) continue;
 
             const int32_t gx = static_cast<int32_t>(
                 (static_cast<float>(px) - off_x) / scale);
-            const int32_t gy = Map::kMapSizeY - 1 - static_cast<int32_t>(
+            const int32_t gy = snapshot.meta.height - 1 - static_cast<int32_t>(
                 (static_cast<float>(py) - off_y) / scale);
 
             uint8_t v = 128; // unknown (gray)
-            if (gx >= 0 && gx < Map::kMapSizeX && gy >= 0 && gy < Map::kMapSizeY) {
-                const int32_t cell = gx + gy * Map::kMapSizeX;
-                if (visited[cell]) {
-                    v = confirmed[cell] ? 255 : 0;
+            if (gx >= 0 && gx < snapshot.meta.width &&
+                gy >= 0 && gy < snapshot.meta.height) {
+                const int32_t cell = gx + gy * snapshot.meta.width;
+                const int8_t occ = snapshot.occupancy[static_cast<size_t>(cell)];
+                if (occ >= 0) {
+                    v = occ >= 50 ? 255 : 0;
                 }
             }
             const int32_t off = (py * s_cur_w + px) * 4;
@@ -155,14 +202,14 @@ void draw_map_layer(
 }
 
 void render_map_frame(
-    const Map&  map,
-    int32_t     pose_count,
-    int32_t     width,
-    int32_t     height,
-    double      timestamp,
+    const MapSnapshot& snapshot,
+    const PoseTrailState& pose_trail,
+    const planning::bridge::PlanningOverlay& overlay,
+    int32_t width,
+    int32_t height,
     MapImage& out_frame)
 {
-    wasm_log_line("drawing map");
+    if (!snapshot.valid()) return;
     // Clamp image dimensions and store in visualization state.
     if (width  <= 0) width  = 256;
     if (height <= 0) height = 256;
@@ -172,17 +219,17 @@ void render_map_frame(
     s_cur_h = height;
 
     float scale = 1.0f, off_x = 0.0f, off_y = 0.0f;
-    Map::compute_viewport(s_cur_w, s_cur_h, scale, off_x, off_y);
+    compute_snapshot_viewport(snapshot.meta, s_cur_w, s_cur_h, &scale, &off_x, &off_y);
 
     // One byte per pixel — 0 = unclaimed, 1 = claimed by a higher-priority layer.
     static std::array<uint8_t, kMaxPixels> s_painted;
     std::fill_n(s_painted.begin(), s_cur_w * s_cur_h, static_cast<uint8_t>(0));
 
-    draw_pose_layer(map, pose_count, scale, off_x, off_y, s_painted); // Layer 1
-    draw_path_layer(map,             scale, off_x, off_y, s_painted); // Layer 2
-    draw_map_layer( map,             scale, off_x, off_y, s_painted); // Layer 3 (base)
+    draw_pose_layer(snapshot, pose_trail, scale, off_x, off_y, s_painted); // Layer 1
+    draw_path_layer(snapshot, overlay, scale, off_x, off_y, s_painted); // Layer 2
+    draw_map_layer(snapshot, scale, off_x, off_y, s_painted); // Layer 3 (base)
 
-    out_frame.timestamp = timestamp;
+    out_frame.timestamp = snapshot.timestamp;
     out_frame.width     = s_cur_w;
     out_frame.height    = s_cur_h;
     out_frame.channels  = 4;
