@@ -32,7 +32,8 @@ enum class RobotState{
 static std::atomic<RobotState> g_state{RobotState::SENSOR_INIT};
 
 static bool g_map_initialized = false;
-static mapping::MapFrame g_map_frame;
+static mapping::Map g_map;
+static mapping::MapFrameMetadata g_map_frame;
 static std::atomic<bool> g_first_map_update_done{false};
 static std::atomic<uint64_t> g_map_update_revision{0};
 
@@ -380,7 +381,7 @@ int main(){
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
 
-      mapping::initialize_map();
+      mapping::initialize_map(g_map);
       wasm_log_line("Initialized map");
 
       while(true){
@@ -423,6 +424,7 @@ int main(){
 
         // project all lc_data to map
         mapping::update_map_from_lidar(
+            g_map,
             lc_data,
             g_map_frame,
             body_to_world
@@ -435,6 +437,7 @@ int main(){
         // wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
 
         // planning::bridge::update_plan_overlay(
+        //     g_map,
         //     body_to_world,
         //     g_map_frame.width,
         //     g_map_frame.height);
