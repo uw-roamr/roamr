@@ -49,12 +49,15 @@ FrontierExplorerConfig build_frontier_config() {
   cfg.occupied_threshold = 50;
   cfg.allow_diagonal = true;
   cfg.prevent_corner_cutting = true;
-  cfg.inflation_radius_m = 0.20;
+  cfg.detection_inflation_radius_m = 0.0;
+  cfg.inflation_radius_m = mapping::default_navigation_costmap_config().inflation_radius_m;
   cfg.simplify_path = true;
   cfg.snap_start_to_free = true;
   cfg.snap_goal_to_free = true;
   cfg.snap_search_radius_cells = 10;
   cfg.min_cluster_size = 4;
+  cfg.goal_standoff_m = 0.18;
+  cfg.min_standoff_path_progress_m = 0.10;
   return cfg;
 }
 
@@ -287,6 +290,11 @@ PlanningOverlay overlay_from_frontier_result(
     const FrontierPlanResult& planned) {
   PlanningOverlay overlay;
   overlay.source_map_revision = map_revision;
+  overlay.selected_frontier_cluster = planned.selected_cluster_cells;
+  if (planned.success || !planned.selected_cluster_cells.empty()) {
+    overlay.selected_frontier_seed_enabled = true;
+    overlay.selected_frontier_seed = planned.selected_seed;
+  }
   if (!planned.success || planned.path_grid.empty()) {
     update_cached_path_world({});
     return overlay;
@@ -420,41 +428,6 @@ void invalidate_current_plan() {
   g_planner.invalidate();
 }
 
-GridCoord choose_persistent_frontier_goal(
-    const GridMap2D& planner_map,
-    const GridCoord& start_cell,
-    const FrontierExplorerConfig& cfg) {
-  AStarPlanner planner(planner_config_from_frontier_config(cfg));
-  std::vector<GridCoord> cached_goals;
-  {
-    std::lock_guard<std::mutex> lk(g_frontier_cache_mutex);
-    cached_goals = g_persistent_frontier_goals;
-  }
-
-  GridCoord best_goal{};
-  double best_length = std::numeric_limits<double>::infinity();
-  bool found = false;
-  for (const GridCoord& goal : cached_goals) {
-    if (!is_frontier_goal_candidate(planner_map, goal, cfg)) {
-      continue;
-    }
-    const PlanResult planned = planner.plan_to_grid(planner_map, start_cell, goal);
-    if (!planned.success || planned.path_world.empty()) {
-      continue;
-    }
-    const double length = path_length_m(planned.path_world);
-    if (length + 1e-6 < best_length) {
-      best_length = length;
-      best_goal = goal;
-      found = true;
-    }
-  }
-  if (!found) {
-    return GridCoord{-1, -1};
-  }
-  return best_goal;
-}
-
 void refresh_persistent_frontier_goals(
     const GridMap2D& planner_map,
     const core::Vector3d& start_world,
@@ -578,20 +551,12 @@ PlanningOverlay update_plan_overlay(
       frontier_cfg);
   overlay.frontier_candidates = collect_reachable_frontier_cells(
       planner_map,
-      core::Vector3d{snapshot.pose.x, snapshot.pose.y, 0.0},
+      core::Vector3d{snapshot.pose.x, snapshot.pose.y, snapshot.pose.theta},
       frontier_cfg);
-  const GridCoord cached_goal =
-      choose_persistent_frontier_goal(planner_map, start_cell, frontier_cfg);
-  if (cached_goal.x >= 0 && cached_goal.y >= 0) {
-    const PlanResult planned = g_planner.plan_to_grid(planner_map, start_cell, cached_goal);
-    if (planned.success && !planned.path_grid.empty()) {
-      return overlay_from_plan_result(snapshot.map_revision, planned);
-    }
-  }
 
   const FrontierPlanResult planned = plan_to_nearest_frontier(
       planner_map,
-      core::Vector3d{snapshot.pose.x, snapshot.pose.y, 0.0},
+      core::Vector3d{snapshot.pose.x, snapshot.pose.y, snapshot.pose.theta},
       frontier_cfg);
   std::ostringstream frontier_log;
   frontier_log << "[planning] frontier result success=" << (planned.success ? 1 : 0)
@@ -599,6 +564,11 @@ PlanningOverlay update_plan_overlay(
                << " frontier_cells=" << planned.frontier_cell_count
                << " clusters=" << planned.cluster_count
                << " selected_cluster_size=" << planned.selected_cluster_size
+               << " path_length_m=" << planned.selected_path_length_m
+               << " goal_standoff_m=" << planned.selected_goal_standoff_m
+               << " heading_delta_rad=" << planned.selected_heading_delta_rad
+               << " selected_seed=(" << planned.selected_seed.x << ","
+               << planned.selected_seed.y << ")"
                << " message=" << planned.message;
   wasm_log_line(frontier_log.str());
   if (planned.success) {
@@ -606,12 +576,17 @@ PlanningOverlay update_plan_overlay(
     const auto it = std::find(
         g_persistent_frontier_goals.begin(),
         g_persistent_frontier_goals.end(),
-        planned.goal_cell);
+        planned.selected_seed);
     if (it == g_persistent_frontier_goals.end()) {
-      g_persistent_frontier_goals.push_back(planned.goal_cell);
+      g_persistent_frontier_goals.push_back(planned.selected_seed);
     }
   }
-  return overlay_from_frontier_result(snapshot.map_revision, planned);
+  overlay = overlay_from_frontier_result(snapshot.map_revision, planned);
+  overlay.frontier_candidates = collect_reachable_frontier_cells(
+      planner_map,
+      core::Vector3d{snapshot.pose.x, snapshot.pose.y, snapshot.pose.theta},
+      frontier_cfg);
+  return overlay;
 }
 
 uint64_t copy_latest_plan_world(std::vector<core::Vector3d>* out_path) {

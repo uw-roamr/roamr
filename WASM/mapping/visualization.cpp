@@ -136,7 +136,9 @@ void draw_path_layer(
 {
     if (overlay.path_grid.empty() &&
         !overlay.goal_enabled &&
-        overlay.frontier_candidates.empty()) return;
+        overlay.frontier_candidates.empty() &&
+        overlay.selected_frontier_cluster.empty() &&
+        !overlay.selected_frontier_seed_enabled) return;
 
     for (const planning::GridCoord& cell : overlay.frontier_candidates) {
         int32_t ppx = 0, ppy = 0;
@@ -152,6 +154,22 @@ void draw_path_layer(
                 &ppx,
                 &ppy)) continue;
         paint_pixel(ppx, ppy, 0, 255, 180, 255, painted); // aqua frontier candidates
+    }
+
+    for (const planning::GridCoord& cell : overlay.selected_frontier_cluster) {
+        int32_t ppx = 0, ppy = 0;
+        if (!snapshot_grid_to_pixel(
+                snapshot.meta,
+                cell.x,
+                cell.y,
+                s_cur_w,
+                s_cur_h,
+                scale,
+                off_x,
+                off_y,
+                &ppx,
+                &ppy)) continue;
+        paint_pixel(ppx, ppy, 255, 0, 220, 255, painted); // magenta selected cluster
     }
 
     for (const planning::GridCoord& cell : overlay.path_grid) {
@@ -186,6 +204,27 @@ void draw_path_layer(
             for (int32_t dy = -2; dy <= 2; ++dy) {
                 for (int32_t dx = -2; dx <= 2; ++dx) {
                     paint_pixel(ppx + dx, ppy + dy, 255, 200, 0, 255, painted); // yellow goal
+                }
+            }
+        }
+    }
+
+    if (overlay.selected_frontier_seed_enabled) {
+        int32_t ppx = 0, ppy = 0;
+        if (snapshot_grid_to_pixel(
+                snapshot.meta,
+                overlay.selected_frontier_seed.x,
+                overlay.selected_frontier_seed.y,
+                s_cur_w,
+                s_cur_h,
+                scale,
+                off_x,
+                off_y,
+                &ppx,
+                &ppy)) {
+            for (int32_t dy = -1; dy <= 1; ++dy) {
+                for (int32_t dx = -1; dx <= 1; ++dx) {
+                    paint_pixel(ppx + dx, ppy + dy, 255, 80, 0, 255, painted); // orange seed
                 }
             }
         }
@@ -252,6 +291,19 @@ uint64_t overlay_path_hash(const planning::bridge::PlanningOverlay& overlay) {
         mix(static_cast<uint64_t>(static_cast<uint32_t>(cell.x)));
         mix(static_cast<uint64_t>(static_cast<uint32_t>(cell.y)));
     }
+    mix(static_cast<uint64_t>(overlay.frontier_candidates.size()));
+    for (const planning::GridCoord& cell : overlay.frontier_candidates) {
+        mix(static_cast<uint64_t>(static_cast<uint32_t>(cell.x)));
+        mix(static_cast<uint64_t>(static_cast<uint32_t>(cell.y)));
+    }
+    mix(static_cast<uint64_t>(overlay.selected_frontier_cluster.size()));
+    for (const planning::GridCoord& cell : overlay.selected_frontier_cluster) {
+        mix(static_cast<uint64_t>(static_cast<uint32_t>(cell.x)));
+        mix(static_cast<uint64_t>(static_cast<uint32_t>(cell.y)));
+    }
+    mix(static_cast<uint64_t>(overlay.selected_frontier_seed_enabled ? 1 : 0));
+    mix(static_cast<uint64_t>(static_cast<uint32_t>(overlay.selected_frontier_seed.x)));
+    mix(static_cast<uint64_t>(static_cast<uint32_t>(overlay.selected_frontier_seed.y)));
     return h;
 }
 

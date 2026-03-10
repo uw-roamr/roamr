@@ -6,25 +6,38 @@
 #include <cstdint>
 #include <limits>
 #include <queue>
+#include <sstream>
 #include <utility>
 #include <vector>
+
+#include "core/telemetry.h"
 
 namespace planning {
 namespace {
 
-PlannerConfig build_planner_config(const FrontierExplorerConfig& cfg) {
+PlannerConfig build_planner_config(
+    const FrontierExplorerConfig& cfg,
+    double inflation_radius_m) {
   PlannerConfig planner_cfg;
   planner_cfg.occupied_threshold = cfg.occupied_threshold;
   planner_cfg.treat_unknown_as_occupied = true;
   planner_cfg.allow_diagonal = cfg.allow_diagonal;
   planner_cfg.prevent_corner_cutting = cfg.prevent_corner_cutting;
-  planner_cfg.inflation_radius_m = cfg.inflation_radius_m;
+  planner_cfg.inflation_radius_m = inflation_radius_m;
   planner_cfg.simplify_path = cfg.simplify_path;
   planner_cfg.snap_start_to_free = cfg.snap_start_to_free;
   planner_cfg.snap_goal_to_free = cfg.snap_goal_to_free;
   planner_cfg.snap_search_radius_cells = cfg.snap_search_radius_cells;
   planner_cfg.max_expanded_nodes = cfg.max_expanded_nodes;
   return planner_cfg;
+}
+
+PlannerConfig build_detection_planner_config(const FrontierExplorerConfig& cfg) {
+  return build_planner_config(cfg, cfg.detection_inflation_radius_m);
+}
+
+PlannerConfig build_path_planner_config(const FrontierExplorerConfig& cfg) {
+  return build_planner_config(cfg, cfg.inflation_radius_m);
 }
 
 double path_length_m(const std::vector<core::Vector3d>& path_world) {
@@ -38,6 +51,83 @@ double path_length_m(const std::vector<core::Vector3d>& path_world) {
     length += std::sqrt(dx * dx + dy * dy);
   }
   return length;
+}
+
+double heading_delta_rad(
+    const GridMap2D& map,
+    const GridCoord& start_cell,
+    const GridCoord& goal_cell,
+    double start_heading_rad) {
+  double start_x = 0.0;
+  double start_y = 0.0;
+  double goal_x = 0.0;
+  double goal_y = 0.0;
+  grid_to_world(map, start_cell, &start_x, &start_y);
+  grid_to_world(map, goal_cell, &goal_x, &goal_y);
+  const double path_heading = std::atan2(goal_y - start_y, goal_x - start_x);
+  return std::abs(core::normalize_angle(path_heading - start_heading_rad));
+}
+
+bool apply_goal_standoff(
+    const PlanResult& seed_plan,
+    double goal_standoff_m,
+    double min_progress_m,
+    PlanResult* standoff_plan,
+    double* applied_standoff_m) {
+  if (!standoff_plan) {
+    return false;
+  }
+  *standoff_plan = seed_plan;
+  if (applied_standoff_m) {
+    *applied_standoff_m = 0.0;
+  }
+  if (seed_plan.path_grid.size() != seed_plan.path_world.size() ||
+      seed_plan.path_grid.empty() ||
+      seed_plan.path_world.empty()) {
+    return false;
+  }
+  if (goal_standoff_m <= 0.0 || seed_plan.path_world.size() < 2) {
+    return true;
+  }
+
+  double total_length_m = 0.0;
+  for (size_t i = 1; i < seed_plan.path_world.size(); ++i) {
+    const double dx = seed_plan.path_world[i].x - seed_plan.path_world[i - 1].x;
+    const double dy = seed_plan.path_world[i].y - seed_plan.path_world[i - 1].y;
+    total_length_m += std::sqrt(dx * dx + dy * dy);
+  }
+  if (total_length_m <= goal_standoff_m + min_progress_m) {
+    return true;
+  }
+
+  double backtracked_m = 0.0;
+  size_t cut_index = seed_plan.path_world.size() - 1;
+  while (cut_index > 0 && backtracked_m < goal_standoff_m) {
+    const core::Vector3d& a = seed_plan.path_world[cut_index - 1];
+    const core::Vector3d& b = seed_plan.path_world[cut_index];
+    const double dx = b.x - a.x;
+    const double dy = b.y - a.y;
+    backtracked_m += std::sqrt(dx * dx + dy * dy);
+    --cut_index;
+  }
+
+  if (cut_index == 0) {
+    return true;
+  }
+
+  standoff_plan->path_grid.assign(
+      seed_plan.path_grid.begin(),
+      seed_plan.path_grid.begin() + static_cast<std::ptrdiff_t>(cut_index + 1));
+  standoff_plan->path_world.assign(
+      seed_plan.path_world.begin(),
+      seed_plan.path_world.begin() + static_cast<std::ptrdiff_t>(cut_index + 1));
+  if (standoff_plan->path_grid.empty() || standoff_plan->path_world.empty()) {
+    return false;
+  }
+  if (applied_standoff_m) {
+    *applied_standoff_m = std::min(backtracked_m, goal_standoff_m);
+  }
+  return true;
 }
 
 void mark_reachable_cells(
@@ -244,7 +334,7 @@ std::vector<GridCoord> collect_frontier_goal_cells_impl(
     return goal_cells;
   }
 
-  const PlannerConfig planner_cfg = build_planner_config(cfg);
+  const PlannerConfig planner_cfg = build_detection_planner_config(cfg);
   const std::vector<int8_t> inflated_occupancy = inflate_obstacles(map, planner_cfg);
   GridCoord effective_start = start_cell;
   if (is_cell_blocked(
@@ -294,7 +384,7 @@ std::vector<GridCoord> collect_reachable_frontier_cells_impl(
     return frontier_cells;
   }
 
-  const PlannerConfig planner_cfg = build_planner_config(cfg);
+  const PlannerConfig planner_cfg = build_detection_planner_config(cfg);
   const std::vector<int8_t> inflated_occupancy = inflate_obstacles(map, planner_cfg);
   GridCoord effective_start = start_cell;
   if (is_cell_blocked(
@@ -333,7 +423,9 @@ FrontierPlanResult plan_to_nearest_frontier(
     return result;
   }
 
-  const PlannerConfig planner_cfg = build_planner_config(cfg);
+  const PlannerConfig detection_cfg = build_detection_planner_config(cfg);
+  const PlannerConfig planner_cfg = build_path_planner_config(cfg);
+  const std::vector<int8_t> inflated_detection = inflate_obstacles(map, detection_cfg);
   const std::vector<int8_t> inflated_occupancy = inflate_obstacles(map, planner_cfg);
 
   GridCoord start_cell{};
@@ -341,14 +433,14 @@ FrontierPlanResult plan_to_nearest_frontier(
     result.message = "robot pose outside map bounds";
     return result;
   }
-  if (is_cell_blocked(map, planner_cfg, start_cell.x, start_cell.y, &inflated_occupancy)) {
-    if (!planner_cfg.snap_start_to_free ||
+  if (is_cell_blocked(map, detection_cfg, start_cell.x, start_cell.y, &inflated_detection)) {
+    if (!detection_cfg.snap_start_to_free ||
         !find_nearest_free_cell(
             map,
-            planner_cfg,
-            inflated_occupancy,
+            detection_cfg,
+            inflated_detection,
             start_cell,
-            planner_cfg.snap_search_radius_cells,
+            detection_cfg.snap_search_radius_cells,
             &start_cell)) {
       result.message = "robot start cell is blocked";
       return result;
@@ -356,10 +448,10 @@ FrontierPlanResult plan_to_nearest_frontier(
   }
 
   std::vector<uint8_t> reachable;
-  mark_reachable_cells(map, planner_cfg, inflated_occupancy, start_cell, &reachable);
+  mark_reachable_cells(map, detection_cfg, inflated_detection, start_cell, &reachable);
 
   std::vector<GridCoord> frontier_cells;
-  detect_frontiers(map, planner_cfg, inflated_occupancy, reachable, &frontier_cells);
+  detect_frontiers(map, detection_cfg, inflated_detection, reachable, &frontier_cells);
   result.frontier_cell_count = static_cast<int32_t>(frontier_cells.size());
   if (frontier_cells.empty()) {
     result.message = "no reachable frontier cells";
@@ -375,8 +467,11 @@ FrontierPlanResult plan_to_nearest_frontier(
   }
 
   AStarPlanner planner(planner_cfg);
+  constexpr int32_t kClusterNearEqualCells = 2;
   double best_path_length = std::numeric_limits<double>::infinity();
+  double best_heading_delta = std::numeric_limits<double>::infinity();
   int32_t best_cluster_size = -1;
+  const double start_heading_rad = start_world.z;
 
   for (const std::vector<GridCoord>& cluster : clusters) {
     if (static_cast<int32_t>(cluster.size()) < cfg.min_cluster_size) {
@@ -384,29 +479,74 @@ FrontierPlanResult plan_to_nearest_frontier(
     }
 
     const GridCoord goal_seed = select_cluster_goal_cell(cluster);
-    const PlanResult planned = planner.plan_to_grid(map, start_cell, goal_seed);
-    if (!planned.success || planned.path_grid.empty() || planned.path_world.empty()) {
+    const PlanResult seed_plan = planner.plan_to_grid(map, start_cell, goal_seed);
+    if (!seed_plan.success || seed_plan.path_grid.empty() || seed_plan.path_world.empty()) {
+      continue;
+    }
+
+    PlanResult planned = seed_plan;
+    double applied_standoff_m = 0.0;
+    if (!apply_goal_standoff(
+            seed_plan,
+            cfg.goal_standoff_m,
+            cfg.min_standoff_path_progress_m,
+            &planned,
+            &applied_standoff_m)) {
       continue;
     }
 
     const double candidate_length = path_length_m(planned.path_world);
     const int32_t cluster_size = static_cast<int32_t>(cluster.size());
-    const bool shorter_path = candidate_length + 1e-6 < best_path_length;
-    const bool same_length_larger_cluster =
-        std::abs(candidate_length - best_path_length) <= 1e-6 &&
-        cluster_size > best_cluster_size;
-    if (!shorter_path && !same_length_larger_cluster) {
+    const double candidate_heading_delta =
+        heading_delta_rad(map, start_cell, planned.path_grid.back(), start_heading_rad);
+
+    bool better = false;
+    std::string candidate_reason;
+    if (best_cluster_size < 0 || cluster_size > best_cluster_size + kClusterNearEqualCells) {
+      better = true;
+      candidate_reason = "larger_cluster";
+    } else if (std::abs(cluster_size - best_cluster_size) <= kClusterNearEqualCells) {
+      if (candidate_length + 1e-6 < best_path_length) {
+        better = true;
+        candidate_reason = "near_equal_cluster_shorter_path";
+      } else if (std::abs(candidate_length - best_path_length) <= 1e-6 &&
+                 candidate_heading_delta + 1e-6 < best_heading_delta) {
+        better = true;
+        candidate_reason = "near_equal_cluster_heading_tiebreak";
+      }
+    }
+
+    std::ostringstream candidate_log;
+    candidate_log << "[planning] frontier candidate seed=("
+                  << goal_seed.x << "," << goal_seed.y << ")"
+                  << " standoff_goal=("
+                  << planned.path_grid.back().x << "," << planned.path_grid.back().y << ")"
+                  << " cluster_size=" << cluster_size
+                  << " path_length_m=" << candidate_length
+                  << " applied_standoff_m=" << applied_standoff_m
+                  << " heading_delta_rad=" << candidate_heading_delta
+                  << " decision=" << (better ? "chosen" : "rejected")
+                  << " reason=" << (better ? candidate_reason : "ranked_lower");
+    wasm_log_line(candidate_log.str());
+
+    if (!better) {
       continue;
     }
 
     best_path_length = candidate_length;
+    best_heading_delta = candidate_heading_delta;
     best_cluster_size = cluster_size;
     result.success = true;
     result.message = "ok";
     result.goal_cell = planned.path_grid.back();
+    result.selected_seed = goal_seed;
     result.path_grid = planned.path_grid;
     result.path_world = planned.path_world;
+    result.selected_cluster_cells = cluster;
     result.selected_cluster_size = cluster_size;
+    result.selected_path_length_m = candidate_length;
+    result.selected_heading_delta_rad = candidate_heading_delta;
+    result.selected_goal_standoff_m = applied_standoff_m;
   }
 
   if (!result.success) {
@@ -450,7 +590,7 @@ bool is_frontier_goal_candidate(
   if (!map.valid() || !map.in_bounds(cell.x, cell.y)) {
     return false;
   }
-  const PlannerConfig planner_cfg = build_planner_config(cfg);
+  const PlannerConfig planner_cfg = build_detection_planner_config(cfg);
   const std::vector<int8_t> inflated_occupancy = inflate_obstacles(map, planner_cfg);
   if (is_cell_blocked(map, planner_cfg, cell.x, cell.y, &inflated_occupancy)) {
     return false;
