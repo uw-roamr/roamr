@@ -235,6 +235,92 @@ GridCoord select_cluster_goal_cell(const std::vector<GridCoord>& cluster) {
   return best_cell;
 }
 
+std::vector<GridCoord> collect_frontier_goal_cells_impl(
+    const GridMap2D& map,
+    const GridCoord& start_cell,
+    const FrontierExplorerConfig& cfg) {
+  std::vector<GridCoord> goal_cells;
+  if (!map.valid()) {
+    return goal_cells;
+  }
+
+  const PlannerConfig planner_cfg = build_planner_config(cfg);
+  const std::vector<int8_t> inflated_occupancy = inflate_obstacles(map, planner_cfg);
+  GridCoord effective_start = start_cell;
+  if (is_cell_blocked(
+          map,
+          planner_cfg,
+          effective_start.x,
+          effective_start.y,
+          &inflated_occupancy)) {
+    if (!planner_cfg.snap_start_to_free ||
+        !find_nearest_free_cell(
+            map,
+            planner_cfg,
+            inflated_occupancy,
+            effective_start,
+            planner_cfg.snap_search_radius_cells,
+            &effective_start)) {
+      return goal_cells;
+    }
+  }
+
+  std::vector<uint8_t> reachable;
+  mark_reachable_cells(map, planner_cfg, inflated_occupancy, effective_start, &reachable);
+
+  std::vector<GridCoord> frontier_cells;
+  detect_frontiers(map, planner_cfg, inflated_occupancy, reachable, &frontier_cells);
+  if (frontier_cells.empty()) {
+    return goal_cells;
+  }
+
+  std::vector<std::vector<GridCoord>> clusters;
+  cluster_frontiers(map, frontier_cells, &clusters);
+  for (const std::vector<GridCoord>& cluster : clusters) {
+    if (static_cast<int32_t>(cluster.size()) < cfg.min_cluster_size) {
+      continue;
+    }
+    goal_cells.push_back(select_cluster_goal_cell(cluster));
+  }
+  return goal_cells;
+}
+
+std::vector<GridCoord> collect_reachable_frontier_cells_impl(
+    const GridMap2D& map,
+    const GridCoord& start_cell,
+    const FrontierExplorerConfig& cfg) {
+  std::vector<GridCoord> frontier_cells;
+  if (!map.valid()) {
+    return frontier_cells;
+  }
+
+  const PlannerConfig planner_cfg = build_planner_config(cfg);
+  const std::vector<int8_t> inflated_occupancy = inflate_obstacles(map, planner_cfg);
+  GridCoord effective_start = start_cell;
+  if (is_cell_blocked(
+          map,
+          planner_cfg,
+          effective_start.x,
+          effective_start.y,
+          &inflated_occupancy)) {
+    if (!planner_cfg.snap_start_to_free ||
+        !find_nearest_free_cell(
+            map,
+            planner_cfg,
+            inflated_occupancy,
+            effective_start,
+            planner_cfg.snap_search_radius_cells,
+            &effective_start)) {
+      return frontier_cells;
+    }
+  }
+
+  std::vector<uint8_t> reachable;
+  mark_reachable_cells(map, planner_cfg, inflated_occupancy, effective_start, &reachable);
+  detect_frontiers(map, planner_cfg, inflated_occupancy, reachable, &frontier_cells);
+  return frontier_cells;
+}
+
 }  // namespace
 
 FrontierPlanResult plan_to_nearest_frontier(
@@ -327,6 +413,62 @@ FrontierPlanResult plan_to_nearest_frontier(
     result.message = "no reachable frontier cluster";
   }
   return result;
+}
+
+std::vector<GridCoord> collect_frontier_goal_cells(
+    const GridMap2D& map,
+    const core::Vector3d& start_world,
+    const FrontierExplorerConfig& cfg) {
+  if (!map.valid()) {
+    return {};
+  }
+  GridCoord start_cell{};
+  if (!world_to_grid(map, start_world.x, start_world.y, &start_cell)) {
+    return {};
+  }
+  return collect_frontier_goal_cells_impl(map, start_cell, cfg);
+}
+
+std::vector<GridCoord> collect_reachable_frontier_cells(
+    const GridMap2D& map,
+    const core::Vector3d& start_world,
+    const FrontierExplorerConfig& cfg) {
+  if (!map.valid()) {
+    return {};
+  }
+  GridCoord start_cell{};
+  if (!world_to_grid(map, start_world.x, start_world.y, &start_cell)) {
+    return {};
+  }
+  return collect_reachable_frontier_cells_impl(map, start_cell, cfg);
+}
+
+bool is_frontier_goal_candidate(
+    const GridMap2D& map,
+    const GridCoord& cell,
+    const FrontierExplorerConfig& cfg) {
+  if (!map.valid() || !map.in_bounds(cell.x, cell.y)) {
+    return false;
+  }
+  const PlannerConfig planner_cfg = build_planner_config(cfg);
+  const std::vector<int8_t> inflated_occupancy = inflate_obstacles(map, planner_cfg);
+  if (is_cell_blocked(map, planner_cfg, cell.x, cell.y, &inflated_occupancy)) {
+    return false;
+  }
+  constexpr int32_t kNeighborDx[8] = {1, 1, 0, -1, -1, -1, 0, 1};
+  constexpr int32_t kNeighborDy[8] = {0, 1, 1, 1, 0, -1, -1, -1};
+  for (int32_t i = 0; i < 8; ++i) {
+    const int32_t nx = cell.x + kNeighborDx[i];
+    const int32_t ny = cell.y + kNeighborDy[i];
+    if (!map.in_bounds(nx, ny)) {
+      continue;
+    }
+    const int8_t neighbor_value = map.data[static_cast<size_t>(map.index(nx, ny))];
+    if (neighbor_value < 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace planning

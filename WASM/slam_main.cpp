@@ -11,6 +11,7 @@
 #include <thread>
 #include <vector>
 
+#include "autonomy/autonomy.h"
 #include "controls/motors.h"
 #include "core/math_utils.h"
 #include "core/ring_buffer.h"
@@ -33,6 +34,9 @@ enum class RobotState{
     AUTONOMY_ENGAGED
 };
 static std::atomic<RobotState> g_state{RobotState::SENSOR_INIT};
+
+static std::atomic<autonomy::AutonomySubstate> g_autonomy_substate{autonomy::AutonomySubstate::IDLE};
+static std::atomic<bool> g_planner_initialized{false};
 
 static mapping::Map g_map;
 static mapping::MapImage g_map_image;
@@ -102,6 +106,26 @@ static core::RingBuffer<sensors::PoseLog, kPoseHistoryCapacity> g_pose_history;
 static std::atomic<bool> g_scan_active{false};
 static std::atomic<bool> g_scan_requested{false};
 static std::atomic<double> g_scan_map_skip_until_timestamp{-1.0};
+
+
+static void set_autonomy_substate(
+    autonomy::AutonomySubstate next_state,
+    const char* reason = nullptr) {
+    const autonomy::AutonomySubstate previous =
+        g_autonomy_substate.exchange(next_state, std::memory_order_acq_rel);
+    if (previous == next_state) {
+        return;
+    }
+    std::ostringstream log;
+    log << "[autonomy][fsm] "
+        << autonomy::autonomy_substate_name(previous)
+        << " -> "
+        << autonomy::autonomy_substate_name(next_state);
+    if (reason && reason[0] != '\0') {
+        log << " reason=" << reason;
+    }
+    wasm_log_line(log.str());
+}
 
 static bool read_latest_wheel_odom_snapshot(sensors::WheelOdometryData* out) {
     if (!out) {
@@ -523,20 +547,29 @@ int main(){
         }
 
         if (!g_initial_spin_done.load(std::memory_order_acquire)) {
+            set_autonomy_substate(autonomy::AutonomySubstate::SCANNING, "initial_spin");
             g_scan_active.store(true, std::memory_order_release);
             scan_4x90(motors, m_pose);
             g_scan_active.store(false, std::memory_order_release);
             g_initial_spin_done.store(true, std::memory_order_release);
+            set_autonomy_substate(autonomy::AutonomySubstate::PLANNER_INIT, "initial_spin_complete");
         }
 
         wasm_log_line("AUTONOMY_INIT -> AUTONOMY_ENGAGED");
         g_state.store(RobotState::AUTONOMY_ENGAGED, std::memory_order_release);
+        set_autonomy_substate(autonomy::AutonomySubstate::PLANNER_INIT, "autonomy_engaged");
 
         while (true) {
             if (g_scan_requested.exchange(false, std::memory_order_acq_rel)) {
+                set_autonomy_substate(autonomy::AutonomySubstate::SCANNING, "scan_requested");
                 g_scan_active.store(true, std::memory_order_release);
                 scan_4x90(motors, m_pose);
                 g_scan_active.store(false, std::memory_order_release);
+                if (g_planner_initialized.load(std::memory_order_acquire)) {
+                    set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "scan_complete");
+                } else {
+                    set_autonomy_substate(autonomy::AutonomySubstate::PLANNER_INIT, "scan_complete_waiting_for_planner");
+                }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
         }
@@ -776,6 +809,8 @@ int main(){
         } while (state != RobotState::AUTONOMY_ENGAGED);
 
         wasm_log_line("Planner initialized");
+        g_planner_initialized.store(true, std::memory_order_release);
+        set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "planner_initialized");
         uint64_t last_planned_revision = 0;
         uint64_t last_goal_revision = planning::bridge::latest_goal_revision();
         planning::GridCoord last_start_cell{};
@@ -916,11 +951,19 @@ int main(){
             // obstacles, so replanning on every new scan is cheap.
 
             wasm_log_line("redrawing planning overlay");
+            if (goal_changed) {
+                set_autonomy_substate(autonomy::AutonomySubstate::GOAL_SELECTION, "goal_changed");
+            } else {
+                set_autonomy_substate(autonomy::AutonomySubstate::FRONTIER_DETECTION, "planner_wake");
+                set_autonomy_substate(autonomy::AutonomySubstate::GOAL_SELECTION, "auto_frontier_goal");
+            }
+            set_autonomy_substate(autonomy::AutonomySubstate::PLANNING_GOAL, "update_plan_overlay");
             planning::bridge::PlanningOverlay overlay =
                 planning::bridge::update_plan_overlay(
                     snapshot,
                     kRenderWidth,
                     kRenderHeight);
+            const bool published_path = !overlay.path_grid.empty();
             last_planned_revision = snapshot.map_revision;
             last_goal_revision = goal_revision;
             if (have_start_cell) {
@@ -930,6 +973,20 @@ int main(){
             {
                 std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
                 g_latest_plan_overlay = std::move(overlay);
+            }
+            if (!published_path) {
+                set_autonomy_substate(autonomy::AutonomySubstate::NO_PATH_AVAILABLE, "planner_produced_no_path");
+                if (!goal_changed &&
+                    g_planner_initialized.load(std::memory_order_acquire) &&
+                    !g_scan_requested.load(std::memory_order_acquire) &&
+                    !g_scan_active.load(std::memory_order_acquire)) {
+                    set_autonomy_substate(autonomy::AutonomySubstate::SCAN_REQUESTED, "planner_requested_scan");
+                    g_scan_requested.store(true, std::memory_order_release);
+                } else {
+                    set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "planner_produced_no_path_wait");
+                }
+            } else {
+                set_autonomy_substate(autonomy::AutonomySubstate::FOLLOWING_PATH, "planner_published_path");
             }
         }
 
@@ -1100,6 +1157,7 @@ int main(){
                 goal_reached_logged = false;
                 if (!planned_path_world.empty()) {
                     path_follower.set_path(planned_path_world);
+                    set_autonomy_substate(autonomy::AutonomySubstate::FOLLOWING_PATH, "control_loaded_path");
                     if (kEnableVerboseAutonomyLogs) {
                         std::ostringstream path_log;
                         path_log << "[autonomy][path] updated revision="
@@ -1110,6 +1168,7 @@ int main(){
                 } else {
                     path_follower.clear_path();
                     motors.stop();
+                    set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "path_revision_cleared");
                 }
             }
 
@@ -1147,7 +1206,7 @@ int main(){
                          << ") goal=(" << goal.x << "," << goal.y
                          << ") goal_dist=" << goal_dist
                          << " goal_heading_error=" << goal_heading_error
-                         << " dist_tol=0.05 heading_tol_rad=0.22"
+                         << " dist_tol=0.05 heading_gate=ignored"
                          << " target_index=" << status.target_index
                          << " status_dist_error=" << status.distance_error_m
                          << " status_heading_error=" << status.heading_error_rad;
@@ -1166,6 +1225,7 @@ int main(){
                     g_latest_plan_overlay = planning::bridge::PlanningOverlay{};
                 }
                 motors.stop();
+                set_autonomy_substate(autonomy::AutonomySubstate::SCAN_REQUESTED, "goal_reached");
                 g_scan_requested.store(true, std::memory_order_release);
                 continue;
             }

@@ -1,4 +1,5 @@
 #include "mapping/visualization.h"
+#include "mapping/costmap.h"
 #include "mapping/map.h"
 #include "core/telemetry.h"
 
@@ -133,7 +134,25 @@ void draw_path_layer(
     float scale, float off_x, float off_y,
     std::array<uint8_t, kMaxPixels>& painted)
 {
-    if (overlay.path_grid.empty() && !overlay.goal_enabled) return;
+    if (overlay.path_grid.empty() &&
+        !overlay.goal_enabled &&
+        overlay.frontier_candidates.empty()) return;
+
+    for (const planning::GridCoord& cell : overlay.frontier_candidates) {
+        int32_t ppx = 0, ppy = 0;
+        if (!snapshot_grid_to_pixel(
+                snapshot.meta,
+                cell.x,
+                cell.y,
+                s_cur_w,
+                s_cur_h,
+                scale,
+                off_x,
+                off_y,
+                &ppx,
+                &ppy)) continue;
+        paint_pixel(ppx, ppy, 0, 255, 180, 255, painted); // aqua frontier candidates
+    }
 
     for (const planning::GridCoord& cell : overlay.path_grid) {
         int32_t ppx = 0, ppy = 0;
@@ -175,6 +194,7 @@ void draw_path_layer(
 
 void draw_map_layer(
     const MapSnapshot& snapshot,
+    const InflatedCostmap* costmap,
     float scale, float off_x, float off_y,
     std::array<uint8_t, kMaxPixels>& painted)
 {
@@ -188,18 +208,31 @@ void draw_map_layer(
                 (static_cast<float>(py) - off_y) / scale);
 
             uint8_t v = 128; // unknown (gray)
+            uint8_t g = 128;
+            uint8_t b = 128;
             if (gx >= 0 && gx < snapshot.meta.width &&
                 gy >= 0 && gy < snapshot.meta.height) {
                 const int32_t cell = gx + gy * snapshot.meta.width;
                 const int8_t occ = snapshot.occupancy[static_cast<size_t>(cell)];
                 if (occ >= 0) {
-                    v = occ >= 50 ? 255 : 0;
+                    if (costmap &&
+                        costmap->valid() &&
+                        costmap->is_inflated_blocked(gx, gy) &&
+                        !costmap->is_source_occupied(gx, gy)) {
+                        v = 210;
+                        g = 140;
+                        b = 140;
+                    } else {
+                        v = occ >= 50 ? 255 : 0;
+                        g = v;
+                        b = v;
+                    }
                 }
             }
             const int32_t off = (py * s_cur_w + px) * 4;
             s_image_buf[off + 0] = v;
-            s_image_buf[off + 1] = v;
-            s_image_buf[off + 2] = v;
+            s_image_buf[off + 1] = g;
+            s_image_buf[off + 2] = b;
             s_image_buf[off + 3] = 255;
         }
     }
@@ -226,10 +259,16 @@ void render_base_layers(
     const MapSnapshot& snapshot,
     const planning::bridge::PlanningOverlay& overlay,
     float scale, float off_x, float off_y) {
+    InflatedCostmap costmap;
+    const InflatedCostmap* costmap_ptr =
+        build_inflated_costmap(
+            snapshot,
+            default_navigation_costmap_config(),
+            &costmap) ? &costmap : nullptr;
     static std::array<uint8_t, kMaxPixels> s_painted;
     std::fill_n(s_painted.begin(), s_cur_w * s_cur_h, static_cast<uint8_t>(0));
     draw_path_layer(snapshot, overlay, scale, off_x, off_y, s_painted);
-    draw_map_layer(snapshot, scale, off_x, off_y, s_painted);
+    draw_map_layer(snapshot, costmap_ptr, scale, off_x, off_y, s_painted);
     std::memcpy(
         s_base_image_buf.data(),
         s_image_buf.data(),

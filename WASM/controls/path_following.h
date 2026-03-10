@@ -94,8 +94,7 @@ class PathFollower {
     const double goal_heading_error =
         path_.size() < 2 ? 0.0 : normalize_angle(final_path_heading() - pose.yaw);
 
-    if (goal_dist <= cfg_.goal_tolerance_m &&
-        std::abs(goal_heading_error) <= cfg_.goal_heading_tolerance_rad) {
+    if (goal_dist <= cfg_.goal_tolerance_m) {
       reset_controller_state();
       status.goal_reached = true;
       status.target_index = path_.size() - 1;

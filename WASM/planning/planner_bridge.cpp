@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "core/telemetry.h"
+#include "mapping/costmap.h"
 #include "planning/frontier_explorer.h"
 #include "planning/planner.h"
 
@@ -31,6 +32,8 @@ std::mutex g_planner_goal_mutex;
 PlannerGoalPixel g_planner_goal;
 std::atomic<uint64_t> g_goal_revision{0};
 GoalChangeCallback g_goal_change_callback = nullptr;
+std::mutex g_frontier_cache_mutex;
+std::vector<GridCoord> g_persistent_frontier_goals;
 std::mutex g_planned_path_mutex;
 std::vector<core::Vector3d> g_planned_path_world;
 uint64_t g_planned_path_revision = 0;
@@ -38,17 +41,7 @@ std::chrono::steady_clock::time_point g_last_auto_frontier_plan_time =
     std::chrono::steady_clock::time_point::min();
 
 PlannerConfig build_planner_config() {
-  PlannerConfig cfg;
-  cfg.occupied_threshold = 50;
-  cfg.treat_unknown_as_occupied = true;
-  cfg.allow_diagonal = true;
-  cfg.prevent_corner_cutting = true;
-  cfg.inflation_radius_m = 0.20;
-  cfg.simplify_path = true;
-  cfg.snap_start_to_free = true;
-  cfg.snap_goal_to_free = true;
-  cfg.snap_search_radius_cells = 10;
-  return cfg;
+  return mapping::default_navigation_costmap_config();
 }
 
 FrontierExplorerConfig build_frontier_config() {
@@ -65,6 +58,34 @@ FrontierExplorerConfig build_frontier_config() {
   return cfg;
 }
 
+PlannerConfig planner_config_from_frontier_config(const FrontierExplorerConfig& frontier_cfg) {
+  PlannerConfig cfg;
+  cfg.occupied_threshold = frontier_cfg.occupied_threshold;
+  cfg.treat_unknown_as_occupied = true;
+  cfg.allow_diagonal = frontier_cfg.allow_diagonal;
+  cfg.prevent_corner_cutting = frontier_cfg.prevent_corner_cutting;
+  cfg.inflation_radius_m = frontier_cfg.inflation_radius_m;
+  cfg.simplify_path = frontier_cfg.simplify_path;
+  cfg.snap_start_to_free = frontier_cfg.snap_start_to_free;
+  cfg.snap_goal_to_free = frontier_cfg.snap_goal_to_free;
+  cfg.snap_search_radius_cells = frontier_cfg.snap_search_radius_cells;
+  cfg.max_expanded_nodes = frontier_cfg.max_expanded_nodes;
+  return cfg;
+}
+
+double path_length_m(const std::vector<core::Vector3d>& path_world) {
+  if (path_world.size() < 2) {
+    return 0.0;
+  }
+  double length = 0.0;
+  for (size_t i = 1; i < path_world.size(); ++i) {
+    const double dx = path_world[i].x - path_world[i - 1].x;
+    const double dy = path_world[i].y - path_world[i - 1].y;
+    length += std::sqrt(dx * dx + dy * dy);
+  }
+  return length;
+}
+
 DStarLitePlanner g_planner(build_planner_config());
 
 inline int32_t clampi(int32_t v, int32_t lo, int32_t hi) {
@@ -75,26 +96,6 @@ inline int32_t clampi(int32_t v, int32_t lo, int32_t hi) {
     return hi;
   }
   return v;
-}
-
-bool load_planner_grid(const mapping::MapSnapshot& snapshot, GridMap2D* out_map) {
-  if (!out_map) {
-    return false;
-  }
-  const mapping::OccupancyGridMetadata& meta = snapshot.meta;
-  if (meta.width <= 0 || meta.height <= 0 || meta.resolution_m <= 0.0) {
-    return false;
-  }
-  out_map->width = meta.width;
-  out_map->height = meta.height;
-  out_map->resolution_m = meta.resolution_m;
-  out_map->origin_x_m = meta.origin_x_m;
-  out_map->origin_y_m = meta.origin_y_m;
-  out_map->data = snapshot.occupancy;
-  if (out_map->data.size() != static_cast<size_t>(meta.width * meta.height)) {
-    return false;
-  }
-  return true;
 }
 
 bool is_path_segment_traversable(
@@ -350,13 +351,16 @@ bool is_overlay_path_valid(
   if (!snapshot.valid() || overlay.path_grid.empty()) {
     return false;
   }
-  GridMap2D planner_map;
-  if (!load_planner_grid(snapshot, &planner_map)) {
+  const PlannerConfig cfg = build_planner_config();
+  mapping::InflatedCostmap costmap;
+  if (!mapping::build_inflated_costmap(snapshot, cfg, &costmap)) {
     return false;
   }
-  const PlannerConfig cfg = build_planner_config();
-  const std::vector<int8_t> inflated = inflate_obstacles(planner_map, cfg);
-  return is_path_grid_traversable(planner_map, cfg, inflated, overlay.path_grid);
+  return is_path_grid_traversable(
+      costmap.grid,
+      costmap.config,
+      costmap.inflated_occupancy,
+      overlay.path_grid);
 }
 
 bool does_new_occupancy_intersect_overlay_path(
@@ -368,37 +372,37 @@ bool does_new_occupancy_intersect_overlay_path(
       newly_occupied_cells.empty()) {
     return false;
   }
-  GridMap2D planner_map;
-  if (!load_planner_grid(snapshot, &planner_map)) {
+  const PlannerConfig cfg = build_planner_config();
+  mapping::InflatedCostmap costmap;
+  if (!mapping::build_inflated_costmap(snapshot, cfg, &costmap)) {
     return false;
   }
-  const PlannerConfig cfg = build_planner_config();
   const int32_t radius_cells = std::max<int32_t>(
       1,
       static_cast<int32_t>(
-          std::ceil(cfg.inflation_radius_m / planner_map.resolution_m)) + 1);
+          std::ceil(cfg.inflation_radius_m / costmap.grid.resolution_m)) + 1);
   std::vector<uint8_t> path_mask(
-      static_cast<size_t>(planner_map.width * planner_map.height),
+      static_cast<size_t>(costmap.grid.width * costmap.grid.height),
       0);
   mark_inflated_cell(
-      planner_map,
+      costmap.grid,
       overlay.path_grid.front().x,
       overlay.path_grid.front().y,
       radius_cells,
       &path_mask);
   for (size_t i = 1; i < overlay.path_grid.size(); ++i) {
     mark_inflated_segment(
-        planner_map,
+        costmap.grid,
         overlay.path_grid[i - 1],
         overlay.path_grid[i],
         radius_cells,
         &path_mask);
   }
   for (const GridCoord& cell : newly_occupied_cells) {
-    if (!planner_map.in_bounds(cell.x, cell.y)) {
+    if (!costmap.grid.in_bounds(cell.x, cell.y)) {
       continue;
     }
-    if (path_mask[static_cast<size_t>(planner_map.index(cell.x, cell.y))] != 0) {
+    if (path_mask[static_cast<size_t>(costmap.grid.index(cell.x, cell.y))] != 0) {
       return true;
     }
   }
@@ -414,6 +418,75 @@ void invalidate_current_plan() {
     }
   }
   g_planner.invalidate();
+}
+
+GridCoord choose_persistent_frontier_goal(
+    const GridMap2D& planner_map,
+    const GridCoord& start_cell,
+    const FrontierExplorerConfig& cfg) {
+  AStarPlanner planner(planner_config_from_frontier_config(cfg));
+  std::vector<GridCoord> cached_goals;
+  {
+    std::lock_guard<std::mutex> lk(g_frontier_cache_mutex);
+    cached_goals = g_persistent_frontier_goals;
+  }
+
+  GridCoord best_goal{};
+  double best_length = std::numeric_limits<double>::infinity();
+  bool found = false;
+  for (const GridCoord& goal : cached_goals) {
+    if (!is_frontier_goal_candidate(planner_map, goal, cfg)) {
+      continue;
+    }
+    const PlanResult planned = planner.plan_to_grid(planner_map, start_cell, goal);
+    if (!planned.success || planned.path_world.empty()) {
+      continue;
+    }
+    const double length = path_length_m(planned.path_world);
+    if (length + 1e-6 < best_length) {
+      best_length = length;
+      best_goal = goal;
+      found = true;
+    }
+  }
+  if (!found) {
+    return GridCoord{-1, -1};
+  }
+  return best_goal;
+}
+
+void refresh_persistent_frontier_goals(
+    const GridMap2D& planner_map,
+    const core::Vector3d& start_world,
+    const FrontierExplorerConfig& cfg) {
+  GridCoord start_cell{};
+  if (!world_to_grid(planner_map, start_world.x, start_world.y, &start_cell)) {
+    std::lock_guard<std::mutex> lk(g_frontier_cache_mutex);
+    g_persistent_frontier_goals.clear();
+    return;
+  }
+  AStarPlanner planner(planner_config_from_frontier_config(cfg));
+  std::vector<GridCoord> discovered =
+      collect_frontier_goal_cells(planner_map, start_world, cfg);
+  std::lock_guard<std::mutex> lk(g_frontier_cache_mutex);
+  std::vector<GridCoord> merged;
+  merged.reserve(g_persistent_frontier_goals.size() + discovered.size());
+  for (const GridCoord& goal : g_persistent_frontier_goals) {
+    if (!is_frontier_goal_candidate(planner_map, goal, cfg)) {
+      continue;
+    }
+    const PlanResult planned = planner.plan_to_grid(planner_map, start_cell, goal);
+    if (planned.success && !planned.path_grid.empty()) {
+      merged.push_back(goal);
+    }
+  }
+  for (const GridCoord& goal : discovered) {
+    const auto it = std::find(merged.begin(), merged.end(), goal);
+    if (it == merged.end()) {
+      merged.push_back(goal);
+    }
+  }
+  g_persistent_frontier_goals = std::move(merged);
 }
 
 PlanningOverlay update_plan_overlay(
@@ -432,12 +505,21 @@ PlanningOverlay update_plan_overlay(
   GridMap2D planner_map;
   GridCoord start_cell{};
   if (!snapshot.valid() ||
-      !load_planner_grid(snapshot, &planner_map) ||
-      !world_to_grid(
+      !mapping::load_snapshot_grid(snapshot, &planner_map)) {
+    wasm_log_line("[planning] invalid snapshot or planner grid");
+    update_cached_path_world({});
+    return overlay;
+  }
+  if (!world_to_grid(
           planner_map,
           snapshot.pose.x,
           snapshot.pose.y,
           &start_cell)) {
+    std::ostringstream start_log;
+    start_log << "[planning] start pose outside grid pose=("
+              << snapshot.pose.x << "," << snapshot.pose.y << "," << snapshot.pose.theta
+              << ")";
+    wasm_log_line(start_log.str());
     update_cached_path_world({});
     return overlay;
   }
@@ -489,10 +571,46 @@ PlanningOverlay update_plan_overlay(
   }
   g_last_auto_frontier_plan_time = now;
 
+  const FrontierExplorerConfig frontier_cfg = build_frontier_config();
+  refresh_persistent_frontier_goals(
+      planner_map,
+      core::Vector3d{snapshot.pose.x, snapshot.pose.y, 0.0},
+      frontier_cfg);
+  overlay.frontier_candidates = collect_reachable_frontier_cells(
+      planner_map,
+      core::Vector3d{snapshot.pose.x, snapshot.pose.y, 0.0},
+      frontier_cfg);
+  const GridCoord cached_goal =
+      choose_persistent_frontier_goal(planner_map, start_cell, frontier_cfg);
+  if (cached_goal.x >= 0 && cached_goal.y >= 0) {
+    const PlanResult planned = g_planner.plan_to_grid(planner_map, start_cell, cached_goal);
+    if (planned.success && !planned.path_grid.empty()) {
+      return overlay_from_plan_result(snapshot.map_revision, planned);
+    }
+  }
+
   const FrontierPlanResult planned = plan_to_nearest_frontier(
       planner_map,
       core::Vector3d{snapshot.pose.x, snapshot.pose.y, 0.0},
-      build_frontier_config());
+      frontier_cfg);
+  std::ostringstream frontier_log;
+  frontier_log << "[planning] frontier result success=" << (planned.success ? 1 : 0)
+               << " start=(" << start_cell.x << "," << start_cell.y << ")"
+               << " frontier_cells=" << planned.frontier_cell_count
+               << " clusters=" << planned.cluster_count
+               << " selected_cluster_size=" << planned.selected_cluster_size
+               << " message=" << planned.message;
+  wasm_log_line(frontier_log.str());
+  if (planned.success) {
+    std::lock_guard<std::mutex> lk(g_frontier_cache_mutex);
+    const auto it = std::find(
+        g_persistent_frontier_goals.begin(),
+        g_persistent_frontier_goals.end(),
+        planned.goal_cell);
+    if (it == g_persistent_frontier_goals.end()) {
+      g_persistent_frontier_goals.push_back(planned.goal_cell);
+    }
+  }
   return overlay_from_frontier_result(snapshot.map_revision, planned);
 }
 

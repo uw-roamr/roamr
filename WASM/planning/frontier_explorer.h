@@ -37,4 +37,19 @@ FrontierPlanResult plan_to_nearest_frontier(
     const core::Vector3d& start_world,
     const FrontierExplorerConfig& cfg = {});
 
+std::vector<GridCoord> collect_frontier_goal_cells(
+    const GridMap2D& map,
+    const core::Vector3d& start_world,
+    const FrontierExplorerConfig& cfg = {});
+
+std::vector<GridCoord> collect_reachable_frontier_cells(
+    const GridMap2D& map,
+    const core::Vector3d& start_world,
+    const FrontierExplorerConfig& cfg = {});
+
+bool is_frontier_goal_candidate(
+    const GridMap2D& map,
+    const GridCoord& cell,
+    const FrontierExplorerConfig& cfg = {});
+
 }  // namespace planning

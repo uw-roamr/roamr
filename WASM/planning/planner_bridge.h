@@ -14,6 +14,7 @@ struct PlanningOverlay {
   bool goal_enabled = false;
   GridCoord goal_cell{};
   std::vector<GridCoord> path_grid;
+  std::vector<GridCoord> frontier_candidates;
 };
 
 using GoalChangeCallback = void (*)();
