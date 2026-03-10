@@ -34,6 +34,8 @@
 				WASM/core/telemetry.cpp,
 				WASM/mapping/map_update.cpp,
 				WASM/mapping/map.cpp,
+				WASM/mapping/visualization.cpp,
+				WASM/planning/frontier_explorer.cpp,
 				WASM/planning/navigation.cpp,
 				WASM/planning/planner_bridge.cpp,
 				WASM/sensors/imu_calibration.cpp,
@@ -325,7 +327,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"roamr/Preview Content\"";
-				DEVELOPMENT_TEAM = 542KRJUPYH;
+				DEVELOPMENT_TEAM = Z4H6YA468R;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = roamr/Info.plist;
@@ -350,7 +352,7 @@
 					"-ldl",
 					"-lm",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.thchzh.roamr;
+				PRODUCT_BUNDLE_IDENTIFIER = com.capstone.roamr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -374,7 +376,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"roamr/Preview Content\"";
-				DEVELOPMENT_TEAM = 542KRJUPYH;
+				DEVELOPMENT_TEAM = Z4H6YA468R;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = roamr/Info.plist;
@@ -399,7 +401,7 @@
 					"-ldl",
 					"-lm",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.thzh.roamr;
+				PRODUCT_BUNDLE_IDENTIFIER = com.capstone.roamr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
