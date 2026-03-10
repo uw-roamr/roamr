@@ -34,12 +34,22 @@ static std::atomic<RobotState> g_state{RobotState::SENSOR_INIT};
 
 static mapping::Map g_map;
 static mapping::MapImage g_map_image;
+static std::mutex g_map_mutex;
 static std::atomic<bool> g_first_map_update_done{false};
 static std::atomic<uint64_t> g_map_update_revision{0};
 static std::mutex g_map_publish_mutex;
 static mapping::MapSnapshot g_latest_map_snapshot;
 static std::mutex g_plan_publish_mutex;
 static planning::bridge::PlanningOverlay g_latest_plan_overlay;
+
+struct LatestMapState {
+    core::PoseSE3d body_to_world;
+    double timestamp = 0.0;
+    uint64_t revision = 0;
+    bool valid = false;
+};
+
+static LatestMapState g_latest_map_state;
 
 // IMU globals
 static sensors::calibration::IMUHistoryBuffer g_imu_history;
@@ -50,6 +60,7 @@ static std::atomic<bool> g_imu_ready{false};
 // lidar camera globals
 static sensors::CameraConfig g_cam_config;
 static std::array<sensors::LidarCameraData, 2> g_lc_buffers;
+static std::array<sensors::PoseLog, 2> g_lc_pose_buffers;
 static std::atomic<int> g_lc_ready_idx{-1};
 static std::atomic<int> g_lc_in_use_idx{-1};
 static std::atomic<bool> g_lc_ready{false};
@@ -63,6 +74,7 @@ static sensors::WheelOdometryData g_latest_wheel_odom = {0.0, -1, 0, 0, 0};
 static sensors::PoseLog g_pose;
 static std::atomic<bool> g_scan_active{false};
 static std::atomic<bool> g_scan_requested{false};
+static std::atomic<double> g_scan_map_skip_until_timestamp{-1.0};
 
 static bool read_latest_wheel_odom_snapshot(sensors::WheelOdometryData* out) {
     if (!out) {
@@ -131,10 +143,10 @@ static constexpr double kWheelPoseLogIntervalSec = 0.2;
 static constexpr bool kEnableVerboseAutonomyLogs = false;
 static constexpr int32_t kPlannerPollMs = 50;
 static constexpr double kPlannerMinIntervalSec = 0.35;
-static constexpr int32_t kTelemetryRenderIntervalMs = 66;
+static constexpr int32_t kTelemetryRenderIntervalMs = 33;
 static constexpr double kPoseTrailMinDistanceM = 0.05;
 static constexpr double kPoseTrailMinYawDeltaRad = 10.0 * core::pi / 180.0;
-static constexpr double kPoseTrailMinIntervalSec = 0.15;
+static constexpr double kPoseTrailMinIntervalSec = 0.05;
 
 struct OuterLoopTurnPidConfig {
     double kp_omega_per_rad;
@@ -165,12 +177,13 @@ static bool read_scan_odom_sample(sensors::WheelOdometryData* out) {
 }
 
 void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
-    wasm_log_line("[autonomy][scan] starting 4x90 scan");
     constexpr int kSegments = 4;
     constexpr double kQuarterTurnRad = 0.5 * core::pi;
     constexpr int kTurnHoldMs = 150;
     constexpr int kPollSleepMs = 5;
     constexpr int kSegmentSettleMs = 100;
+    constexpr double kScanWarmupSec = 1.0;
+    constexpr int kScanWarmupSleepMs = 1000;
 
     sensors::WheelOdometryData odom{};
     while (!read_scan_odom_sample(&odom)) {
@@ -188,6 +201,14 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
 
     motors.stop();
     motors.reset_twist_controller();
+    g_scan_map_skip_until_timestamp.store(
+        odom.timestamp + kScanWarmupSec,
+        std::memory_order_release);
+    wasm_log_line("[autonomy][scan] warmup: lidar on, skipping map updates for 1.0s");
+    std::this_thread::sleep_for(std::chrono::milliseconds(kScanWarmupSleepMs));
+    g_scan_map_skip_until_timestamp.store(-1.0, std::memory_order_release);
+    wasm_log_line("[autonomy][scan] warmup complete: resuming map updates");
+    wasm_log_line("[autonomy][scan] starting 4x90 scan");
 
     for (int segment = 0; segment < kSegments; ++segment) {
         const double segment_start_yaw = yaw;
@@ -397,14 +418,26 @@ int main(){
             last_sample_time = Clock::now();
         }
     });
-    std::thread lidar_camera_thread([&m_lc](){
-        using Clock = std::chrono::steady_clock;
-        const auto target_interval = std::chrono::milliseconds(sensors::LidarCameraIntervalMs);
+    std::thread lidar_camera_thread([&m_lc, &m_pose](){
         int write_idx = 0;
         double last_lidar_log_timestamp = -1.0;
-        auto last_sample_time = Clock::now();
 
         while(true){
+            {
+                std::unique_lock<std::mutex> lk(g_lc_cv_mutex);
+                g_lc_cv.wait(lk, [&]{
+                    if (g_lc_ready_idx.load(std::memory_order_acquire) >= 0) {
+                        return false;
+                    }
+                    const int in_use = g_lc_in_use_idx.load(std::memory_order_acquire);
+                    int candidate_idx = write_idx;
+                    if (candidate_idx == in_use) {
+                        candidate_idx = 1 - candidate_idx;
+                    }
+                    return candidate_idx != in_use;
+                });
+            }
+
             const int in_use = g_lc_in_use_idx.load(std::memory_order_acquire);
             if (write_idx == in_use) {
                 write_idx = 1 - write_idx;
@@ -420,6 +453,10 @@ int main(){
             g_lc_buffers[write_idx].image_size = 0;
             read_lidar_camera(&g_lc_buffers[write_idx]);
             sensors::ensure_points_flu(g_lc_buffers[write_idx]);
+            {
+                std::lock_guard<std::mutex> lk(m_pose);
+                g_lc_pose_buffers[write_idx] = g_pose;
+            }
 
             if (g_lc_buffers[write_idx].points_size > 0) {
                 if (g_lc_buffers[write_idx].timestamp > 0.0 &&
@@ -430,11 +467,10 @@ int main(){
                     last_lidar_log_timestamp = g_lc_buffers[write_idx].timestamp;
                 }
 
-                // Timestamp deduplication is intentionally omitted here: the mapping
-                // thread's do_map_update interval check (mapMinInterval) handles
-                // rate-limiting and will drop frames whose timestamps haven't advanced
-                // enough. Deduplicating here caused a permanent stall whenever the host
-                // returned a frame with the same timestamp as the previous call.
+                // Timestamp deduplication is intentionally omitted here. Mapping only
+                // requires monotonically advancing timestamps, and deduplicating at the
+                // producer caused a permanent stall whenever the host returned the same
+                // timestamp on consecutive calls.
                 if (!g_lc_ready.load(std::memory_order_relaxed)) {
                     g_lc_ready.store(true, std::memory_order_release);
                     wasm_log_line("Lidar camera initialized");
@@ -445,12 +481,6 @@ int main(){
             }
 
             write_idx = 1 - write_idx;
-            const auto curr_time = Clock::now();
-            const auto elapsed = curr_time - last_sample_time;
-            if (elapsed < target_interval) {
-                std::this_thread::sleep_for(target_interval - elapsed);
-            }
-            last_sample_time = Clock::now();
         }
     });
 
@@ -466,7 +496,11 @@ int main(){
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
       } while (state != RobotState::AUTONOMY_ENGAGED && state != RobotState::AUTONOMY_INIT);
 
-        mapping::initialize_map(g_map);
+        {
+            std::lock_guard<std::mutex> lk(g_map_mutex);
+            mapping::initialize_map(g_map);
+            g_latest_map_state = LatestMapState{};
+        }
       wasm_log_line("Map initialized");
 
       while(true){
@@ -478,21 +512,18 @@ int main(){
             g_lc_cv.wait(lk, []{return g_lc_ready_idx.load(std::memory_order_acquire) >= 0;});
             ready_idx = g_lc_ready_idx.exchange(kUnusedIdx, std::memory_order_acq_rel);
         }
+        g_lc_cv.notify_one();
         if (ready_idx < 0) {
             std::this_thread::yield();
             continue;
         }
         g_lc_in_use_idx.store(ready_idx, std::memory_order_release);
         const sensors::LidarCameraData& lc_data = g_lc_buffers[ready_idx];
+        const sensors::PoseLog& pose_snapshot = g_lc_pose_buffers[ready_idx];
         if (lc_data.points_size <= 0) {
             g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
             std::this_thread::yield();
             continue;
-        }
-        sensors::PoseLog pose_snapshot{};
-        {
-            std::lock_guard<std::mutex> lk(m_pose);
-            pose_snapshot = g_pose;
         }
         core::PoseSE3d body_to_world;
         body_to_world.quaternion = pose_snapshot.quaternion;
@@ -500,37 +531,39 @@ int main(){
         const double pose_timestamp = pose_snapshot.timestamp;
         const double candidate_timestamp = std::max(lc_data.timestamp, pose_timestamp);
         if (candidate_timestamp <= 0.0 ||
-            (last_map_timestamp > 0.0 &&
-             (candidate_timestamp <= last_map_timestamp ||
-              (candidate_timestamp - last_map_timestamp) < mapping::mapMinIntervalSeconds))) {
+            (last_map_timestamp > 0.0 && candidate_timestamp <= last_map_timestamp)) {
+            g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
+            continue;
+        }
+        const double scan_skip_until =
+            g_scan_map_skip_until_timestamp.load(std::memory_order_acquire);
+        if (g_scan_active.load(std::memory_order_acquire) &&
+            scan_skip_until > 0.0 &&
+            candidate_timestamp < scan_skip_until) {
             g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
             continue;
         }
 
-        // project the filtered lidar scan into the occupancy grid.
-        mapping::update_map_from_lidar(
-            g_map,
-            lc_data,
-            body_to_world
-        );
+        uint64_t map_revision = 0;
+        {
+            std::lock_guard<std::mutex> lk(g_map_mutex);
+            // project the filtered lidar scan into the occupancy grid.
+            mapping::update_map_from_lidar(
+                g_map,
+                lc_data,
+                body_to_world
+            );
+            map_revision =
+                g_map_update_revision.fetch_add(1, std::memory_order_acq_rel) + 1;
+            g_latest_map_state.body_to_world = body_to_world;
+            g_latest_map_state.timestamp = candidate_timestamp;
+            g_latest_map_state.revision = map_revision;
+            g_latest_map_state.valid = true;
+        }
         if (!g_first_map_update_done.load(std::memory_order_relaxed)) {
             g_first_map_update_done.store(true, std::memory_order_release);
         }
-        const uint64_t map_revision =
-            g_map_update_revision.fetch_add(1, std::memory_order_acq_rel) + 1;
-        mapping::MapSnapshot snapshot;
-        if (mapping::build_map_snapshot(
-                g_map,
-                body_to_world,
-                candidate_timestamp,
-                map_revision,
-                &snapshot)) {
-            {
-                std::lock_guard<std::mutex> lk(g_map_publish_mutex);
-                g_latest_map_snapshot = std::move(snapshot);
-            }
-            last_map_timestamp = candidate_timestamp;
-        }
+        last_map_timestamp = candidate_timestamp;
 
         // wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
 
@@ -636,7 +669,26 @@ int main(){
         while (true) {
             mapping::MapSnapshot snapshot;
             planning::bridge::PlanningOverlay overlay;
-            {
+            const uint64_t latest_map_revision =
+                g_map_update_revision.load(std::memory_order_acquire);
+            if (latest_map_revision != last_rendered_map_revision) {
+                bool built_snapshot = false;
+                {
+                    std::lock_guard<std::mutex> lk(g_map_mutex);
+                    if (g_latest_map_state.valid) {
+                        built_snapshot = mapping::build_map_snapshot(
+                            g_map,
+                            g_latest_map_state.body_to_world,
+                            g_latest_map_state.timestamp,
+                            g_latest_map_state.revision,
+                            &snapshot);
+                    }
+                }
+                if (built_snapshot) {
+                    std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+                    g_latest_map_snapshot = snapshot;
+                }
+            } else {
                 std::lock_guard<std::mutex> lk(g_map_publish_mutex);
                 snapshot = g_latest_map_snapshot;
             }

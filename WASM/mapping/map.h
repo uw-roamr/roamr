@@ -18,9 +18,12 @@ namespace mapping{
         static constexpr float kGridResolution = 0.02f; // meters
         static constexpr int32_t kMapSizeX = 400;
         static constexpr int32_t kMapSizeY = 400;
-        static constexpr int32_t kScanThreshold = 1;
-        static constexpr int32_t kDecayFactor = 20;
-        static constexpr int32_t kClearThreshold = 1; // clear confirmed cells after enough free-space passes
+        static constexpr int16_t kMinCellScore = -16;
+        static constexpr int16_t kMaxCellScore = 16;
+        static constexpr int16_t kHitIncrement = 4;
+        static constexpr int16_t kFreeDecrement = 1;
+        static constexpr int16_t kOccupiedThreshold = 4;
+        static constexpr int16_t kClearThreshold = 0;
         static constexpr float kMinRange = 0.1f; // meters
 
         void reset_points();
@@ -33,6 +36,21 @@ namespace mapping{
         void reset_free_points();
         // Integrate the latest scan into the occupancy grid.
         int32_t world_to_grid(double x, double y, int32_t* gx, int32_t* gy) const;
+        bool begin_scan_integration(
+            const core::PoseSE2d& pose,
+            int32_t* start_x,
+            int32_t* start_y);
+        void integrate_hit_world(
+            int32_t start_x,
+            int32_t start_y,
+            const core::PoseSE2d& pose,
+            double wx,
+            double wy);
+        void integrate_free_world(
+            int32_t start_x,
+            int32_t start_y,
+            double wx,
+            double wy);
         void draw_map(
             const core::PoseSE2d& pose,
             int32_t point_count,
@@ -73,8 +91,5 @@ namespace mapping{
         // 0 = points are in robot/laser frame (default), 1 = points already in world/map frame.
         int32_t points_in_world_ = 0;
     };
-
-
-  constexpr double mapMinIntervalSeconds = 0.1; // seconds
   WASM_IMPORT("host", "rerun_log_map_frame") void rerun_log_map_frame(const MapImage *frame);
 };
