@@ -86,7 +86,6 @@ static constexpr size_t kPoseHistoryCapacity = 256;
 static core::RingBuffer<sensors::PoseLog, kPoseHistoryCapacity> g_pose_history;
 static std::atomic<bool> g_scan_active{false};
 static std::atomic<bool> g_scan_requested{false};
-static std::atomic<double> g_scan_map_skip_until_timestamp{-1.0};
 
 static bool read_latest_wheel_odom_snapshot(sensors::WheelOdometryData* out) {
     if (!out) {
@@ -308,8 +307,6 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
     constexpr int kTurnHoldMs = 150;
     constexpr int kPollSleepMs = 5;
     constexpr int kSegmentSettleMs = 100;
-    constexpr double kScanWarmupSec = 5.0;
-    constexpr int kScanWarmupSleepMs = 1000;
 
     sensors::WheelOdometryData odom{};
     while (!read_scan_odom_sample(&odom)) {
@@ -327,13 +324,6 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
 
     motors.stop();
     motors.reset_twist_controller();
-    g_scan_map_skip_until_timestamp.store(
-        odom.timestamp + kScanWarmupSec,
-        std::memory_order_release);
-    wasm_log_line("[autonomy][scan] warmup: lidar on, skipping map updates for 1.0s");
-    std::this_thread::sleep_for(std::chrono::milliseconds(kScanWarmupSleepMs));
-    g_scan_map_skip_until_timestamp.store(-1.0, std::memory_order_release);
-    wasm_log_line("[autonomy][scan] warmup complete: resuming map updates");
     wasm_log_line("[autonomy][scan] starting 4x90 scan");
 
     for (int segment = 0; segment < kSegments; ++segment) {
@@ -454,6 +444,7 @@ int main(){
 
     std::thread autonomy_thread([&motors, &m_pose](){
         constexpr int kAutonomyFSMSleepMs = 100;
+        constexpr double kLidarWarmupSec = 2.0;
 
         // the main high level thread
         while(!g_imu_ready.load(std::memory_order_acquire) ||
@@ -466,6 +457,15 @@ int main(){
                 std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
             }
         }
+        {
+            std::ostringstream warmup_log;
+            warmup_log << "[autonomy][init] lidar warmup for "
+                       << kLidarWarmupSec
+                       << "s";
+            wasm_log_line(warmup_log.str());
+        }
+        std::this_thread::sleep_for(std::chrono::duration<double>(kLidarWarmupSec));
+        wasm_log_line("[autonomy][init] lidar warmup complete");
         wasm_log_line("SENSOR_INIT -> AUTONOMY_INIT");
         g_state.store(RobotState::AUTONOMY_INIT, std::memory_order_release);
         while(!g_first_map_update_done.load(std::memory_order_acquire)){
@@ -667,19 +667,6 @@ int main(){
             g_lc_cv.notify_one();
             continue;
         }
-        const double scan_skip_until =
-            g_scan_map_skip_until_timestamp.load(std::memory_order_acquire);
-        if (g_scan_active.load(std::memory_order_acquire) &&
-            scan_skip_until > 0.0 &&
-            candidate_timestamp < scan_skip_until) {
-            {
-                std::lock_guard<std::mutex> lk(g_lc_cv_mutex);
-                g_lc_slot_states[ready_idx] = LidarSlotState::FREE;
-            }
-            g_lc_cv.notify_one();
-            continue;
-        }
-
         uint64_t map_revision = 0;
         {
             std::lock_guard<std::mutex> lk(g_map_mutex);
