@@ -73,6 +73,7 @@ class BluetoothManager: NSObject, ObservableObject {
     private var lastMotorRightPercent = 0
     private var lastMotorHoldMs = 0
     private var pendingTeleopTrace: PendingTeleopTrace?
+    private var teleopStopWatchdogToken = 0
     private let odomQueueLock = NSLock()
     private var pendingOdomSamples: [WheelOdometrySample] = []
     private let maxPendingOdomSamples = 12_000
@@ -145,7 +146,43 @@ class BluetoothManager: NSObject, ObservableObject {
             teleopSequence: shouldSample ? seq : nil,
             phoneReceivedAt: shouldSample ? phoneReceivedAt : nil
         )
+        updateTeleopStopWatchdog(
+            left: clampedLeft,
+            right: clampedRight,
+            holdMs: clampedHoldMs,
+            commandWasForwarded: forwarded
+        )
         return TeleopForwardResult(forwarded: forwarded, sampledForLatency: forwarded && shouldSample)
+    }
+
+    private func updateTeleopStopWatchdog(left: Int, right: Int, holdMs: Int, commandWasForwarded: Bool) {
+        teleopStopWatchdogToken += 1
+        let token = teleopStopWatchdogToken
+
+        guard commandWasForwarded else { return }
+
+        if left == 0 && right == 0 {
+            sendTeleopStopBurst(token: token)
+            return
+        }
+
+        guard holdMs > 0 else { return }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(holdMs)) { [weak self] in
+            guard let self, token == self.teleopStopWatchdogToken else { return }
+            _ = self.sendMessageInternal("0 0 0", teleopSequence: nil, phoneReceivedAt: nil)
+            self.sendTeleopStopBurst(token: token)
+        }
+    }
+
+    private func sendTeleopStopBurst(token: Int) {
+        let burstDelaysMs = [0, 50, 125]
+        for delayMs in burstDelaysMs {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
+                guard let self, token == self.teleopStopWatchdogToken else { return }
+                _ = self.sendMessageInternal("0 0 0", teleopSequence: nil, phoneReceivedAt: nil)
+            }
+        }
     }
 
     @discardableResult
@@ -409,6 +446,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
         lastMotorRightPercent = 0
         lastMotorHoldMs = 0
         pendingTeleopTrace = nil
+        teleopStopWatchdogToken += 1
         lastTeleopLatencyText = "Teleop latency: -"
         clearWheelOdometrySamples()
         connectionStatus = "Connected to \(peripheral.name ?? "Unknown")"
@@ -432,6 +470,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
         lastMotorRightPercent = 0
         lastMotorHoldMs = 0
         pendingTeleopTrace = nil
+        teleopStopWatchdogToken += 1
         lastTeleopLatencyText = "Teleop latency: -"
         clearWheelOdometrySamples()
         connectionStatus = "Disconnected"

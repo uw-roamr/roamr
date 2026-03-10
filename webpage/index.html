@@ -988,6 +988,7 @@
         let joystickTimer = null;
         const SEND_INTERVAL = 50; // 50ms
         const HOLD_DURATION = 100; // 100ms
+        const STOP_BURST_DELAYS = [0, 50, 125];
         let nextTeleopSeq = 1;
         const pendingTeleopSamples = new Map();
 
@@ -1856,6 +1857,16 @@
                 }
             }
 
+            function sendStopBurst() {
+                for (const delayMs of STOP_BURST_DELAYS) {
+                    window.setTimeout(() => {
+                        if (!isDragging) {
+                            sendStopCommand();
+                        }
+                    }, delayMs);
+                }
+            }
+
             function startSending() {
                 if (joystickTimer) {
                     clearInterval(joystickTimer);
@@ -1877,7 +1888,7 @@
                 drawJoystick();
                 updateMotorDisplay();
                 if (sendStop) {
-                    sendStopCommand();
+                    sendStopBurst();
                 }
             }
 

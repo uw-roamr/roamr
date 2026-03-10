@@ -259,6 +259,9 @@ class WebSocketManager: ObservableObject {
     private func removeConnection(_ connection: NWConnection) {
         connections.removeAll { $0 === connection }
         connectionStates.removeValue(forKey: ObjectIdentifier(connection))
+        if connections.isEmpty {
+            bluetoothManager?.sendMessage("0 0 0")
+        }
         DispatchQueue.main.async {
             self.connectedClients = self.connections.count
         }
