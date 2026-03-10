@@ -64,7 +64,7 @@ FrontierExplorerConfig build_frontier_config() {
   return cfg;
 }
 
-AStarPlanner g_planner(build_planner_config());
+DStarLitePlanner g_planner(build_planner_config());
 
 inline int32_t clampi(int32_t v, int32_t lo, int32_t hi) {
   if (v < lo) {

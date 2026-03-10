@@ -86,6 +86,7 @@ static constexpr size_t kPoseHistoryCapacity = 256;
 static core::RingBuffer<sensors::PoseLog, kPoseHistoryCapacity> g_pose_history;
 static std::atomic<bool> g_scan_active{false};
 static std::atomic<bool> g_scan_requested{false};
+static std::atomic<double> g_scan_map_skip_until_timestamp{-1.0};
 
 static bool read_latest_wheel_odom_snapshot(sensors::WheelOdometryData* out) {
     if (!out) {
@@ -307,6 +308,8 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
     constexpr int kTurnHoldMs = 150;
     constexpr int kPollSleepMs = 5;
     constexpr int kSegmentSettleMs = 100;
+    constexpr double kScanWarmupSec = 5.0;
+    constexpr int kScanWarmupSleepMs = 1000;
 
     sensors::WheelOdometryData odom{};
     while (!read_scan_odom_sample(&odom)) {
@@ -712,7 +715,6 @@ int main(){
         uint64_t last_goal_revision = planning::bridge::latest_goal_revision();
         planning::GridCoord last_start_cell{};
         bool have_last_start_cell = false;
-        auto last_plan_time = Clock::time_point::min();
 
         while(true){
             mapping::MapSnapshot snapshot;
@@ -721,12 +723,15 @@ int main(){
                 snapshot = g_latest_map_snapshot;
             }
             if (!snapshot.valid()) {
+                wasm_log_line("snapshot invalid");
                 std::this_thread::sleep_for(std::chrono::milliseconds(kPlannerPollMs));
                 continue;
             }
 
+
             sensors::PoseLog pose_snapshot{};
             if (read_latest_pose_snapshot(m_pose, &pose_snapshot)) {
+                wasm_log_line("reading pose snapshot");
                 snapshot.pose = pose_log_to_se2(pose_snapshot);
                 snapshot.timestamp = std::max(snapshot.timestamp, pose_snapshot.timestamp);
             }
@@ -739,30 +744,30 @@ int main(){
                 (!have_last_start_cell || !(start_cell == last_start_cell));
             const bool map_changed = snapshot.map_revision != last_planned_revision;
             const bool goal_changed = goal_revision != last_goal_revision;
-            const auto now = Clock::now();
-            const double elapsed_since_plan = (last_plan_time == Clock::time_point::min())
-                ? std::numeric_limits<double>::infinity()
-                : std::chrono::duration<double>(now - last_plan_time).count();
+            // Skip case 1: nothing has changed and no valid plan exists yet — wait for
+            // the first real trigger (goal set, map update, or robot moves a cell).
             if (!goal_changed &&
                 !last_planned_revision &&
                 !map_changed &&
                 !start_cell_changed) {
+                wasm_log_line("case 1: no changes and no valid plan");
                 std::this_thread::sleep_for(std::chrono::milliseconds(kPlannerPollMs));
                 continue;
             }
+            // Skip case 2: a valid plan already exists and nothing relevant has changed —
+            // the current path is still good, no replan needed.
             if (!goal_changed &&
                 last_planned_revision > 0 &&
                 !map_changed &&
                 !start_cell_changed) {
+                wasm_log_line("case 2: valid plan and path is good");
                 std::this_thread::sleep_for(std::chrono::milliseconds(kPlannerPollMs));
                 continue;
             }
-            if (!goal_changed &&
-                elapsed_since_plan < kPlannerMinIntervalSec) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(kPlannerPollMs));
-                continue;
-            }
+            // No case-3 rate-limiter: D* Lite only re-expands cells near changed
+            // obstacles, so replanning on every new scan is cheap.
 
+            wasm_log_line("redrawing planning overlay");
             planning::bridge::PlanningOverlay overlay =
                 planning::bridge::update_plan_overlay(
                     snapshot,
@@ -770,7 +775,6 @@ int main(){
                     kRenderHeight);
             last_planned_revision = snapshot.map_revision;
             last_goal_revision = goal_revision;
-            last_plan_time = now;
             if (have_start_cell) {
                 last_start_cell = start_cell;
                 have_last_start_cell = true;
