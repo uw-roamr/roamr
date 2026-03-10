@@ -2,7 +2,7 @@
 
 #include <array>
 
-#include "core/coordinate_frames.h"
+#include "core/pose/se3.h"
 #include "sensors/calibration.h"
 #include "sensors/imu.h"
 
@@ -24,10 +24,11 @@ class IMUPreintegrator {
   void reset() noexcept {
     pose_ = core::PoseSE3d();
     velocity_ = {};
+    gyro_yaw_ = 0.0;
     last_ts_ = -1.0;
   }
 
-  void init_from_calibration() noexcept {
+  void update_bias() noexcept {
     bias_gyro_[0] = imu_calib_.gyro_bias[0];
     bias_gyro_[1] = imu_calib_.gyro_bias[1];
     bias_gyro_[2] = imu_calib_.gyro_bias[2];
@@ -43,6 +44,7 @@ class IMUPreintegrator {
   void get_pose_log(PoseLog* out) const noexcept;
 
   const core::PoseSE3d& pose() const noexcept { return pose_; }
+  double gyro_yaw() const noexcept { return gyro_yaw_; }
 
  private:
   calibration::IMUCalibration& imu_calib_;
@@ -51,6 +53,7 @@ class IMUPreintegrator {
   core::Vector3d bias_gyro_;
   core::Vector3d bias_acc_;
   core::Vector3d gravity_;
+  double gyro_yaw_ = 0.0;
   double last_ts_ = -1.0;
 };
 

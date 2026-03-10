@@ -17,6 +17,7 @@ struct MotorCommand {
 // Simple watchdog to enforce hold_ms on the iOS side (BLE target currently ignores it).
 private let motorQueue = DispatchQueue(label: "com.roamr.motorbridge")
 private var lastCommandToken = 0
+private let enableVerboseMotorHostLogging = false
 
 func write_motors_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     guard let ptr = ptr else { return }
@@ -28,6 +29,9 @@ func write_motors_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?
     let holdMs = max(0, Int(command.hold_ms))
 
     let message = "\(clampedLeft) \(clampedRight) \(holdMs)"
+    if enableVerboseMotorHostLogging {
+        WasmManager.shared.appendLogLine("[host][motor] \(message)")
+    }
 
     motorQueue.async {
         // Bump token for each command; used to cancel stale watchdogs.

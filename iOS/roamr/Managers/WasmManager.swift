@@ -5,12 +5,18 @@
 //  Created by Thomason Zhou on 2025-11-23.
 //
 
+import Combine
 import Foundation
 
 typealias CFunction = @convention(c) (wasm_exec_env_t?, UnsafeMutableRawPointer?) -> Void
 
-class WasmManager {
+private let wasmTextLogMaxBytes = 255
+private let wasmTextLogPayloadSize = MemoryLayout<UInt32>.size + wasmTextLogMaxBytes + 1
+
+final class WasmManager: ObservableObject {
     static let shared = WasmManager()
+    private static let maxWasmThreads: UInt32 = 8
+    private static let maxLogLines = 200
 
     private var isInitialized = false
     private var globalNativeSymbolPtr: UnsafeMutablePointer<NativeSymbol>?
@@ -19,6 +25,12 @@ class WasmManager {
     private var currentModuleInstance: OpaquePointer?
     private var shouldStop = false
     private let lock = NSLock()
+    @Published var isRunning = false
+    @Published var currentRunDisplayName: String?
+    @Published var logLines: [String] = []
+    @Published var latestMapJPEGData: Data?
+    @Published var latestMapTimestamp: Double = 0
+    @Published var latestMapFrameCount: Int = 0
 
     private init() {}
 
@@ -29,17 +41,18 @@ class WasmManager {
             wasm_runtime_terminate(moduleInstance)
         }
         lock.unlock()
-        print("WASM stop requested")
+        appendLogLine("WASM stop requested")
     }
 
     func initializeRuntime() -> Bool {
         if isInitialized { return true }
 
-        print("Initializing WAMR runtime...")
         guard wasm_runtime_init() else {
-            print("Fatal Error: WAMR runtime initialization failed.")
+            appendLogLine("Fatal Error: WAMR runtime initialization failed.")
             return false
         }
+        wasm_runtime_set_max_thread_num(Self.maxWasmThreads)
+        appendLogLine("Configured WAMR max thread count: \(Self.maxWasmThreads)")
 
         // Prepare Native Symbols
         struct NativeFunction {
@@ -53,6 +66,7 @@ class WasmManager {
             NativeFunction(name: "read_wheel_odometry", signature: "(*)", impl: read_wheel_odometry_impl),
             NativeFunction(name: "init_camera", signature: "(*)", impl: init_camera_impl),
             NativeFunction(name: "read_lidar_camera", signature: "(*)", impl: read_lidar_camera_impl),
+            NativeFunction(name: "wasm_log_text", signature: "(*)", impl: wasm_log_text_impl),
             NativeFunction(name: "rerun_log_lidar_frame", signature: "(*)", impl: rerun_log_lidar_frame_impl),
             NativeFunction(name: "rerun_log_map_frame", signature: "(*)", impl: rerun_log_map_frame_impl),
             NativeFunction(name: "rerun_log_imu", signature: "(*)", impl: rerun_log_imu_impl),
@@ -91,7 +105,7 @@ class WasmManager {
         globalModuleNamePtr = UnsafeMutablePointer(mutating: moduleNamePtr)
 
         guard wasm_runtime_register_natives(moduleNamePtr, nativeSymbolPtr, UInt32(nativeFunctions.count)) else {
-            print("Error: Failed to register native symbols")
+            appendLogLine("Error: Failed to register native symbols")
             return false
         }
 
@@ -119,7 +133,7 @@ class WasmManager {
 
         guard let resolvedWasmURL = wasmURL else {
             let present = bundle.paths(forResourcesOfType: "wasm", inDirectory: nil)
-            print("Error: Could not find \(fileName).wasm. Bundle currently has: \(present)")
+            appendLogLine("Error: Could not find \(fileName).wasm. Bundle currently has: \(present)")
             return
         }
         runWasmFile(at: resolvedWasmURL)
@@ -131,6 +145,10 @@ class WasmManager {
         lock.lock()
         shouldStop = false
         lock.unlock()
+        clearLogs()
+        clearMapPreview()
+        appendLogLine("Running \(fileURL.lastPathComponent)")
+        updateRunningState(true, currentRunDisplayName: fileURL.lastPathComponent)
 
         do {
             let wasmBytes = try Data(contentsOf: fileURL)
@@ -144,7 +162,9 @@ class WasmManager {
 
                 // Load module
                 guard let wasmModule = wasm_runtime_load(wasmBuffer, wasmBufferSize, &errorBuf, UInt32(errorBuf.count)) else {
-                    print("Error loading WASM module: \(String(cString: errorBuf))")
+                    let message = "Error loading WASM module: \(String(cString: errorBuf))"
+                    appendLogLine(message)
+                    updateRunningState(false, currentRunDisplayName: nil)
                     return
                 }
 
@@ -153,7 +173,9 @@ class WasmManager {
                 let heapSize: UInt32 = 65536   // 64KB for threading
 
                 guard let moduleInstance = wasm_runtime_instantiate(wasmModule, stackSize, heapSize, &errorBuf, UInt32(errorBuf.count)) else {
-                    print("Error instantiating WASM module: \(String(cString: errorBuf))")
+                    let message = "Error instantiating WASM module: \(String(cString: errorBuf))"
+                    appendLogLine(message)
+                    updateRunningState(false, currentRunDisplayName: nil)
                     wasm_runtime_unload(wasmModule)
                     return
                 }
@@ -165,7 +187,9 @@ class WasmManager {
 
                 // Create execution environment
                 guard let execEnv = wasm_runtime_create_exec_env(moduleInstance, stackSize) else {
-                    print("Error creating execution environment")
+                    let message = "Error creating execution environment"
+                    appendLogLine(message)
+                    updateRunningState(false, currentRunDisplayName: nil)
                     lock.lock()
                     currentModuleInstance = nil
                     lock.unlock()
@@ -174,20 +198,19 @@ class WasmManager {
                     return
                 }
 
-                print("Running WASM module from: \(fileURL.lastPathComponent)")
-
                 // Call _start function (default entry point for WASI)
                 if let startFunc = wasm_runtime_lookup_function(moduleInstance, "_start") {
                      if !wasm_runtime_call_wasm(execEnv, startFunc, 0, nil) {
                          let wasStopped = shouldStop
                          if wasStopped {
-                             print("WASM execution was stopped")
+                             appendLogLine("WASM execution was stopped")
                          } else {
-                             print("Error calling _start: \(String(cString: wasm_runtime_get_exception(moduleInstance)))")
+                             let exception = String(cString: wasm_runtime_get_exception(moduleInstance))
+                             appendLogLine("Error calling _start: \(exception)")
                          }
                      }
                 } else {
-                    print("Error: Could not find _start function")
+                    appendLogLine("Error: Could not find _start function")
                 }
 
                 // Clear module instance reference
@@ -200,10 +223,88 @@ class WasmManager {
                 wasm_runtime_deinstantiate(moduleInstance)
                 wasm_runtime_unload(wasmModule)
 
-                print("WASM execution finished.")
+                appendLogLine("WASM execution finished.")
+                updateRunningState(false, currentRunDisplayName: nil)
             }
         } catch {
-            print("Error reading WASM file: \(error)")
+            appendLogLine("Error reading WASM file: \(error.localizedDescription)")
+            updateRunningState(false, currentRunDisplayName: nil)
         }
     }
+
+    private func updateRunningState(_ isRunning: Bool, currentRunDisplayName: String?) {
+        DispatchQueue.main.async {
+            self.isRunning = isRunning
+            self.currentRunDisplayName = currentRunDisplayName
+            WebSocketManager.shared.publishWasmControlState()
+        }
+    }
+
+    func clearLogs() {
+        WebSocketManager.shared.publishWasmConsoleReset()
+        DispatchQueue.main.async {
+            self.logLines.removeAll()
+        }
+    }
+
+    func clearMapPreview() {
+        WebSocketManager.shared.publishMapFrameReset()
+        DispatchQueue.main.async {
+            self.latestMapJPEGData = nil
+            self.latestMapTimestamp = 0
+            self.latestMapFrameCount = 0
+        }
+    }
+
+    func appendLogLine(_ line: String) {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        WebSocketManager.shared.publishWasmConsoleLine(trimmed)
+        DispatchQueue.main.async {
+            self.logLines.append(trimmed)
+            if self.logLines.count > Self.maxLogLines {
+                self.logLines.removeFirst(self.logLines.count - Self.maxLogLines)
+            }
+        }
+    }
+
+    func updateMapPreview(jpegData: Data, timestamp: Double) {
+        guard !jpegData.isEmpty else { return }
+        DispatchQueue.main.async {
+            self.latestMapJPEGData = jpegData
+            self.latestMapTimestamp = timestamp
+            self.latestMapFrameCount += 1
+        }
+    }
+}
+
+func wasm_log_text_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+    guard let exec_env = exec_env, let ptr = ptr else { return }
+
+    let basePointer = ptr.assumingMemoryBound(to: UInt8.self)
+    guard let moduleInstance = wasm_runtime_get_module_inst(exec_env) else {
+        return
+    }
+    var nativeStart: UnsafeMutablePointer<UInt8>?
+    var nativeEnd: UnsafeMutablePointer<UInt8>?
+    guard wasm_runtime_get_native_addr_range(moduleInstance, basePointer, &nativeStart, &nativeEnd) else {
+        return
+    }
+
+    if let nativeEnd = nativeEnd {
+        let baseAddress = UInt(bitPattern: basePointer)
+        let endAddress = UInt(bitPattern: nativeEnd)
+        if baseAddress + UInt(wasmTextLogPayloadSize) > endAddress {
+            return
+        }
+    }
+
+    let requestedLength = ptr.assumingMemoryBound(to: UInt32.self).pointee
+    let clampedLength = min(Int(requestedLength), wasmTextLogMaxBytes)
+    let textBytes = ptr.advanced(by: MemoryLayout<UInt32>.size)
+        .assumingMemoryBound(to: UInt8.self)
+    let buffer = UnsafeBufferPointer(start: textBytes, count: clampedLength)
+    let text = String(decoding: buffer, as: UTF8.self)
+
+    WasmManager.shared.appendLogLine(text)
 }

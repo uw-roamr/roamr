@@ -1,5 +1,5 @@
 #pragma once
-#include "coordinate_frames.h"
+#include "core/pose/coordinate_frames.h"
 #include "wasm_utils.h"
 #include <stddef.h> // size_t
 #include <stdint.h> // uint8_t
@@ -8,7 +8,7 @@
 // time synchronized LiDAR points and camera image
 
 namespace sensors{
-    
+
   struct CameraConfig {
     double timestamp;
 
@@ -67,6 +67,6 @@ namespace sensors{
   WASM_IMPORT("host", "init_camera") void init_camera(CameraConfig *config);
   WASM_IMPORT("host", "read_lidar_camera") void read_lidar_camera(LidarCameraData *data);
 
-  constexpr double LidarCameraRefreshHz = 30.0;
-  constexpr int LidarCameraIntervalMs = static_cast<int>(1000.0 / LidarCameraRefreshHz);
+  constexpr double LidarCameraRefreshHz = 10.0;
+  constexpr int LidarCameraIntervalMs = static_cast<int>(1000.0 / (LidarCameraRefreshHz * 2.1));
 }; //namespace sensors

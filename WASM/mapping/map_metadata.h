@@ -1,0 +1,26 @@
+#pragma once
+#include <stdint.h>
+#include "wasm_utils.h"
+
+
+namespace mapping{
+
+  struct MapImage {
+    double timestamp;
+    int32_t width;
+    int32_t height;
+    int32_t channels;
+    uint32_t data_ptr;
+    int32_t data_size;
+  };
+
+  struct OccupancyGridMetadata {
+    int32_t width;
+    int32_t height;
+    double resolution_m;
+    double origin_x_m;
+    double origin_y_m;
+    int32_t origin_initialized;
+  };
+
+}; //namespace mapping

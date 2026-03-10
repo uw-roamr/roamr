@@ -14,18 +14,20 @@ enum WasmHubTab: String, CaseIterable {
 
 struct WasmHubView: View {
     @Environment(\.safeAreaInsets) private var safeAreaInsets
+    @ObservedObject private var wasmManager = WasmManager.shared
     @State private var selectedTab: WasmHubTab = .hub
-    @State private var isRunning = false
     @State private var selectedFile: LocalWasmFile?
+    @State private var isMapExpanded = true
+    @State private var isConsoleExpanded = true
 
     var body: some View {
         VStack(spacing: 0) {
             PageHeader(
                 title: "WASM",
-                statusText: isRunning ? "Running" : (selectedFile != nil ? "Ready" : "Idle"),
-                statusColor: isRunning ? .green : (selectedFile != nil ? .blue : .gray)
+                statusText: wasmManager.isRunning ? "Running" : (selectedFile != nil ? "Ready" : "Idle"),
+                statusColor: wasmManager.isRunning ? .green : (selectedFile != nil ? .blue : .gray)
             ) {
-                if isRunning {
+                if wasmManager.isRunning {
                     Button {
                         stopWasm()
                     } label: {
@@ -40,7 +42,7 @@ struct WasmHubView: View {
                     Button {
                         runSelectedWasm()
                     } label: {
-                        PlayButton(isActive: isRunning)
+                        PlayButton(isActive: wasmManager.isRunning)
                     }
                     .disabled(selectedFile == nil)
                 }
@@ -67,10 +69,78 @@ struct WasmHubView: View {
                 case .downloaded:
                     DownloadedTab(
                         selectedFile: $selectedFile,
-                        isRunning: isRunning
+                        isRunning: wasmManager.isRunning
                     )
                 }
             }
+
+            VStack(alignment: .leading, spacing: 12) {
+                DisclosureGroup(isExpanded: $isMapExpanded) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let data = wasmManager.latestMapJPEGData,
+                           let image = UIImage(data: data) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .interpolation(.none)
+                                .scaledToFit()
+                                .frame(maxWidth: .infinity)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        } else {
+                            Text("No map frame received yet.")
+                                .foregroundColor(.secondary)
+                                .frame(maxWidth: .infinity, minHeight: 160)
+                        }
+
+                        Text(
+                            "Frames: \(wasmManager.latestMapFrameCount)  Timestamp: " +
+                            (wasmManager.latestMapTimestamp > 0
+                                ? String(format: "%.3f", wasmManager.latestMapTimestamp)
+                                : "n/a")
+                        )
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(Color.black.opacity(0.06))
+                    )
+                } label: {
+                    Text("Map Preview")
+                        .font(.headline)
+                }
+
+                DisclosureGroup(isExpanded: $isConsoleExpanded) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if wasmManager.logLines.isEmpty {
+                                Text("Run a WASM module to see host-side logs from the module here.")
+                                    .foregroundColor(.secondary)
+                            } else {
+                                ForEach(Array(wasmManager.logLines.enumerated()), id: \.offset) { _, line in
+                                    Text(line)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .foregroundColor(.primary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 140, maxHeight: 220)
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(Color.black.opacity(0.06))
+                    )
+                } label: {
+                    Text("WASM Console")
+                        .font(.headline)
+                }
+            }
+            .padding(.horizontal)
+            .padding(.top, 8)
         }
         .padding(.top, safeAreaInsets.top)
         .padding(.bottom, safeAreaInsets.bottom + AppConstants.shared.tabBarHeight)
@@ -79,19 +149,14 @@ struct WasmHubView: View {
     private func runSelectedWasm() {
         guard let file = selectedFile else { return }
 
-        isRunning = true
         DispatchQueue.global(qos: .userInitiated).async {
             IMUManager.shared.start()
             AVManager.shared.start()
 
-            WasmManager.shared.runWasmFile(at: file.fileURL)
+            wasmManager.runWasmFile(at: file.fileURL)
 
             AVManager.shared.stop()
             IMUManager.shared.stop()
-
-            DispatchQueue.main.async {
-                isRunning = false
-            }
         }
     }
 

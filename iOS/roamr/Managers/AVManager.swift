@@ -1013,15 +1013,6 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
 
     let manager = AVManager.shared
 
-    manager.lock.lock()
-    guard manager.isDataDirty else {
-        manager.lock.unlock()
-        return
-    }
-    let data = manager.currentData
-    manager.isDataDirty = false
-    manager.lock.unlock()
-
     let basePtr = ptr.assumingMemoryBound(to: UInt8.self)
     guard let moduleInst = wasm_runtime_get_module_inst(exec_env) else {
         return
@@ -1060,6 +1051,37 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
             return
         }
     }
+
+    func clearFrame() {
+        basePtr.withMemoryRebound(to: Double.self, capacity: 1) { rebounded in
+            rebounded.pointee = 0.0
+        }
+        basePtr.advanced(by: pointsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = 0
+        }
+        basePtr.advanced(by: colorsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = 0
+        }
+        basePtr.advanced(by: imageSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = 0
+        }
+        basePtr.advanced(by: pointsFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = CoordinateFrameId.FLU.rawValue
+        }
+        basePtr.advanced(by: imageFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = CoordinateFrameId.RDF.rawValue
+        }
+    }
+
+    manager.lock.lock()
+    guard manager.isDataDirty else {
+        manager.lock.unlock()
+        clearFrame()
+        return
+    }
+    let data = manager.currentData
+    manager.isDataDirty = false
+    manager.lock.unlock()
 
     basePtr.withMemoryRebound(to: Double.self, capacity: 1) { rebounded in
         rebounded.pointee = data.timestamp

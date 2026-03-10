@@ -187,4 +187,49 @@ inline Vector3d quat_rotate(const Vector4d& q, const Vector3d& v) noexcept {
   return vec_add(v, vec_add(vec_scale(t, q.w), cross(qv, t)));
 }
 
+inline double normalize_angle(double angle) noexcept {
+  while (angle > pi) {
+    angle -= 2.0 * pi;
+  }
+  while (angle < -pi) {
+    angle += 2.0 * pi;
+  }
+  return angle;
+}
+
+inline double unwrap_angle_near(double angle, double reference) noexcept {
+  return reference + normalize_angle(angle - reference);
+}
+
+inline double quat_to_euler_yaw(const Vector4d& unit_quat){
+  const Vector4d& n = unit_quat;
+  const double siny_cosp = 2.0 * (n.w * n.z + n.x * n.y);
+  const double cosy_cosp = 1.0 - 2.0 * (n.y * n.y + n.z * n.z);
+  return std::atan2(siny_cosp, cosy_cosp);
+}
+
+inline void quat_to_euler_zyx(
+    const Vector4d& q,
+    double& roll,
+    double& pitch,
+    double& yaw) noexcept {
+  if (!roll || !pitch || !yaw) {
+    return;
+  }
+
+  const Vector4d n = quat_normalize(q);
+  const double sinr_cosp = 2.0 * (n.w * n.x + n.y * n.z);
+  const double cosr_cosp = 1.0 - 2.0 * (n.x * n.x + n.y * n.y);
+  roll = std::atan2(sinr_cosp, cosr_cosp);
+
+  const double sinp = 2.0 * (n.w * n.y - n.z * n.x);
+  if (std::abs(sinp) >= 1.0) {
+    pitch = std::copysign(pi * 0.5, sinp);
+  } else {
+    pitch = std::asin(sinp);
+  }
+
+  yaw = quat_to_euler_yaw(n);
+}
+
 }  // namespace core

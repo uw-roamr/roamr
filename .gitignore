@@ -13,3 +13,6 @@ wasm-hub/dist/
 wasm-hub/.env
 wasm-hub/.env.local
 wasm-hub/.firebase/
+
+navigation_example/
+icp_example/

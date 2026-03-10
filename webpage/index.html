@@ -25,21 +25,149 @@
             background: white;
             border-radius: 20px;
             padding: 40px;
-            max-width: 900px;
+            max-width: 1400px;
             width: 100%;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
         }
 
+        .container.disconnected-layout {
+            max-width: 560px;
+            padding: 36px 34px;
+        }
+
+        .container.disconnected-layout .top-bar {
+            grid-template-columns: minmax(0, 1fr);
+            margin-bottom: 0;
+        }
+
+        .container.disconnected-layout .title-block {
+            margin-bottom: 0;
+        }
+
+        .container.disconnected-layout .title-block h1 {
+            text-align: center;
+        }
+
+        .container.disconnected-layout .connection-panel {
+            max-width: none;
+        }
+
+        .container.disconnected-layout .wasm-control-card,
+        .container.disconnected-layout .wasm-controls-grid,
+        .container.disconnected-layout .joystick-container,
+        .container.disconnected-layout .viewer-grid,
+        .container.disconnected-layout .message-tools {
+            display: none;
+        }
+
         h1 {
             color: #333;
-            margin-bottom: 30px;
+            margin: 0;
+        }
+
+        .top-bar {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: stretch;
+            gap: 24px;
+            margin-bottom: 24px;
+        }
+
+        .title-block {
+            margin-bottom: 24px;
+        }
+
+        .title-block h1 {
             text-align: center;
+        }
+
+        .connection-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            width: 100%;
+            min-height: 100%;
+            padding: 16px 18px;
+            background: #f5f5f5;
+            border-radius: 15px;
+        }
+
+        .wasm-controls-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+
+        .wasm-control-card {
+            background: #f4f7ff;
+            border-radius: 14px;
+            padding: 16px;
+            box-shadow: inset 0 0 0 1px rgba(102, 126, 234, 0.08);
+        }
+
+        .wasm-control-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+
+        .wasm-control-title {
+            font-weight: 700;
+            color: #334;
+        }
+
+        .wasm-control-status {
+            font-size: 12px;
+            color: #5f6981;
+            background: white;
+            padding: 4px 10px;
+            border-radius: 999px;
+        }
+
+        .wasm-control-status strong {
+            color: #667eea;
+        }
+
+        .wasm-control-meta {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #667085;
+            font-family: monospace;
+            min-height: 2.8em;
+        }
+
+        .wasm-control-divider {
+            height: 1px;
+            background: rgba(102, 126, 234, 0.14);
+            margin: 14px 0;
+        }
+
+        .wasm-hub-title {
+            font-weight: 700;
+            color: #334;
+            margin-bottom: 10px;
+        }
+
+        .wasm-control-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        .wasm-control-actions button {
+            width: auto;
+            flex: 1 1 0;
+            margin-bottom: 0;
+            padding: 12px 14px;
         }
 
         .status {
             padding: 15px;
             border-radius: 10px;
-            margin-bottom: 20px;
             text-align: center;
             font-weight: 600;
             display: flex;
@@ -83,6 +211,10 @@
             margin-bottom: 20px;
         }
 
+        .connection-panel .input-group {
+            margin-bottom: 0;
+        }
+
         label {
             display: block;
             margin-bottom: 8px;
@@ -99,7 +231,18 @@
             transition: border-color 0.3s;
         }
 
-        input[type="text"]:focus {
+        select {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            font-size: 15px;
+            background: white;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        select:focus {
             outline: none;
             border-color: #667eea;
         }
@@ -114,6 +257,10 @@
             cursor: pointer;
             transition: all 0.3s;
             margin-bottom: 10px;
+        }
+
+        .connection-panel button {
+            margin-bottom: 0;
         }
 
         button:disabled {
@@ -143,6 +290,28 @@
             box-shadow: 0 5px 15px rgba(204, 0, 0, 0.3);
         }
 
+        .btn-estop {
+            background: linear-gradient(180deg, #ff564f 0%, #d91515 100%);
+            color: white;
+            font-size: 20px;
+            font-weight: 800;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            min-height: 120px;
+            margin-top: auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 18px;
+            box-shadow: 0 16px 30px rgba(217, 21, 21, 0.28);
+        }
+
+        .btn-estop:hover:not(:disabled) {
+            background: linear-gradient(180deg, #ff4740 0%, #bf1010 100%);
+            transform: translateY(-2px);
+            box-shadow: 0 18px 34px rgba(191, 16, 16, 0.34);
+        }
+
         .btn-send {
             background: #667eea;
             color: white;
@@ -152,6 +321,15 @@
             background: #5568d3;
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-secondary {
+            background: #dfe7fb;
+            color: #31456a;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: #d0dcfb;
         }
 
         .message-log {
@@ -191,15 +369,14 @@
             background: #e3f2fd;
             padding: 15px;
             border-radius: 10px;
-            margin-bottom: 20px;
             font-size: 14px;
             color: #1976d2;
         }
 
         .joystick-container {
             display: none;
-            margin: 30px 0;
-            padding: 20px;
+            width: 100%;
+            padding: 16px 18px;
             background: #f5f5f5;
             border-radius: 15px;
         }
@@ -209,17 +386,16 @@
         }
 
         .joystick-title {
-            text-align: center;
             font-weight: 600;
-            margin-bottom: 15px;
+            margin-bottom: 12px;
             color: #333;
         }
 
         .joystick-wrapper {
-            display: flex;
-            flex-direction: column;
+            display: grid;
+            grid-template-columns: auto minmax(240px, 1fr);
             align-items: center;
-            gap: 15px;
+            gap: 14px;
         }
 
         #joystick {
@@ -230,15 +406,23 @@
             touch-action: none;
         }
 
+        .teleop-control-panel {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
         .motor-display {
             display: flex;
-            gap: 20px;
+            flex-direction: column;
+            gap: 10px;
             justify-content: center;
             font-family: monospace;
             font-size: 14px;
-            padding: 10px;
+            padding: 12px 10px;
             background: white;
             border-radius: 8px;
+            min-width: 88px;
         }
 
         .motor-value {
@@ -260,44 +444,122 @@
             color: #667eea;
         }
 
-        .video-section {
+        .teleop-metrics {
+            width: 100%;
+            background: white;
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: inset 0 0 0 1px rgba(102, 126, 234, 0.08);
+        }
+
+        .teleop-metrics-title {
+            font-weight: 700;
+            color: #333;
+            margin-bottom: 12px;
+        }
+
+        .teleop-metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 10px;
+        }
+
+        .teleop-metric-card {
+            background: #f5f7ff;
+            border-radius: 10px;
+            padding: 12px;
+        }
+
+        .teleop-metric-label {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: #6a6f85;
+            margin-bottom: 6px;
+        }
+
+        .teleop-metric-value {
+            font-family: monospace;
+            font-size: 18px;
+            font-weight: bold;
+            color: #334;
+        }
+
+        .teleop-metric-footnote {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #666;
+            font-family: monospace;
+        }
+
+        .video-section,
+        .point-cloud-section,
+        .map-section,
+        .console-section {
             display: none;
-            margin: 30px 0;
             padding: 20px;
             background: #f5f5f5;
             border-radius: 15px;
         }
 
-        .video-section.active {
+        .video-section.active,
+        .point-cloud-section.active,
+        .map-section.active,
+        .console-section.active {
             display: block;
         }
 
-        .video-header {
+        .video-header,
+        .point-cloud-header,
+        .map-header,
+        .console-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 15px;
+            gap: 12px;
+            flex-wrap: wrap;
         }
 
-        .video-title {
+        .video-header,
+        .point-cloud-header {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .video-title,
+        .point-cloud-title,
+        .map-title,
+        .console-title {
             font-weight: 600;
             color: #333;
         }
 
-        .video-stats {
+        .video-stats,
+        .point-cloud-stats,
+        .map-stats,
+        .console-stats {
             display: flex;
             gap: 10px;
             font-size: 12px;
+            flex-wrap: wrap;
         }
 
-        .video-stat {
+        .video-stat,
+        .point-cloud-stat,
+        .map-stat,
+        .console-stat {
             background: white;
             padding: 4px 10px;
             border-radius: 5px;
             color: #666;
         }
 
-        .video-stat strong {
+        .video-stat strong,
+        .point-cloud-stat strong,
+        .map-stat strong,
+        .console-stat strong {
             color: #667eea;
         }
 
@@ -329,147 +591,617 @@
             font-size: 3rem;
             margin-bottom: 10px;
         }
+
+        .viewer-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 24px;
+            margin: 30px 0;
+            align-items: start;
+        }
+
+        .map-container {
+            position: relative;
+            background: #0d1118;
+            border-radius: 12px;
+            overflow: hidden;
+            aspect-ratio: 1 / 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            touch-action: none;
+            cursor: grab;
+        }
+
+        .map-container.dragging {
+            cursor: grabbing;
+        }
+
+        #mapPreview {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: none;
+            image-rendering: crisp-edges;
+            transform-origin: top left;
+            user-select: none;
+            -webkit-user-drag: none;
+            pointer-events: none;
+        }
+
+        .point-cloud-container {
+            position: relative;
+            background:
+                radial-gradient(circle at top, rgba(102, 126, 234, 0.12), transparent 48%),
+                linear-gradient(180deg, #10131d 0%, #05070c 100%);
+            border-radius: 12px;
+            overflow: hidden;
+            aspect-ratio: 16 / 9;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+        }
+
+        #pointCloudCanvas {
+            width: 100%;
+            height: 100%;
+            display: block;
+            touch-action: none;
+            cursor: grab;
+        }
+
+        #pointCloudCanvas.dragging {
+            cursor: grabbing;
+        }
+
+        .point-cloud-placeholder {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            color: rgba(255, 255, 255, 0.72);
+            pointer-events: none;
+            padding: 24px;
+        }
+
+        .point-cloud-placeholder-icon {
+            font-size: 2.8rem;
+            margin-bottom: 12px;
+        }
+
+        .point-cloud-help {
+            margin-top: 12px;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.55);
+        }
+
+        .map-placeholder,
+        .console-placeholder {
+            text-align: center;
+            padding: 30px;
+        }
+
+        .map-placeholder {
+            color: rgba(255, 255, 255, 0.72);
+        }
+
+        .map-placeholder-icon,
+        .console-placeholder-icon {
+            font-size: 2.8rem;
+            margin-bottom: 12px;
+        }
+
+        .console-container {
+            background: #0b1220;
+            border-radius: 12px;
+            aspect-ratio: 1 / 1;
+            overflow: hidden;
+            display: flex;
+            box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.14);
+        }
+
+        .console-log {
+            width: 100%;
+            height: 100%;
+            overflow-y: auto;
+            padding: 14px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 12px;
+            line-height: 1.45;
+            color: #dbe7ff;
+        }
+
+        .console-line {
+            padding: 8px 10px;
+            border-radius: 8px;
+            background: rgba(15, 23, 42, 0.85);
+            margin-bottom: 8px;
+            border-left: 3px solid #667eea;
+            word-break: break-word;
+        }
+
+        .console-line-time {
+            color: #8fa6d8;
+            font-size: 11px;
+            margin-bottom: 3px;
+        }
+
+        .console-line-text {
+            color: #eef4ff;
+        }
+
+        .console-placeholder {
+            color: rgba(219, 231, 255, 0.72);
+        }
+
+        @media (max-width: 700px) {
+            .container {
+                padding: 24px;
+            }
+
+            .top-bar {
+                grid-template-columns: 1fr;
+            }
+
+            .joystick-container {
+                width: 100%;
+            }
+
+            .joystick-wrapper {
+                grid-template-columns: 1fr;
+            }
+
+            .teleop-control-panel {
+                justify-content: center;
+            }
+
+            .motor-display {
+                flex-direction: row;
+                min-width: 0;
+            }
+
+            .wasm-controls-grid,
+            .viewer-grid {
+                grid-template-columns: 1fr;
+                gap: 18px;
+            }
+
+            .wasm-control-actions {
+                flex-direction: column;
+            }
+
+            #pointCloudCanvas {
+                height: 320px;
+            }
+
+            .console-container {
+                min-height: 320px;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>🚀 Roamr WebSocket Client</h1>
-
-        <div id="status" class="status disconnected">
-            <span class="status-dot"></span>
-            <span>Disconnected</span>
+    <div id="appContainer" class="container disconnected-layout">
+        <div class="title-block">
+            <h1>🚀 Roamr WebSocket Client</h1>
         </div>
 
-        <div class="info-box">
-            💡 Enter the IP address shown on your iPhone app (e.g., 192.168.1.100)
-        </div>
+        <div class="top-bar">
+            <div class="connection-panel">
+                <div id="status" class="status disconnected">
+                    <span class="status-dot"></span>
+                    <span>Disconnected</span>
+                </div>
 
-        <div class="input-group">
-            <label for="ipAddress">iPhone IP Address:</label>
-            <input
-                type="text"
-                id="ipAddress"
-                placeholder="192.168.1.100"
-                value="192.168.1.100"
-            >
-        </div>
+                <div class="info-box">
+                    💡 Enter the IP address shown on your iPhone app (e.g., 192.168.1.100)
+                </div>
 
-        <button id="connectBtn" class="btn-connect" onclick="connect()">
-            Connect to iPhone
-        </button>
+                <div class="input-group">
+                    <label for="ipAddress">iPhone IP Address:</label>
+                    <input
+                        type="text"
+                        id="ipAddress"
+                        placeholder="10.40.224.37"
+                        value="10.40.224.37"
+                    >
+                </div>
 
-        <button id="disconnectBtn" class="btn-disconnect" onclick="disconnect()" style="display: none;">
-            Disconnect
-        </button>
+                <button id="connectBtn" class="btn-connect" onclick="connect()">
+                    Connect to iPhone
+                </button>
 
-        <div id="joystickContainer" class="joystick-container">
-            <div class="joystick-title">🕹️ Motor Control</div>
-            <div class="joystick-wrapper">
-                <canvas id="joystick" width="250" height="250"></canvas>
-                <div class="motor-display">
-                    <div class="motor-value">
-                        <span class="motor-label">LEFT</span>
-                        <span id="leftMotor" class="motor-number">0%</span>
+                <button id="disconnectBtn" class="btn-disconnect" onclick="disconnect()" style="display: none;">
+                    Disconnect
+                </button>
+
+                <button id="emergencyStopBtn" class="btn-estop" onclick="emergencyStopRemote()" style="display: none;" disabled>
+                    Emergency Stop
+                </button>
+            </div>
+
+            <div id="joystickContainer" class="joystick-container">
+                <div class="joystick-title">🕹️ Teleoperation</div>
+                <div class="joystick-wrapper">
+                    <div class="teleop-control-panel">
+                        <canvas id="joystick" width="180" height="180"></canvas>
+                        <div class="motor-display">
+                            <div class="motor-value">
+                                <span class="motor-label">LEFT</span>
+                                <span id="leftMotor" class="motor-number">0%</span>
+                            </div>
+                            <div class="motor-value">
+                                <span class="motor-label">RIGHT</span>
+                                <span id="rightMotor" class="motor-number">0%</span>
+                            </div>
+                        </div>
                     </div>
-                    <div class="motor-value">
-                        <span class="motor-label">RIGHT</span>
-                        <span id="rightMotor" class="motor-number">0%</span>
+                    <div class="teleop-metrics">
+                        <div class="teleop-metrics-title">Teleop Latency</div>
+                        <div class="teleop-metrics-grid">
+                            <div class="teleop-metric-card">
+                                <div class="teleop-metric-label">WS RTT</div>
+                                <div id="teleopRtt" class="teleop-metric-value">-</div>
+                            </div>
+                            <div class="teleop-metric-card">
+                                <div class="teleop-metric-label">Phone -> BLE</div>
+                                <div id="teleopPhoneBle" class="teleop-metric-value">-</div>
+                            </div>
+                            <div class="teleop-metric-card">
+                                <div class="teleop-metric-label">BLE -> Odom</div>
+                                <div id="teleopBleOdom" class="teleop-metric-value">-</div>
+                            </div>
+                            <div class="teleop-metric-card">
+                                <div class="teleop-metric-label">Est. End-to-Motion</div>
+                                <div id="teleopEstimated" class="teleop-metric-value">-</div>
+                            </div>
+                        </div>
+                        <div id="teleopMetricDetails" class="teleop-metric-footnote">seq -, waiting for samples</div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <div id="videoSection" class="video-section">
-            <div class="video-header">
-                <div class="video-title">📹 Live Video Stream</div>
-                <div class="video-stats">
-                    <span class="video-stat">FPS: <strong id="videoFps">0</strong></span>
-                    <span class="video-stat">Frames: <strong id="videoFrames">0</strong></span>
-                    <span class="video-stat"><strong id="videoSize">0 KB</strong></span>
+        <div class="wasm-controls-grid">
+            <div class="wasm-control-card">
+                <div class="wasm-control-header">
+                    <div class="wasm-control-title">WASM Control</div>
+                    <div class="wasm-control-status">Status: <strong id="wasmRunStatus">Idle</strong></div>
+                </div>
+
+                <div class="input-group">
+                    <label for="wasmProgramSelect">Program</label>
+                    <select id="wasmProgramSelect" disabled></select>
+                </div>
+
+                <div id="wasmSelectionMeta" class="wasm-control-meta">
+                    Connect to the iPhone to load available WASM programs.
+                </div>
+
+                <div class="wasm-control-actions">
+                    <button id="wasmRefreshBtn" class="btn-secondary" onclick="refreshWasmPrograms()" disabled>
+                        Refresh
+                    </button>
+                    <button id="wasmRunBtn" class="btn-connect" onclick="runSelectedWasmRemote()" disabled>
+                        Run
+                    </button>
+                    <button id="wasmStopBtn" class="btn-disconnect" onclick="stopSelectedWasmRemote()" disabled>
+                        Stop
+                    </button>
                 </div>
             </div>
-            <div class="video-container">
-                <img id="videoStream" alt="Video Stream">
-                <div class="video-placeholder" id="videoPlaceholder">
-                    <div class="video-placeholder-icon">📹</div>
-                    <div>Waiting for video stream...</div>
-                    <div style="font-size: 12px; margin-top: 10px; color: #999;">
-                        Start video streaming from the iPhone app
+
+            <div class="wasm-control-card">
+                <div class="wasm-control-header">
+                    <div class="wasm-control-title">WasmHub Public Files</div>
+                </div>
+
+                <div class="input-group">
+                    <label for="hubProgramSelect">Download From Hub</label>
+                    <select id="hubProgramSelect" disabled></select>
+                </div>
+
+                <div id="hubSelectionMeta" class="wasm-control-meta">
+                    Refresh to load public WasmHub files.
+                </div>
+
+                <div class="wasm-control-actions">
+                    <button id="hubDownloadBtn" class="btn-send" onclick="downloadSelectedHubFileRemote()" disabled>
+                        Download
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="viewer-grid">
+            <div id="videoSection" class="video-section">
+                <div class="video-header">
+                    <div class="video-title">📹 Live Video Stream</div>
+                    <div class="video-stats">
+                        <span class="video-stat">FPS: <strong id="videoFps">0</strong></span>
+                        <span class="video-stat">Frames: <strong id="videoFrames">0</strong></span>
+                        <span class="video-stat"><strong id="videoSize">0 KB</strong></span>
+                    </div>
+                </div>
+                <div class="video-container">
+                    <img id="videoStream" alt="Video Stream">
+                    <div class="video-placeholder" id="videoPlaceholder">
+                        <div class="video-placeholder-icon">📹</div>
+                        <div>Waiting for video stream...</div>
+                        <div style="font-size: 12px; margin-top: 10px; color: #999;">
+                            Start video streaming from the iPhone app
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="pointCloudSection" class="point-cloud-section">
+                <div class="point-cloud-header">
+                    <div class="point-cloud-title">🌐 WASM Point Cloud</div>
+                    <div class="point-cloud-stats">
+                        <span class="point-cloud-stat">FPS: <strong id="pointCloudFps">0</strong></span>
+                        <span class="point-cloud-stat">Frames: <strong id="pointCloudFrames">0</strong></span>
+                        <span class="point-cloud-stat">Points: <strong id="pointCloudPoints">0</strong></span>
+                        <span class="point-cloud-stat">Radius: <strong id="pointCloudRadius">0.00 m</strong></span>
+                        <span class="point-cloud-stat">Time: <strong id="pointCloudTimestamp">-</strong></span>
+                    </div>
+                </div>
+                <div class="point-cloud-container">
+                    <canvas id="pointCloudCanvas"></canvas>
+                    <div class="point-cloud-placeholder" id="pointCloudPlaceholder">
+                        <div class="point-cloud-placeholder-icon">✳️</div>
+                        <div id="pointCloudStatusText">Waiting for the current WASM point cloud...</div>
+                        <div id="pointCloudHelpText" class="point-cloud-help">Drag to orbit. Scroll to zoom.</div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <div class="input-group">
-            <label for="message">Message to Send:</label>
-            <input
-                type="text"
-                id="message"
-                placeholder="Type your message here..."
-                disabled
-                onkeypress="if(event.key === 'Enter') sendMessage()"
-            >
+        <div class="viewer-grid">
+            <div id="mapSection" class="map-section">
+                <div class="map-header">
+                    <div class="map-title">🗺️ WASM Map Preview</div>
+                    <div class="map-stats">
+                        <span class="map-stat">Frames: <strong id="mapFrames">0</strong></span>
+                        <span class="map-stat">Size: <strong id="mapSize">0 KB</strong></span>
+                        <span class="map-stat">Time: <strong id="mapTimestamp">-</strong></span>
+                    </div>
+                </div>
+                <div id="mapContainer" class="map-container">
+                    <img id="mapPreview" alt="WASM Map Preview">
+                    <div class="map-placeholder" id="mapPlaceholder">
+                        <div class="map-placeholder-icon">🗺️</div>
+                        <div>Waiting for map preview...</div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="consoleSection" class="console-section">
+                <div class="console-header">
+                    <div class="console-title">🧾 WASM Console</div>
+                    <div class="console-stats">
+                        <span class="console-stat">Lines: <strong id="consoleLineCount">0</strong></span>
+                    </div>
+                </div>
+                <div class="console-container">
+                    <div class="console-log" id="consoleLog">
+                        <div class="console-placeholder" id="consolePlaceholder">
+                            <div class="console-placeholder-icon">🧾</div>
+                            <div>Waiting for WASM console output...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
-        <button id="sendBtn" class="btn-send" onclick="sendMessage()" disabled>
-            Send Message
-        </button>
+        <div class="message-tools">
+            <div class="input-group">
+                <label for="message">Message to Send:</label>
+                <input
+                    type="text"
+                    id="message"
+                    placeholder="Type your message here..."
+                    disabled
+                    onkeypress="if(event.key === 'Enter') sendMessage()"
+                >
+            </div>
 
-        <div class="message-log">
-            <h3>Message Log</h3>
-            <div id="messageLog"></div>
+            <button id="sendBtn" class="btn-send" onclick="sendMessage()" disabled>
+                Send Message
+            </button>
+
+            <div class="message-log">
+                <h3>Message Log</h3>
+                <div id="messageLog"></div>
+            </div>
         </div>
     </div>
 
     <script>
         let ws = null;
+        const appContainer = document.getElementById('appContainer');
         const statusEl = document.getElementById('status');
         const connectBtn = document.getElementById('connectBtn');
         const disconnectBtn = document.getElementById('disconnectBtn');
+        const emergencyStopBtn = document.getElementById('emergencyStopBtn');
         const ipInput = document.getElementById('ipAddress');
         const messageInput = document.getElementById('message');
         const sendBtn = document.getElementById('sendBtn');
+        const wasmProgramSelect = document.getElementById('wasmProgramSelect');
+        const wasmSelectionMetaEl = document.getElementById('wasmSelectionMeta');
+        const wasmRunStatusEl = document.getElementById('wasmRunStatus');
+        const wasmRefreshBtn = document.getElementById('wasmRefreshBtn');
+        const wasmRunBtn = document.getElementById('wasmRunBtn');
+        const wasmStopBtn = document.getElementById('wasmStopBtn');
+        const hubProgramSelect = document.getElementById('hubProgramSelect');
+        const hubSelectionMetaEl = document.getElementById('hubSelectionMeta');
+        const hubDownloadBtn = document.getElementById('hubDownloadBtn');
         const messageLog = document.getElementById('messageLog');
         const joystickContainer = document.getElementById('joystickContainer');
         const videoSection = document.getElementById('videoSection');
+        const pointCloudSection = document.getElementById('pointCloudSection');
+        const mapSection = document.getElementById('mapSection');
+        const consoleSection = document.getElementById('consoleSection');
+        const teleopRttEl = document.getElementById('teleopRtt');
+        const teleopPhoneBleEl = document.getElementById('teleopPhoneBle');
+        const teleopBleOdomEl = document.getElementById('teleopBleOdom');
+        const teleopEstimatedEl = document.getElementById('teleopEstimated');
+        const teleopMetricDetailsEl = document.getElementById('teleopMetricDetails');
+        const pointCloudCanvas = document.getElementById('pointCloudCanvas');
+        const pointCloudPlaceholder = document.getElementById('pointCloudPlaceholder');
+        const pointCloudStatusTextEl = document.getElementById('pointCloudStatusText');
+        const pointCloudHelpTextEl = document.getElementById('pointCloudHelpText');
+        const pointCloudFpsEl = document.getElementById('pointCloudFps');
+        const pointCloudFramesEl = document.getElementById('pointCloudFrames');
+        const pointCloudPointsEl = document.getElementById('pointCloudPoints');
+        const pointCloudRadiusEl = document.getElementById('pointCloudRadius');
+        const pointCloudTimestampEl = document.getElementById('pointCloudTimestamp');
+        const pointCloudCtx = pointCloudCanvas.getContext('2d');
+        const mapContainerEl = document.getElementById('mapContainer');
+        const mapPreviewEl = document.getElementById('mapPreview');
+        const mapPlaceholderEl = document.getElementById('mapPlaceholder');
+        const mapFramesEl = document.getElementById('mapFrames');
+        const mapSizeEl = document.getElementById('mapSize');
+        const mapTimestampEl = document.getElementById('mapTimestamp');
+        const consoleLogEl = document.getElementById('consoleLog');
+        const consolePlaceholderEl = document.getElementById('consolePlaceholder');
+        const consoleLineCountEl = document.getElementById('consoleLineCount');
+
+        const POINTS_BINARY_MAGIC = [0x52, 0x52, 0x42, 0x31];
+        const POINTS_BINARY_TYPE_POINTS = 1;
+        const POINTS_BINARY_FLAG_COLORS = 1;
+        const POINTS_BINARY_HEADER_SIZE = 20;
+        const MAX_CONSOLE_LINES = 200;
 
         // Joystick variables
         let joystickTimer = null;
         const SEND_INTERVAL = 50; // 50ms
         const HOLD_DURATION = 100; // 100ms
+        const STOP_BURST_DELAYS = [0, 50, 125];
+        let nextTeleopSeq = 1;
+        const pendingTeleopSamples = new Map();
+
+        const teleopMetrics = {
+            lastSeq: null,
+            lastRttMs: null,
+            lastPhoneRxToBleMs: null,
+            lastBleToOdomMs: null,
+            lastEstimatedEndToMotionMs: null
+        };
+        let joystickInitialized = false;
+        let resetJoystickInteraction = null;
 
         // Video streaming variables
         let videoFrameCount = 0;
         let videoFpsCounter = 0;
         let lastVideoFpsUpdate = Date.now();
+        let pointCloudViewerInitialized = false;
+        let mapViewerInitialized = false;
+        let pointCloudDiagnosticTimer = null;
+        let mapFrameCount = 0;
+
+        const wasmControlState = {
+            files: [],
+            hubFiles: [],
+            selectedTargetId: '',
+            selectedHubFileId: '',
+            selectedTargetName: '',
+            runningFileName: '',
+            isRunning: false,
+            isLoadingHub: false,
+            hubError: ''
+        };
+
+        const pointCloudState = {
+            points: null,
+            colors: null,
+            pointCount: 0,
+            frameCount: 0,
+            fpsCounter: 0,
+            lastFpsUpdateMs: performance.now(),
+            timestamp: null,
+            center: { x: 0, y: 0, z: 0 },
+            radius: 1,
+            yaw: 0.8,
+            pitch: -0.45,
+            zoom: 2.6,
+            hasReceivedFrame: false,
+            dragActive: false,
+            lastPointerX: 0,
+            lastPointerY: 0,
+            renderQueued: false
+        };
+
+        const mapViewState = {
+            scale: 1,
+            minScale: 1,
+            maxScale: 8,
+            offsetX: 0,
+            offsetY: 0,
+            dragActive: false,
+            lastPointerX: 0,
+            lastPointerY: 0
+        };
 
         function updateStatus(connected) {
+            appContainer.classList.toggle('disconnected-layout', !connected);
             if (connected) {
                 statusEl.className = 'status connected';
                 statusEl.innerHTML = '<span class="status-dot"></span><span>Connected</span>';
                 connectBtn.style.display = 'none';
                 disconnectBtn.style.display = 'block';
+                emergencyStopBtn.style.display = 'block';
+                emergencyStopBtn.disabled = false;
                 ipInput.disabled = true;
                 messageInput.disabled = false;
                 sendBtn.disabled = false;
                 joystickContainer.classList.add('active');
                 videoSection.classList.add('active');
+                pointCloudSection.classList.add('active');
+                mapSection.classList.add('active');
+                consoleSection.classList.add('active');
                 initJoystick();
+                initPointCloudViewer();
+                initMapViewer();
+                startPointCloudDiagnosticTimer();
+                updateWasmControlUI();
+                schedulePointCloudRender();
             } else {
                 statusEl.className = 'status disconnected';
                 statusEl.innerHTML = '<span class="status-dot"></span><span>Disconnected</span>';
                 connectBtn.style.display = 'block';
                 disconnectBtn.style.display = 'none';
+                emergencyStopBtn.style.display = 'none';
+                emergencyStopBtn.disabled = true;
                 ipInput.disabled = false;
                 messageInput.disabled = true;
                 sendBtn.disabled = true;
                 joystickContainer.classList.remove('active');
                 videoSection.classList.remove('active');
+                pointCloudSection.classList.remove('active');
+                mapSection.classList.remove('active');
+                consoleSection.classList.remove('active');
                 // Reset video
                 document.getElementById('videoStream').style.display = 'none';
                 document.getElementById('videoPlaceholder').style.display = 'block';
                 videoFrameCount = 0;
                 videoFpsCounter = 0;
+                pointCloudState.frameCount = 0;
+                pointCloudState.fpsCounter = 0;
+                pointCloudState.lastFpsUpdateMs = performance.now();
+                clearPointCloudDiagnosticTimer();
+                resetPointCloudData();
+                resetMapPreview();
+                resetConsoleOutput();
+                resetWasmControlState();
+                pendingTeleopSamples.clear();
+                teleopMetrics.lastSeq = null;
+                teleopMetrics.lastRttMs = null;
+                teleopMetrics.lastPhoneRxToBleMs = null;
+                teleopMetrics.lastBleToOdomMs = null;
+                teleopMetrics.lastEstimatedEndToMotionMs = null;
+                updateTeleopMetricDisplay();
             }
         }
 
@@ -503,14 +1235,14 @@
                 ws.onopen = function() {
                     updateStatus(true);
                     addLog('✅ Connected to iPhone!');
+                    refreshWasmPrograms();
                 };
 
                 ws.onmessage = function(event) {
-                    // Check if it's binary data (video frame) or text message
                     if (event.data instanceof ArrayBuffer) {
-                        handleVideoFrame(event.data);
+                        handleBinaryMessage(event.data);
                     } else {
-                        addLog(`📱 Received: ${event.data}`);
+                        handleServerTextMessage(event.data);
                     }
                 };
 
@@ -528,6 +1260,24 @@
                 addLog(`❌ Failed to connect: ${error.message}`);
                 console.error('Connection error:', error);
             }
+        }
+
+        function handleBinaryMessage(arrayBuffer) {
+            if (isPointCloudBinaryMessage(arrayBuffer)) {
+                handlePointCloudBinaryFrame(arrayBuffer);
+                return;
+            }
+            handleVideoFrame(arrayBuffer);
+        }
+
+        function isPointCloudBinaryMessage(arrayBuffer) {
+            if (!(arrayBuffer instanceof ArrayBuffer) || arrayBuffer.byteLength < POINTS_BINARY_HEADER_SIZE) {
+                return false;
+            }
+
+            const bytes = new Uint8Array(arrayBuffer, 0, 5);
+            return POINTS_BINARY_MAGIC.every((value, index) => bytes[index] === value)
+                && bytes[4] === POINTS_BINARY_TYPE_POINTS;
         }
 
         function handleVideoFrame(arrayBuffer) {
@@ -570,6 +1320,14 @@
             }
         }
 
+        function emergencyStopRemote() {
+            if (typeof resetJoystickInteraction === 'function') {
+                resetJoystickInteraction();
+            }
+            sendWasmControlMessage({ type: 'emergency_stop' });
+            addLog('🛑 Emergency stop sent');
+        }
+
         function sendMessage() {
             const message = messageInput.value.trim();
             if (!message) {
@@ -586,8 +1344,549 @@
             }
         }
 
+        function handleServerTextMessage(message) {
+            let parsed = null;
+            try {
+                parsed = JSON.parse(message);
+            } catch (_) {
+                parsed = null;
+            }
+
+            if (!parsed || typeof parsed !== 'object' || !parsed.type) {
+                addLog(`📱 Received: ${message}`);
+                return;
+            }
+
+            if (parsed.type === 'teleop_ack') {
+                handleTeleopAck(parsed);
+                return;
+            }
+
+            if (parsed.type === 'teleop_latency') {
+                handleTeleopLatency(parsed);
+                return;
+            }
+
+            if (parsed.type === 'teleop_latency_timeout') {
+                handleTeleopLatencyTimeout(parsed);
+                return;
+            }
+
+            if (parsed.type === 'points3d') {
+                handlePointCloudJsonMessage(parsed);
+                return;
+            }
+
+            if (parsed.type === 'wasm_state') {
+                handleWasmStateMessage(parsed);
+                return;
+            }
+
+            if (parsed.type === 'map_frame_reset') {
+                resetMapPreview();
+                return;
+            }
+
+            if (parsed.type === 'map_frame') {
+                handleMapFrameMessage(parsed);
+                return;
+            }
+
+            if (parsed.type === 'wasm_console_reset') {
+                resetConsoleOutput();
+                return;
+            }
+
+            if (parsed.type === 'wasm_log') {
+                handleWasmLogMessage(parsed);
+                return;
+            }
+
+            addLog(`📱 Received: ${message}`);
+        }
+
+        function handleMapFrameMessage(message) {
+            if (typeof message.jpeg_b64 !== 'string' || message.jpeg_b64.length === 0) {
+                return;
+            }
+
+            mapPreviewEl.src = `data:image/jpeg;base64,${message.jpeg_b64}`;
+            mapPreviewEl.style.display = 'block';
+            mapPlaceholderEl.style.display = 'none';
+            updateMapTransform();
+            mapFrameCount += 1;
+            mapFramesEl.textContent = mapFrameCount.toLocaleString();
+            mapSizeEl.textContent = `${((message.jpeg_b64.length * 3) / 4 / 1024).toFixed(1)} KB`;
+            mapTimestampEl.textContent = formatPointCloudTimestamp(message.timestamp);
+        }
+
+        function handleWasmLogMessage(message) {
+            if (typeof message.text !== 'string' || message.text.trim().length === 0) {
+                return;
+            }
+            appendConsoleLine(message.text.trim());
+        }
+
+        function handleWasmStateMessage(message) {
+            wasmControlState.files = Array.isArray(message.files) ? message.files : [];
+            wasmControlState.hubFiles = Array.isArray(message.hub_files) ? message.hub_files : [];
+            wasmControlState.selectedTargetId = typeof message.selected_target_id === 'string'
+                ? message.selected_target_id
+                : '';
+            wasmControlState.selectedTargetName = typeof message.selected_target_name === 'string'
+                ? message.selected_target_name
+                : '';
+            wasmControlState.runningFileName = typeof message.running_file_name === 'string'
+                ? message.running_file_name
+                : '';
+            wasmControlState.isRunning = Boolean(message.is_running);
+            wasmControlState.isLoadingHub = Boolean(message.is_loading_hub);
+            wasmControlState.hubError = typeof message.hub_error === 'string' ? message.hub_error : '';
+            updateWasmControlUI();
+        }
+
+        function updateWasmControlUI() {
+            const isConnected = ws && ws.readyState === WebSocket.OPEN;
+            const files = wasmControlState.files;
+            const hubFiles = wasmControlState.hubFiles;
+            const desiredHubFileId = wasmControlState.selectedHubFileId || hubProgramSelect.value;
+
+            wasmProgramSelect.innerHTML = '';
+            if (files.length === 0) {
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = isConnected ? 'No programs available' : 'Connect to load programs';
+                wasmProgramSelect.appendChild(option);
+            } else {
+                for (const file of files) {
+                    const option = document.createElement('option');
+                    option.value = file.id || '';
+                    const detail = file.kind === 'bundled'
+                        ? 'bundled'
+                        : ((file.file_size && file.detail) ? `${file.detail} • ${file.file_size}` : (file.detail || 'downloaded'));
+                    option.textContent = detail ? `${file.name} (${detail})` : file.name;
+                    wasmProgramSelect.appendChild(option);
+                }
+            }
+
+            if (files.some((file) => file.id === wasmControlState.selectedTargetId)) {
+                wasmProgramSelect.value = wasmControlState.selectedTargetId;
+            }
+
+            const selectedFile = files.find((file) => file.id === wasmProgramSelect.value) || null;
+            const statusText = wasmControlState.isRunning ? 'Running' : (selectedFile ? 'Ready' : 'Idle');
+            wasmRunStatusEl.textContent = statusText;
+
+            if (wasmControlState.isRunning) {
+                wasmSelectionMetaEl.textContent = wasmControlState.runningFileName
+                    ? `running ${wasmControlState.runningFileName}`
+                    : 'WASM module is running';
+            } else if (selectedFile) {
+                const metaParts = [];
+                if (selectedFile.kind) metaParts.push(selectedFile.kind);
+                if (selectedFile.detail) metaParts.push(selectedFile.detail);
+                if (selectedFile.file_size) metaParts.push(selectedFile.file_size);
+                if (selectedFile.uploader_name) metaParts.push(`by ${selectedFile.uploader_name}`);
+                wasmSelectionMetaEl.textContent = metaParts.join(' • ') || selectedFile.name || 'Ready';
+            } else {
+                wasmSelectionMetaEl.textContent = isConnected
+                    ? 'No WASM programs available on the phone yet.'
+                    : 'Connect to the iPhone to load available WASM programs.';
+            }
+
+            wasmProgramSelect.disabled = !isConnected || files.length === 0 || wasmControlState.isRunning;
+            wasmRefreshBtn.disabled = !isConnected;
+            wasmRunBtn.disabled = !isConnected || wasmControlState.isRunning || files.length === 0;
+            wasmStopBtn.disabled = !isConnected || !wasmControlState.isRunning;
+
+            hubProgramSelect.innerHTML = '';
+            if (hubFiles.length === 0) {
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = wasmControlState.isLoadingHub
+                    ? 'Loading WasmHub files...'
+                    : (isConnected ? 'No public hub files loaded' : 'Connect to load hub files');
+                hubProgramSelect.appendChild(option);
+            } else {
+                for (const file of hubFiles) {
+                    const option = document.createElement('option');
+                    option.value = file.id || '';
+                    const downloadedSuffix = file.is_downloaded ? ' • downloaded' : '';
+                    option.textContent = `${file.name}${downloadedSuffix}`;
+                    hubProgramSelect.appendChild(option);
+                }
+            }
+
+            let selectedHubFile = hubFiles.find((file) => file.id === desiredHubFileId) || null;
+            if (!selectedHubFile && hubFiles.length > 0) {
+                selectedHubFile = hubFiles[0];
+            }
+            if (selectedHubFile) {
+                hubProgramSelect.value = selectedHubFile.id || '';
+                wasmControlState.selectedHubFileId = selectedHubFile.id || '';
+            } else {
+                wasmControlState.selectedHubFileId = '';
+            }
+
+            if (wasmControlState.hubError) {
+                hubSelectionMetaEl.textContent = wasmControlState.hubError;
+            } else if (selectedHubFile) {
+                const metaParts = [];
+                if (selectedHubFile.file_name) metaParts.push(selectedHubFile.file_name);
+                if (selectedHubFile.file_size) metaParts.push(selectedHubFile.file_size);
+                if (selectedHubFile.uploader_name) metaParts.push(`by ${selectedHubFile.uploader_name}`);
+                if (Number.isFinite(selectedHubFile.download_count)) metaParts.push(`${selectedHubFile.download_count} downloads`);
+                if (selectedHubFile.is_downloaded) metaParts.push('already downloaded');
+                hubSelectionMetaEl.textContent = metaParts.join(' • ') || selectedHubFile.name || 'Ready';
+            } else {
+                hubSelectionMetaEl.textContent = wasmControlState.isLoadingHub
+                    ? 'Loading public WasmHub files...'
+                    : (isConnected ? 'Refresh to load public WasmHub files.' : 'Connect to load public WasmHub files.');
+            }
+
+            hubProgramSelect.disabled = !isConnected || wasmControlState.isLoadingHub || hubFiles.length === 0;
+            hubDownloadBtn.disabled = !isConnected || wasmControlState.isLoadingHub || !selectedHubFile || Boolean(selectedHubFile.is_downloaded);
+        }
+
+        function resetWasmControlState() {
+            wasmControlState.files = [];
+            wasmControlState.hubFiles = [];
+            wasmControlState.selectedTargetId = '';
+            wasmControlState.selectedHubFileId = '';
+            wasmControlState.selectedTargetName = '';
+            wasmControlState.runningFileName = '';
+            wasmControlState.isRunning = false;
+            wasmControlState.isLoadingHub = false;
+            wasmControlState.hubError = '';
+            updateWasmControlUI();
+        }
+
+        function sendWasmControlMessage(payload) {
+            if (!(ws && ws.readyState === WebSocket.OPEN)) {
+                return;
+            }
+            ws.send(JSON.stringify(payload));
+        }
+
+        function refreshWasmPrograms() {
+            sendWasmControlMessage({ type: 'wasm_refresh' });
+        }
+
+        function runSelectedWasmRemote() {
+            sendWasmControlMessage({ type: 'wasm_run' });
+        }
+
+        function stopSelectedWasmRemote() {
+            sendWasmControlMessage({ type: 'wasm_stop' });
+        }
+
+        function downloadSelectedHubFileRemote() {
+            const remoteId = hubProgramSelect.value;
+            if (!remoteId) {
+                return;
+            }
+            sendWasmControlMessage({
+                type: 'wasm_download',
+                remote_id: remoteId
+            });
+        }
+
+        function handlePointCloudBinaryFrame(arrayBuffer) {
+            const view = new DataView(arrayBuffer);
+            const flags = view.getUint8(5);
+            const timestamp = view.getFloat64(8, true);
+            const pointCount = view.getUint32(16, true);
+            const pointsByteCount = pointCount * 3 * 4;
+            const colorsByteCount = (flags & POINTS_BINARY_FLAG_COLORS) ? pointCount * 3 : 0;
+            const expectedByteCount = POINTS_BINARY_HEADER_SIZE + pointsByteCount + colorsByteCount;
+
+            if (pointCount === 0 || arrayBuffer.byteLength < expectedByteCount) {
+                return;
+            }
+
+            const points = new Float32Array(arrayBuffer.slice(POINTS_BINARY_HEADER_SIZE, POINTS_BINARY_HEADER_SIZE + pointsByteCount));
+            const colors = colorsByteCount > 0
+                ? new Uint8Array(arrayBuffer.slice(POINTS_BINARY_HEADER_SIZE + pointsByteCount, expectedByteCount))
+                : null;
+
+            applyPointCloudFrame(points, colors, timestamp);
+        }
+
+        function handlePointCloudJsonMessage(message) {
+            if (!Array.isArray(message.points) || message.points.length < 3) {
+                return;
+            }
+
+            const points = new Float32Array(message.points);
+            let colors = null;
+            if (Array.isArray(message.colors) && message.colors.length >= points.length) {
+                colors = new Uint8Array(message.colors.slice(0, points.length));
+            }
+
+            applyPointCloudFrame(points, colors, Number.isFinite(message.timestamp) ? message.timestamp : null);
+        }
+
+        function applyPointCloudFrame(points, colors, timestamp) {
+            if (!(points instanceof Float32Array) || points.length < 3) {
+                return;
+            }
+
+            const isFirstFrame = !pointCloudState.hasReceivedFrame;
+            pointCloudState.hasReceivedFrame = true;
+            pointCloudState.points = points;
+            pointCloudState.colors = colors;
+            pointCloudState.pointCount = Math.floor(points.length / 3);
+            pointCloudState.timestamp = timestamp;
+            pointCloudState.frameCount += 1;
+            pointCloudState.fpsCounter += 1;
+
+            const bounds = computePointCloudBounds(points);
+            pointCloudState.center = bounds.center;
+            pointCloudState.radius = bounds.radius;
+
+            pointCloudPlaceholder.style.display = 'none';
+            pointCloudStatusTextEl.textContent = 'Streaming current WASM point cloud';
+            pointCloudHelpTextEl.textContent = 'Drag to orbit. Scroll to zoom.';
+            pointCloudPointsEl.textContent = pointCloudState.pointCount.toLocaleString();
+            pointCloudFramesEl.textContent = pointCloudState.frameCount.toLocaleString();
+            pointCloudRadiusEl.textContent = `${bounds.radius.toFixed(2)} m`;
+            pointCloudTimestampEl.textContent = formatPointCloudTimestamp(timestamp);
+
+            if (isFirstFrame) {
+                clearPointCloudDiagnosticTimer();
+                addLog('🌐 Point cloud stream active');
+            }
+
+            const now = performance.now();
+            if ((now - pointCloudState.lastFpsUpdateMs) >= 1000) {
+                pointCloudFpsEl.textContent = pointCloudState.fpsCounter.toString();
+                pointCloudState.fpsCounter = 0;
+                pointCloudState.lastFpsUpdateMs = now;
+            }
+
+            schedulePointCloudRender();
+        }
+
+        function computePointCloudBounds(points) {
+            let minX = Infinity;
+            let minY = Infinity;
+            let minZ = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            let maxZ = -Infinity;
+
+            for (let i = 0; i < points.length; i += 3) {
+                const x = points[i];
+                const y = points[i + 1];
+                const z = points[i + 2];
+                if (x < minX) minX = x;
+                if (y < minY) minY = y;
+                if (z < minZ) minZ = z;
+                if (x > maxX) maxX = x;
+                if (y > maxY) maxY = y;
+                if (z > maxZ) maxZ = z;
+            }
+
+            const center = {
+                x: (minX + maxX) * 0.5,
+                y: (minY + maxY) * 0.5,
+                z: (minZ + maxZ) * 0.5
+            };
+            const dx = maxX - minX;
+            const dy = maxY - minY;
+            const dz = maxZ - minZ;
+            const radius = Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz) * 0.5, 0.05);
+
+            return { center, radius };
+        }
+
+        function formatPointCloudTimestamp(timestamp) {
+            if (!Number.isFinite(timestamp)) {
+                return '-';
+            }
+            return `${timestamp.toFixed(3)} s`;
+        }
+
+        function resetPointCloudData() {
+            pointCloudState.points = null;
+            pointCloudState.colors = null;
+            pointCloudState.pointCount = 0;
+            pointCloudState.frameCount = 0;
+            pointCloudState.center = { x: 0, y: 0, z: 0 };
+            pointCloudState.radius = 1;
+            pointCloudState.hasReceivedFrame = false;
+            pointCloudState.timestamp = null;
+            pointCloudPointsEl.textContent = '0';
+            pointCloudFramesEl.textContent = '0';
+            pointCloudFpsEl.textContent = '0';
+            pointCloudRadiusEl.textContent = '0.00 m';
+            pointCloudTimestampEl.textContent = '-';
+            pointCloudStatusTextEl.textContent = 'Waiting for the current WASM point cloud...';
+            pointCloudHelpTextEl.textContent = 'Drag to orbit. Scroll to zoom.';
+            pointCloudPlaceholder.style.display = 'flex';
+            schedulePointCloudRender();
+        }
+
+        function resetMapPreview() {
+            mapFrameCount = 0;
+            mapFramesEl.textContent = '0';
+            mapSizeEl.textContent = '0 KB';
+            mapTimestampEl.textContent = '-';
+            resetMapTransform();
+            mapPreviewEl.removeAttribute('src');
+            mapPreviewEl.style.display = 'none';
+            mapPlaceholderEl.style.display = 'block';
+        }
+
+        function resetConsoleOutput() {
+            consoleLineCountEl.textContent = '0';
+            consoleLogEl.innerHTML = '';
+            consoleLogEl.appendChild(consolePlaceholderEl);
+            consolePlaceholderEl.style.display = 'block';
+        }
+
+        function appendConsoleLine(text) {
+            if (consolePlaceholderEl.parentElement === consoleLogEl) {
+                consolePlaceholderEl.style.display = 'none';
+            }
+
+            const lineEl = document.createElement('div');
+            lineEl.className = 'console-line';
+            lineEl.innerHTML = `
+                <div class="console-line-time">${new Date().toLocaleTimeString()}</div>
+                <div class="console-line-text"></div>
+            `;
+            lineEl.querySelector('.console-line-text').textContent = text;
+            consoleLogEl.appendChild(lineEl);
+
+            while (consoleLogEl.querySelectorAll('.console-line').length > MAX_CONSOLE_LINES) {
+                const firstLine = consoleLogEl.querySelector('.console-line');
+                if (!firstLine) {
+                    break;
+                }
+                firstLine.remove();
+            }
+
+            consoleLineCountEl.textContent =
+                consoleLogEl.querySelectorAll('.console-line').length.toLocaleString();
+            consoleLogEl.scrollTop = consoleLogEl.scrollHeight;
+        }
+
+        function startPointCloudDiagnosticTimer() {
+            clearPointCloudDiagnosticTimer();
+            pointCloudStatusTextEl.textContent = 'Waiting for the current WASM point cloud...';
+            pointCloudHelpTextEl.textContent = 'Drag to orbit. Scroll to zoom.';
+            pointCloudDiagnosticTimer = setTimeout(() => {
+                const isConnected = ws && ws.readyState === WebSocket.OPEN;
+                if (!isConnected || pointCloudState.hasReceivedFrame) {
+                    return;
+                }
+                pointCloudStatusTextEl.textContent = 'No point-cloud frames received from the iPhone yet.';
+                pointCloudHelpTextEl.textContent =
+                    'Rebuild the iPhone app with the websocket point-cloud changes and make sure the WASM pipeline is running.';
+            }, 3000);
+        }
+
+        function clearPointCloudDiagnosticTimer() {
+            if (pointCloudDiagnosticTimer) {
+                clearTimeout(pointCloudDiagnosticTimer);
+                pointCloudDiagnosticTimer = null;
+            }
+        }
+
+        function handleTeleopAck(message) {
+            const pending = pendingTeleopSamples.get(message.seq);
+            if (!pending) {
+                return;
+            }
+
+            pending.rttMs = performance.now() - pending.sentAtMs;
+            teleopMetrics.lastSeq = message.seq;
+            teleopMetrics.lastRttMs = pending.rttMs;
+            updateTeleopMetricDisplay();
+
+            if (!message.forwarded || !message.sampled_for_latency) {
+                pendingTeleopSamples.delete(message.seq);
+            }
+        }
+
+        function handleTeleopLatency(message) {
+            const pending = pendingTeleopSamples.get(message.seq);
+            const rttMs =
+                pending && Number.isFinite(pending.rttMs) ? pending.rttMs : teleopMetrics.lastRttMs;
+            const estimatedEndToMotionMs =
+                Number.isFinite(rttMs) ? (rttMs / 2.0) + message.phone_rx_to_odom_ms : null;
+
+            teleopMetrics.lastSeq = message.seq;
+            teleopMetrics.lastPhoneRxToBleMs = message.phone_rx_to_ble_ms;
+            teleopMetrics.lastBleToOdomMs = message.ble_to_odom_ms;
+            teleopMetrics.lastEstimatedEndToMotionMs = estimatedEndToMotionMs;
+            teleopMetricDetailsEl.textContent =
+                `seq ${message.seq}, odom ${message.odom_seq}, ticks (${message.sum_dl_ticks}, ${message.sum_dr_ticks})`;
+            updateTeleopMetricDisplay();
+            pendingTeleopSamples.delete(message.seq);
+        }
+
+        function handleTeleopLatencyTimeout(message) {
+            teleopMetrics.lastSeq = message.seq;
+            teleopMetricDetailsEl.textContent = `seq ${message.seq}, timeout waiting for odom`;
+            updateTeleopMetricDisplay();
+            pendingTeleopSamples.delete(message.seq);
+        }
+
+        function updateTeleopMetricDisplay() {
+            teleopRttEl.textContent = formatMetricMs(teleopMetrics.lastRttMs);
+            teleopPhoneBleEl.textContent = formatMetricMs(teleopMetrics.lastPhoneRxToBleMs);
+            teleopBleOdomEl.textContent = formatMetricMs(teleopMetrics.lastBleToOdomMs);
+            teleopEstimatedEl.textContent = formatMetricMs(teleopMetrics.lastEstimatedEndToMotionMs);
+
+            if (teleopMetrics.lastSeq === null && pendingTeleopSamples.size === 0) {
+                teleopMetricDetailsEl.textContent = 'seq -, waiting for samples';
+            }
+        }
+
+        function formatMetricMs(value) {
+            return Number.isFinite(value) ? `${value.toFixed(1)} ms` : '-';
+        }
+
+        function sendTeleopCommand(left, right, holdMs) {
+            if (!(ws && ws.readyState === WebSocket.OPEN)) {
+                return;
+            }
+
+            const seq = nextTeleopSeq++;
+            pendingTeleopSamples.set(seq, {
+                sentAtMs: performance.now(),
+                left,
+                right,
+                holdMs,
+                rttMs: null
+            });
+            trimPendingTeleopSamples();
+            ws.send(`TELEOP ${seq} ${left} ${right} ${holdMs}`);
+        }
+
+        function trimPendingTeleopSamples() {
+            const now = performance.now();
+            for (const [seq, pending] of pendingTeleopSamples.entries()) {
+                if ((now - pending.sentAtMs) > 5000) {
+                    pendingTeleopSamples.delete(seq);
+                }
+            }
+
+            while (pendingTeleopSamples.size > 128) {
+                const oldestSeq = pendingTeleopSamples.keys().next().value;
+                pendingTeleopSamples.delete(oldestSeq);
+            }
+        }
+
         // Joystick functionality
         function initJoystick() {
+            if (joystickInitialized) {
+                return;
+            }
+            joystickInitialized = true;
+
             const canvas = document.getElementById('joystick');
             const ctx = canvas.getContext('2d');
             const centerX = canvas.width / 2;
@@ -667,12 +1966,30 @@
             function sendMotorCommand() {
                 if (ws && ws.readyState === WebSocket.OPEN) {
                     const motors = calculateMotorValues();
-                    const message = `${motors.left} ${motors.right} ${HOLD_DURATION}`;
-                    ws.send(message);
+                    sendTeleopCommand(motors.left, motors.right, HOLD_DURATION);
+                }
+            }
+
+            function sendStopCommand() {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    sendTeleopCommand(0, 0, HOLD_DURATION);
+                }
+            }
+
+            function sendStopBurst() {
+                for (const delayMs of STOP_BURST_DELAYS) {
+                    window.setTimeout(() => {
+                        if (!isDragging) {
+                            sendStopCommand();
+                        }
+                    }, delayMs);
                 }
             }
 
             function startSending() {
+                if (joystickTimer) {
+                    clearInterval(joystickTimer);
+                }
                 sendMotorCommand();
                 joystickTimer = setInterval(sendMotorCommand, SEND_INTERVAL);
             }
@@ -682,11 +1999,31 @@
                     clearInterval(joystickTimer);
                     joystickTimer = null;
                 }
-                // Send stop command
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    ws.send(`0 0 ${HOLD_DURATION}`);
+            }
+
+            function resetJoystickToCenter(sendStop = true) {
+                knobX = centerX;
+                knobY = centerY;
+                drawJoystick();
+                updateMotorDisplay();
+                if (sendStop) {
+                    sendStopBurst();
                 }
             }
+
+            function releaseJoystick(sendStop = true) {
+                if (!isDragging && !joystickTimer) {
+                    return;
+                }
+                isDragging = false;
+                stopSending();
+                resetJoystickToCenter(sendStop);
+            }
+
+            resetJoystickInteraction = function() {
+                releaseJoystick(false);
+                sendStopBurst();
+            };
 
             function updateKnobPosition(clientX, clientY) {
                 const rect = canvas.getBoundingClientRect();
@@ -727,12 +2064,7 @@
             // Release anywhere on the page
             document.addEventListener('mouseup', () => {
                 if (isDragging) {
-                    isDragging = false;
-                    knobX = centerX;
-                    knobY = centerY;
-                    drawJoystick();
-                    updateMotorDisplay();
-                    stopSending();
+                    releaseJoystick(true);
                 }
             });
 
@@ -753,15 +2085,21 @@
                 }
             });
 
-            canvas.addEventListener('touchend', (e) => {
+            function handleTouchRelease(e) {
                 e.preventDefault();
                 if (isDragging) {
-                    isDragging = false;
-                    knobX = centerX;
-                    knobY = centerY;
-                    drawJoystick();
-                    updateMotorDisplay();
-                    stopSending();
+                    releaseJoystick(true);
+                }
+            }
+
+            canvas.addEventListener('touchend', handleTouchRelease);
+            canvas.addEventListener('touchcancel', handleTouchRelease);
+            window.addEventListener('touchend', handleTouchRelease, { passive: false });
+            window.addEventListener('touchcancel', handleTouchRelease, { passive: false });
+            window.addEventListener('blur', () => releaseJoystick(true));
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) {
+                    releaseJoystick(true);
                 }
             });
 
@@ -770,9 +2108,299 @@
             updateMotorDisplay();
         }
 
+        function initPointCloudViewer() {
+            if (pointCloudViewerInitialized) {
+                return;
+            }
+            pointCloudViewerInitialized = true;
+
+            pointCloudCanvas.addEventListener('pointerdown', (event) => {
+                pointCloudState.dragActive = true;
+                pointCloudState.lastPointerX = event.clientX;
+                pointCloudState.lastPointerY = event.clientY;
+                pointCloudCanvas.classList.add('dragging');
+                pointCloudCanvas.setPointerCapture(event.pointerId);
+            });
+
+            pointCloudCanvas.addEventListener('pointermove', (event) => {
+                if (!pointCloudState.dragActive) {
+                    return;
+                }
+
+                const dx = event.clientX - pointCloudState.lastPointerX;
+                const dy = event.clientY - pointCloudState.lastPointerY;
+                pointCloudState.lastPointerX = event.clientX;
+                pointCloudState.lastPointerY = event.clientY;
+                pointCloudState.yaw += dx * 0.01;
+                pointCloudState.pitch = Math.max(-1.4, Math.min(1.4, pointCloudState.pitch + dy * 0.01));
+                schedulePointCloudRender();
+            });
+
+            const stopDragging = (event) => {
+                if (!pointCloudState.dragActive) {
+                    return;
+                }
+                pointCloudState.dragActive = false;
+                pointCloudCanvas.classList.remove('dragging');
+                if (event && typeof event.pointerId === 'number') {
+                    pointCloudCanvas.releasePointerCapture(event.pointerId);
+                }
+            };
+
+            pointCloudCanvas.addEventListener('pointerup', stopDragging);
+            pointCloudCanvas.addEventListener('pointercancel', stopDragging);
+            pointCloudCanvas.addEventListener('pointerleave', stopDragging);
+
+            pointCloudCanvas.addEventListener('wheel', (event) => {
+                event.preventDefault();
+                const zoomDelta = event.deltaY > 0 ? 0.18 : -0.18;
+                pointCloudState.zoom = Math.max(1.2, Math.min(7.0, pointCloudState.zoom + zoomDelta));
+                schedulePointCloudRender();
+            }, { passive: false });
+
+            window.addEventListener('resize', schedulePointCloudRender);
+        }
+
+        function initMapViewer() {
+            if (mapViewerInitialized) {
+                return;
+            }
+            mapViewerInitialized = true;
+
+            mapContainerEl.addEventListener('pointerdown', (event) => {
+                if (mapPreviewEl.style.display === 'none') {
+                    return;
+                }
+                mapViewState.dragActive = true;
+                mapViewState.lastPointerX = event.clientX;
+                mapViewState.lastPointerY = event.clientY;
+                mapContainerEl.classList.add('dragging');
+                mapContainerEl.setPointerCapture(event.pointerId);
+            });
+
+            mapContainerEl.addEventListener('pointermove', (event) => {
+                if (!mapViewState.dragActive) {
+                    return;
+                }
+
+                const dx = event.clientX - mapViewState.lastPointerX;
+                const dy = event.clientY - mapViewState.lastPointerY;
+                mapViewState.lastPointerX = event.clientX;
+                mapViewState.lastPointerY = event.clientY;
+                mapViewState.offsetX += dx;
+                mapViewState.offsetY += dy;
+                updateMapTransform();
+            });
+
+            const stopMapDragging = (event) => {
+                if (!mapViewState.dragActive) {
+                    return;
+                }
+                mapViewState.dragActive = false;
+                mapContainerEl.classList.remove('dragging');
+                if (event && typeof event.pointerId === 'number') {
+                    mapContainerEl.releasePointerCapture(event.pointerId);
+                }
+            };
+
+            mapContainerEl.addEventListener('pointerup', stopMapDragging);
+            mapContainerEl.addEventListener('pointercancel', stopMapDragging);
+            mapContainerEl.addEventListener('pointerleave', stopMapDragging);
+
+            mapContainerEl.addEventListener('wheel', (event) => {
+                if (mapPreviewEl.style.display === 'none') {
+                    return;
+                }
+
+                event.preventDefault();
+                const rect = mapContainerEl.getBoundingClientRect();
+                const pointerX = event.clientX - rect.left;
+                const pointerY = event.clientY - rect.top;
+                const zoomFactor = event.deltaY > 0 ? 0.9 : 1.1;
+                const nextScale = Math.max(
+                    mapViewState.minScale,
+                    Math.min(mapViewState.maxScale, mapViewState.scale * zoomFactor)
+                );
+
+                if (nextScale === mapViewState.scale) {
+                    return;
+                }
+
+                const scaleRatio = nextScale / mapViewState.scale;
+                mapViewState.offsetX = pointerX - ((pointerX - mapViewState.offsetX) * scaleRatio);
+                mapViewState.offsetY = pointerY - ((pointerY - mapViewState.offsetY) * scaleRatio);
+                mapViewState.scale = nextScale;
+                updateMapTransform();
+            }, { passive: false });
+
+            mapContainerEl.addEventListener('dblclick', () => {
+                resetMapTransform();
+            });
+
+            window.addEventListener('resize', updateMapTransform);
+        }
+
+        function clampMapTransform() {
+            if (mapViewState.scale <= 1) {
+                mapViewState.offsetX = 0;
+                mapViewState.offsetY = 0;
+                return;
+            }
+
+            const rect = mapContainerEl.getBoundingClientRect();
+            const maxOffsetX = ((mapViewState.scale - 1) * rect.width) / 2;
+            const maxOffsetY = ((mapViewState.scale - 1) * rect.height) / 2;
+            mapViewState.offsetX = Math.max(-maxOffsetX, Math.min(maxOffsetX, mapViewState.offsetX));
+            mapViewState.offsetY = Math.max(-maxOffsetY, Math.min(maxOffsetY, mapViewState.offsetY));
+        }
+
+        function updateMapTransform() {
+            clampMapTransform();
+            mapPreviewEl.style.transform = `translate(${mapViewState.offsetX}px, ${mapViewState.offsetY}px) scale(${mapViewState.scale})`;
+        }
+
+        function resetMapTransform() {
+            mapViewState.scale = 1;
+            mapViewState.offsetX = 0;
+            mapViewState.offsetY = 0;
+            mapViewState.dragActive = false;
+            mapContainerEl.classList.remove('dragging');
+            updateMapTransform();
+        }
+
+        function schedulePointCloudRender() {
+            if (pointCloudState.renderQueued) {
+                return;
+            }
+            pointCloudState.renderQueued = true;
+            requestAnimationFrame(renderPointCloud);
+        }
+
+        function renderPointCloud() {
+            pointCloudState.renderQueued = false;
+
+            const rect = pointCloudCanvas.getBoundingClientRect();
+            const cssWidth = Math.max(1, Math.floor(rect.width));
+            const cssHeight = Math.max(1, Math.floor(rect.height));
+            const dpr = window.devicePixelRatio || 1;
+            const displayWidth = Math.max(1, Math.floor(cssWidth * dpr));
+            const displayHeight = Math.max(1, Math.floor(cssHeight * dpr));
+
+            if (pointCloudCanvas.width !== displayWidth || pointCloudCanvas.height !== displayHeight) {
+                pointCloudCanvas.width = displayWidth;
+                pointCloudCanvas.height = displayHeight;
+            }
+
+            pointCloudCtx.setTransform(1, 0, 0, 1, 0, 0);
+            pointCloudCtx.clearRect(0, 0, displayWidth, displayHeight);
+
+            const background = pointCloudCtx.createLinearGradient(0, 0, 0, displayHeight);
+            background.addColorStop(0, '#111827');
+            background.addColorStop(1, '#030712');
+            pointCloudCtx.fillStyle = background;
+            pointCloudCtx.fillRect(0, 0, displayWidth, displayHeight);
+
+            drawPointCloudGuide(displayWidth, displayHeight);
+
+            if (!(pointCloudState.points instanceof Float32Array) || pointCloudState.pointCount === 0) {
+                return;
+            }
+
+            const projected = [];
+            const { points, colors } = pointCloudState;
+            const { center, radius, yaw, pitch, zoom } = pointCloudState;
+            const cosYaw = Math.cos(yaw);
+            const sinYaw = Math.sin(yaw);
+            const cosPitch = Math.cos(pitch);
+            const sinPitch = Math.sin(pitch);
+            const normalizedRadius = Math.max(radius, 0.05);
+            const cameraDistance = zoom;
+            const focalLength = Math.min(displayWidth, displayHeight) * 0.72;
+
+            for (let i = 0; i < points.length; i += 3) {
+                const normalizedX = (points[i] - center.x) / normalizedRadius;
+                const normalizedY = (points[i + 1] - center.y) / normalizedRadius;
+                const normalizedZ = (points[i + 2] - center.z) / normalizedRadius;
+
+                const yawX = normalizedX * cosYaw - normalizedZ * sinYaw;
+                const yawZ = normalizedX * sinYaw + normalizedZ * cosYaw;
+                const pitchY = normalizedY * cosPitch - yawZ * sinPitch;
+                const pitchZ = normalizedY * sinPitch + yawZ * cosPitch;
+                const depth = pitchZ + cameraDistance;
+
+                if (depth <= 0.08) {
+                    continue;
+                }
+
+                const screenX = displayWidth * 0.5 + (yawX / depth) * focalLength;
+                const screenY = displayHeight * 0.5 - (pitchY / depth) * focalLength;
+
+                if (screenX < -8 || screenX > displayWidth + 8 || screenY < -8 || screenY > displayHeight + 8) {
+                    continue;
+                }
+
+                projected.push({
+                    x: screenX,
+                    y: screenY,
+                    depth,
+                    size: Math.max(1.2, Math.min(4.5, 4.2 / depth)),
+                    colorIndex: i
+                });
+            }
+
+            projected.sort((a, b) => b.depth - a.depth);
+
+            for (const point of projected) {
+                if (colors && colors.length >= point.colorIndex + 3) {
+                    pointCloudCtx.fillStyle = `rgba(${colors[point.colorIndex]}, ${colors[point.colorIndex + 1]}, ${colors[point.colorIndex + 2]}, 0.92)`;
+                } else {
+                    const mix = Math.max(0, Math.min(1, 1 - ((point.depth - 0.4) / 3.2)));
+                    const red = Math.round(90 + (155 * mix));
+                    const green = Math.round(130 + (70 * (1 - mix)));
+                    const blue = Math.round(255 - (150 * mix));
+                    pointCloudCtx.fillStyle = `rgba(${red}, ${green}, ${blue}, 0.92)`;
+                }
+
+                pointCloudCtx.fillRect(point.x, point.y, point.size, point.size);
+            }
+        }
+
+        function drawPointCloudGuide(width, height) {
+            pointCloudCtx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+            pointCloudCtx.lineWidth = 1;
+            pointCloudCtx.beginPath();
+            pointCloudCtx.moveTo(0, height * 0.5);
+            pointCloudCtx.lineTo(width, height * 0.5);
+            pointCloudCtx.moveTo(width * 0.5, 0);
+            pointCloudCtx.lineTo(width * 0.5, height);
+            pointCloudCtx.stroke();
+        }
+
+        wasmProgramSelect.addEventListener('change', () => {
+            const selectedTargetId = wasmProgramSelect.value;
+            if (!selectedTargetId) {
+                return;
+            }
+            sendWasmControlMessage({
+                type: 'wasm_select',
+                target_id: selectedTargetId
+            });
+        });
+
+        hubProgramSelect.addEventListener('change', () => {
+            wasmControlState.selectedHubFileId = hubProgramSelect.value;
+            updateWasmControlUI();
+        });
+
         // Focus message input when page loads
         window.addEventListener('load', () => {
             ipInput.focus();
+            updateTeleopMetricDisplay();
+            initPointCloudViewer();
+            resetPointCloudData();
+            resetMapPreview();
+            resetConsoleOutput();
+            resetWasmControlState();
         });
     </script>
 </body>

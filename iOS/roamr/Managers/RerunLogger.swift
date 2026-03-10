@@ -301,6 +301,14 @@ private final class WasmRerunTelemetryBridge {
             colorsPointer: hasUsableColors ? UnsafePointer(frame.colorsPointer) : nil,
             colorsCount: hasUsableColors ? requiredColorCount : 0
         )
+
+        WebSocketManager.shared.broadcastPointCloud(
+            timestamp: frame.timestamp,
+            pointsPointer: UnsafePointer(frame.pointsPointer),
+            pointCount: pointCount,
+            colorsPointer: hasUsableColors ? UnsafePointer(frame.colorsPointer) : nil,
+            colorsCount: hasUsableColors ? requiredColorCount : 0
+        )
     }
 
     private func logCameraImage(_ frame: WasmLidarFrameView) {
@@ -498,6 +506,8 @@ private final class WasmRerunMapBridge {
             return
         }
 
+        WasmManager.shared.updateMapPreview(jpegData: jpegData, timestamp: frame.timestamp)
+        WebSocketManager.shared.publishMapFrame(timestamp: frame.timestamp, jpegData: jpegData)
         RerunWebSocketClient.shared.logMapFrame(timestamp: frame.timestamp, jpegData: jpegData)
     }
 }
@@ -572,7 +582,7 @@ final class RerunWebSocketClient {
     private var task: URLSessionWebSocketTask?
     private var isConnected = false
     private var pendingCount = 0
-    private let maxPending = 2
+    private let maxPending = 6
 
     private let encoder = JSONEncoder()
     private let useBinaryPointCloudTransport = true
@@ -633,7 +643,7 @@ final class RerunWebSocketClient {
         let fallbackPoints = Array(
             UnsafeBufferPointer(start: pointsPointer, count: floatCount)
         )
-        var fallbackColors: [UInt8]? = nil
+        var fallbackColors: [UInt8]?
         if let colorsPointer, colorsCount >= floatCount {
             fallbackColors = Array(
                 UnsafeBufferPointer(start: colorsPointer, count: floatCount)
@@ -797,10 +807,14 @@ final class RerunWebSocketClient {
             return false
         }
         switch message {
-        case .motors, .imu:
-            return pendingCount > maxPending * 2
-        default:
+        case .points, .videoFrame:
             return true
+        case .mapFrame, .pose:
+            return pendingCount > maxPending * 2
+        case .motors, .imu:
+            return pendingCount > maxPending * 3
+        default:
+            return pendingCount > maxPending
         }
     }
 

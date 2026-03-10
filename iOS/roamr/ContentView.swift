@@ -8,7 +8,6 @@
 import SwiftUI
 
 struct ContentView: View {
-	@StateObject private var bluetoothManager = BluetoothManager.shared
 	@State var currentPage: AppPage = .wasm
 
 	var body: some View {
@@ -22,8 +21,10 @@ struct ContentView: View {
 						CameraDepthView()
 					case .bluetooth:
 						BluetoothView()
+							.environmentObject(BluetoothManager.shared)
 					case .websocket:
 						WebSocketView()
+							.environmentObject(BluetoothManager.shared)
 					case .settings:
 						SettingsPage()
 					}
@@ -39,6 +40,5 @@ struct ContentView: View {
 				}
 			}
 		}
-		.environmentObject(bluetoothManager)
 	}
 }

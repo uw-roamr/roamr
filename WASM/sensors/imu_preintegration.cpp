@@ -26,6 +26,7 @@ void IMUPreintegrator::integrate(const IMUData& imu) noexcept {
 
   const core::Vector4d dq = core::quat_from_rotvec(w * dt);
   pose_.quaternion = core::quat_normalize(core::quat_mul(pose_.quaternion, dq));
+  gyro_yaw_ += w.z * dt;
 
   core::Vector3d a_world = core::quat_rotate(pose_.quaternion, a);
   // If accel already includes gravity, subtract it here.

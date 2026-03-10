@@ -9,12 +9,41 @@ import Foundation
 import CoreBluetooth
 import Combine
 
+private let kEnableVerboseBleLogs = false
+
 struct WheelOdometrySample {
     var timestamp: Double
     var seq: Int32
     var dlTicks: Int32
     var drTicks: Int32
     var samplePeriodMs: Int32
+}
+
+struct TeleopForwardResult {
+    let forwarded: Bool
+    let sampledForLatency: Bool
+}
+
+struct TeleopLatencyMetric {
+    let seq: Int
+    let phoneRxToBleMs: Int
+    let bleToOdomMs: Int
+    let phoneRxToOdomMs: Int
+    let odomSeq: Int
+    let sumDlTicks: Int
+    let sumDrTicks: Int
+    let leftPercent: Int
+    let rightPercent: Int
+    let holdMs: Int
+}
+
+private struct PendingTeleopTrace {
+    let seq: Int
+    let phoneReceivedAt: TimeInterval
+    let bleDispatchedAt: TimeInterval
+    let leftPercent: Int
+    let rightPercent: Int
+    let holdMs: Int
 }
 
 class BluetoothManager: NSObject, ObservableObject {
@@ -29,6 +58,7 @@ class BluetoothManager: NSObject, ObservableObject {
     @Published var lastMotorCommandText = "TX motor: -"
     @Published var lastOdomFrameText = "RX odom: -"
     @Published var lastMotorOdomText = "TX->RX: -"
+    @Published var lastTeleopLatencyText = "Teleop latency: -"
 
     private var centralManager: CBCentralManager!
     private var controlCharacteristic: CBCharacteristic?
@@ -42,10 +72,13 @@ class BluetoothManager: NSObject, ObservableObject {
     private var lastMotorLeftPercent = 0
     private var lastMotorRightPercent = 0
     private var lastMotorHoldMs = 0
+    private var pendingTeleopTrace: PendingTeleopTrace?
+    private var teleopStopWatchdogToken = 0
     private let odomQueueLock = NSLock()
     private var pendingOdomSamples: [WheelOdometrySample] = []
     private let maxPendingOdomSamples = 12_000
     private let preferredDeviceNameSubstring = "ESP32_C6"
+    private let teleopMetricTimeoutMs = 2_000
 
     // UUIDs matching ESP32 firmware
     private let serviceUUID = CBUUID(string: "00FF")
@@ -92,35 +125,131 @@ class BluetoothManager: NSObject, ObservableObject {
     }
 
     func sendMessage(_ message: String) {
+        _ = sendMessageInternal(message, teleopSequence: nil, phoneReceivedAt: nil)
+    }
+
+    func sendTeleopMotorCommand(
+        left: Int,
+        right: Int,
+        holdMs: Int,
+        seq: Int,
+        phoneReceivedAt: TimeInterval
+    ) -> TeleopForwardResult {
+        prunePendingTeleopTrace(now: Date().timeIntervalSince1970)
+
+        let clampedLeft = max(-100, min(100, left))
+        let clampedRight = max(-100, min(100, right))
+        let clampedHoldMs = max(0, holdMs)
+        let shouldSample = (clampedLeft != 0 || clampedRight != 0) && pendingTeleopTrace == nil
+        let forwarded = sendMessageInternal(
+            "\(clampedLeft) \(clampedRight) \(clampedHoldMs)",
+            teleopSequence: shouldSample ? seq : nil,
+            phoneReceivedAt: shouldSample ? phoneReceivedAt : nil
+        )
+        updateTeleopStopWatchdog(
+            left: clampedLeft,
+            right: clampedRight,
+            holdMs: clampedHoldMs,
+            commandWasForwarded: forwarded
+        )
+        return TeleopForwardResult(forwarded: forwarded, sampledForLatency: forwarded && shouldSample)
+    }
+
+    func emergencyStop() {
+        teleopStopWatchdogToken += 1
+        let token = teleopStopWatchdogToken
+        pendingTeleopTrace = nil
+        lastMotorLeftPercent = 0
+        lastMotorRightPercent = 0
+        lastMotorHoldMs = 0
+        lastMotorCommandTimestamp = Date().timeIntervalSince1970
+        lastMotorCommandText = "TX motor: 0 0 0"
+        sendTeleopStopBurst(token: token)
+    }
+
+    private func updateTeleopStopWatchdog(left: Int, right: Int, holdMs: Int, commandWasForwarded: Bool) {
+        teleopStopWatchdogToken += 1
+        let token = teleopStopWatchdogToken
+
+        guard commandWasForwarded else { return }
+
+        if left == 0 && right == 0 {
+            sendTeleopStopBurst(token: token)
+            return
+        }
+
+        guard holdMs > 0 else { return }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(holdMs)) { [weak self] in
+            guard let self, token == self.teleopStopWatchdogToken else { return }
+            _ = self.sendMessageInternal("0 0 0", teleopSequence: nil, phoneReceivedAt: nil)
+            self.sendTeleopStopBurst(token: token)
+        }
+    }
+
+    private func sendTeleopStopBurst(token: Int) {
+        let burstDelaysMs = [0, 50, 125]
+        for delayMs in burstDelaysMs {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delayMs)) { [weak self] in
+                guard let self, token == self.teleopStopWatchdogToken else { return }
+                _ = self.sendMessageInternal("0 0 0", teleopSequence: nil, phoneReceivedAt: nil)
+            }
+        }
+    }
+
+    @discardableResult
+    private func sendMessageInternal(
+        _ message: String,
+        teleopSequence: Int?,
+        phoneReceivedAt: TimeInterval?
+    ) -> Bool {
         guard let characteristic = controlCharacteristic,
               let device = connectedDevice,
               let data = message.data(using: .utf8) else {
             lastMessage = "Error: Not ready to send"
-            print("[BLE TX] dropped not-ready hasDevice=\(connectedDevice != nil) hasControlChar=\(controlCharacteristic != nil) msg=\"\(message)\"")
-            return
+            if kEnableVerboseBleLogs {
+                print("[BLE TX] dropped not-ready hasDevice=\(connectedDevice != nil) hasControlChar=\(controlCharacteristic != nil) msg=\"\(message)\"")
+            }
+            return false
         }
 
         let writeType: CBCharacteristicWriteType =
             characteristic.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
-        let writeTypeLabel = (writeType == .withoutResponse) ? "withoutResponse" : "withResponse"
-        print("[BLE TX] send msg=\"\(message)\" bytes=\(data.count) type=\(writeTypeLabel) char=\(characteristic.uuid) props=0x\(String(characteristic.properties.rawValue, radix: 16))")
+        if kEnableVerboseBleLogs {
+            let writeTypeLabel = (writeType == .withoutResponse) ? "withoutResponse" : "withResponse"
+            print("[BLE TX] send msg=\"\(message)\" bytes=\(data.count) type=\(writeTypeLabel) char=\(characteristic.uuid) props=0x\(String(characteristic.properties.rawValue, radix: 16))")
+        }
         device.writeValue(data, for: characteristic, type: writeType)
+        let sentAt = Date().timeIntervalSince1970
         lastMessage = "Sent: \(message)"
-        print("[BLE TX] queued msg=\"\(message)\"")
+        if kEnableVerboseBleLogs {
+            print("[BLE TX] queued msg=\"\(message)\"")
+        }
 
         if let motor = parseMotorCommand(message) {
-            lastMotorCommandTimestamp = Date().timeIntervalSince1970
+            lastMotorCommandTimestamp = sentAt
             lastMotorLeftPercent = motor.left
             lastMotorRightPercent = motor.right
             lastMotorHoldMs = motor.durationMs
             lastMotorCommandText = "TX motor: \(motor.left) \(motor.right) \(motor.durationMs)"
-            return
+            if let teleopSequence, let phoneReceivedAt {
+                pendingTeleopTrace = PendingTeleopTrace(
+                    seq: teleopSequence,
+                    phoneReceivedAt: phoneReceivedAt,
+                    bleDispatchedAt: sentAt,
+                    leftPercent: motor.left,
+                    rightPercent: motor.right,
+                    holdMs: motor.durationMs
+                )
+            }
+            return true
         }
 
         if let samplePeriodMs = parseSetPeriodCommand(message) {
             let clamped = max(1, min(1000, samplePeriodMs))
             latestOdomSamplePeriodMs = UInt16(clamped)
         }
+        return true
     }
 
     func setOdometrySamplePeriod(samplePeriodMs: Int) {
@@ -168,7 +297,9 @@ class BluetoothManager: NSObject, ObservableObject {
 
     private func decodeOdomFrame(_ data: Data) {
         guard data.count >= 3 else {
-            print("[BLE ODOM RX] frame too short bytes=\(data.count)")
+            if kEnableVerboseBleLogs {
+                print("[BLE ODOM RX] frame too short bytes=\(data.count)")
+            }
             return
         }
 
@@ -178,14 +309,18 @@ class BluetoothManager: NSObject, ObservableObject {
         let expectedLength = 3 + sampleCount * 4
 
         guard data.count == expectedLength else {
-            print("[BLE ODOM RX] frame length mismatch bytes=\(data.count) expected=\(expectedLength)")
+            if kEnableVerboseBleLogs {
+                print("[BLE ODOM RX] frame length mismatch bytes=\(data.count) expected=\(expectedLength)")
+            }
             return
         }
 
         if let previous = lastOdomSeq {
             let expected = previous &+ 1
             if seq != expected {
-                print("[BLE ODOM RX] seq gap expected=\(expected) got=\(seq)")
+                if kEnableVerboseBleLogs {
+                    print("[BLE ODOM RX] seq gap expected=\(expected) got=\(seq)")
+                }
             }
         }
         lastOdomSeq = seq
@@ -225,6 +360,7 @@ class BluetoothManager: NSObject, ObservableObject {
         if lastMotorCommandTimestamp > 0, sinceMotorCommandMs >= 0, sinceMotorCommandMs <= 2000 {
             lastMotorOdomText = "TX->RX: cmd(\(lastMotorLeftPercent),\(lastMotorRightPercent),\(lastMotorHoldMs)) -> ticks(\(sumDl),\(sumDr)) @\(sinceMotorCommandMs)ms"
         }
+        resolvePendingTeleopTrace(frameArrivalAt: baseTimestamp, odomSeq: Int(seq), sumDl: sumDl, sumDr: sumDr)
 
         if let first = samples.first {
             // print("[BLE ODOM RX] frame seq=\(seq) n=\(sampleCount) dt_ms=\(latestOdomSamplePeriodMs) first=(\(first.dlTicks),\(first.drTicks)) queued=\(queuedCount)")
@@ -238,6 +374,41 @@ class BluetoothManager: NSObject, ObservableObject {
     private func isPreferredPeripheral(_ peripheral: CBPeripheral) -> Bool {
         guard let name = peripheral.name else { return false }
         return name.localizedCaseInsensitiveContains(preferredDeviceNameSubstring)
+    }
+
+    private func prunePendingTeleopTrace(now: TimeInterval) {
+        guard let pendingTeleopTrace else { return }
+        let ageMs = Int((now - pendingTeleopTrace.phoneReceivedAt) * 1000.0)
+        guard ageMs > teleopMetricTimeoutMs else { return }
+        lastTeleopLatencyText = "Teleop latency: timeout seq \(pendingTeleopTrace.seq)"
+        WebSocketManager.shared.publishTeleopLatencyTimeout(seq: pendingTeleopTrace.seq)
+        self.pendingTeleopTrace = nil
+    }
+
+    private func resolvePendingTeleopTrace(frameArrivalAt: TimeInterval, odomSeq: Int, sumDl: Int, sumDr: Int) {
+        prunePendingTeleopTrace(now: frameArrivalAt)
+        guard let pendingTeleopTrace else { return }
+        guard sumDl != 0 || sumDr != 0 else { return }
+
+        let phoneRxToBleMs = max(0, Int((pendingTeleopTrace.bleDispatchedAt - pendingTeleopTrace.phoneReceivedAt) * 1000.0))
+        let bleToOdomMs = max(0, Int((frameArrivalAt - pendingTeleopTrace.bleDispatchedAt) * 1000.0))
+        let phoneRxToOdomMs = max(0, Int((frameArrivalAt - pendingTeleopTrace.phoneReceivedAt) * 1000.0))
+        let metric = TeleopLatencyMetric(
+            seq: pendingTeleopTrace.seq,
+            phoneRxToBleMs: phoneRxToBleMs,
+            bleToOdomMs: bleToOdomMs,
+            phoneRxToOdomMs: phoneRxToOdomMs,
+            odomSeq: odomSeq,
+            sumDlTicks: sumDl,
+            sumDrTicks: sumDr,
+            leftPercent: pendingTeleopTrace.leftPercent,
+            rightPercent: pendingTeleopTrace.rightPercent,
+            holdMs: pendingTeleopTrace.holdMs
+        )
+        lastTeleopLatencyText =
+            "Teleop latency: seq \(metric.seq) rx->ble \(metric.phoneRxToBleMs)ms ble->odom \(metric.bleToOdomMs)ms total \(metric.phoneRxToOdomMs)ms"
+        self.pendingTeleopTrace = nil
+        WebSocketManager.shared.publishTeleopLatencyMetric(metric)
     }
 }
 
@@ -286,6 +457,9 @@ extension BluetoothManager: CBCentralManagerDelegate {
         lastMotorLeftPercent = 0
         lastMotorRightPercent = 0
         lastMotorHoldMs = 0
+        pendingTeleopTrace = nil
+        teleopStopWatchdogToken += 1
+        lastTeleopLatencyText = "Teleop latency: -"
         clearWheelOdometrySamples()
         connectionStatus = "Connected to \(peripheral.name ?? "Unknown")"
         peripheral.delegate = self
@@ -307,6 +481,9 @@ extension BluetoothManager: CBCentralManagerDelegate {
         lastMotorLeftPercent = 0
         lastMotorRightPercent = 0
         lastMotorHoldMs = 0
+        pendingTeleopTrace = nil
+        teleopStopWatchdogToken += 1
+        lastTeleopLatencyText = "Teleop latency: -"
         clearWheelOdometrySamples()
         connectionStatus = "Disconnected"
     }
@@ -314,7 +491,9 @@ extension BluetoothManager: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
         connectionStatus = "Failed to Connect"
         if let error = error {
-            print("Connection error: \(error.localizedDescription)")
+            if kEnableVerboseBleLogs {
+                print("Connection error: \(error.localizedDescription)")
+            }
         }
     }
 }
@@ -373,10 +552,14 @@ extension BluetoothManager: CBPeripheralDelegate {
         for characteristic in characteristics {
             if characteristic.uuid == controlCharacteristicUUID {
                 controlCharacteristic = characteristic
-                print("Control characteristic discovered")
+                if kEnableVerboseBleLogs {
+                    print("Control characteristic discovered")
+                }
             } else if characteristic.uuid == dataCharacteristicUUID {
                 dataCharacteristic = characteristic
-                print("Data characteristic discovered")
+                if kEnableVerboseBleLogs {
+                    print("Data characteristic discovered")
+                }
             }
         }
 
@@ -395,15 +578,21 @@ extension BluetoothManager: CBPeripheralDelegate {
         odomNotifyRequested = false
 
         if let error = error {
-            print("Failed to subscribe to odometry notifications: \(error.localizedDescription)")
+            if kEnableVerboseBleLogs {
+                print("Failed to subscribe to odometry notifications: \(error.localizedDescription)")
+            }
             return
         }
 
         if characteristic.isNotifying {
-            print("Notifications enabled for \(characteristic.uuid)")
+            if kEnableVerboseBleLogs {
+                print("Notifications enabled for \(characteristic.uuid)")
+            }
             connectionStatus = "Ready + Odom Notify"
         } else {
-            print("Notifications disabled for \(characteristic.uuid)")
+            if kEnableVerboseBleLogs {
+                print("Notifications disabled for \(characteristic.uuid)")
+            }
             activateOdometryStreamingIfPossible()
         }
     }
@@ -411,20 +600,26 @@ extension BluetoothManager: CBPeripheralDelegate {
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
             lastMessage = "Send Error: \(error.localizedDescription)"
-            print("[BLE TX] write error char=\(characteristic.uuid) err=\(error.localizedDescription)")
-        } else {
+            if kEnableVerboseBleLogs {
+                print("[BLE TX] write error char=\(characteristic.uuid) err=\(error.localizedDescription)")
+            }
+        } else if kEnableVerboseBleLogs {
             print("[BLE TX] write ack char=\(characteristic.uuid)")
         }
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         if let error = error {
-            print("Error receiving data: \(error.localizedDescription)")
+            if kEnableVerboseBleLogs {
+                print("Error receiving data: \(error.localizedDescription)")
+            }
             return
         }
 
         guard let data = characteristic.value else {
-            print("No data received")
+            if kEnableVerboseBleLogs {
+                print("No data received")
+            }
             return
         }
 
@@ -434,9 +629,11 @@ extension BluetoothManager: CBPeripheralDelegate {
         }
 
         if let response = String(data: data, encoding: .utf8) {
-            print("Received response: \(response)")
             lastMessage = "Received: \(response)"
-        } else {
+            if kEnableVerboseBleLogs {
+                print("Received response: \(response)")
+            }
+        } else if kEnableVerboseBleLogs {
             print("Received data (hex): \(data.map { String(format: "%02x", $0) }.joined(separator: " "))")
         }
     }

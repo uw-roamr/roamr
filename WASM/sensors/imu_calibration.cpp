@@ -1,5 +1,6 @@
 #include "sensors/calibration.h"
-#include <iostream>
+#include "core/telemetry.h"
+#include <sstream>
 
 namespace sensors::calibration{
 
@@ -50,7 +51,9 @@ namespace sensors::calibration{
         }
 
         last_calibrated = last_imu_timestamp;
-        std::cout << "calibrated IMU" << std::endl;
+        if (!calibrated) {
+            wasm_log_line("calibrated IMU");
+        }
     }
 
     void IMUCalibration::init_biases(){
@@ -80,7 +83,12 @@ namespace sensors::calibration{
             gravity[0] = expected_gravity * acc_mean_x / acc_mean; 
             gravity[1] = expected_gravity * acc_mean_y / acc_mean;
             gravity[2] = expected_gravity * acc_mean_z / acc_mean;
-            std::cout << "initialized g: " << gravity[0] << ", " << gravity[1] << ", " << gravity[2] << std::endl;
+            std::ostringstream gravity_log;
+            gravity_log << "initialized g: "
+                        << gravity[0] << ", "
+                        << gravity[1] << ", "
+                        << gravity[2];
+            wasm_log_line(gravity_log.str());
 
             recalibrate();
             calibrated = true;
