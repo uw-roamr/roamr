@@ -66,6 +66,22 @@ struct PlanResult {
   std::vector<core::Vector3d> path_world;
 };
 
+// Abstract interface shared by AStarPlanner and DStarLitePlanner.
+// plan_to_grid() is non-const so stateful planners can cache their search tree.
+class GridPlanner {
+ public:
+  virtual ~GridPlanner() = default;
+  virtual PlanResult plan_to_grid(
+      const GridMap2D& map,
+      const GridCoord& start,
+      const GridCoord& goal) = 0;
+  virtual void set_config(const PlannerConfig& cfg) = 0;
+  virtual const PlannerConfig& config() const = 0;
+  // Force a full reinitialisation on the next plan_to_grid() call.
+  // Stateless implementations (AStarPlanner) may leave this as a no-op.
+  virtual void invalidate() {}
+};
+
 inline bool world_to_grid(
     const GridMap2D& map,
     double world_x_m,
@@ -281,17 +297,18 @@ inline bool find_nearest_free_cell(
   return false;
 }
 
-class AStarPlanner {
+class AStarPlanner : public GridPlanner {
  public:
   explicit AStarPlanner(const PlannerConfig& cfg = {}) : cfg_(cfg) {}
 
-  void set_config(const PlannerConfig& cfg) { cfg_ = cfg; }
-  const PlannerConfig& config() const { return cfg_; }
+  void set_config(const PlannerConfig& cfg) override { cfg_ = cfg; }
+  const PlannerConfig& config() const override { return cfg_; }
+  void invalidate() override {}
 
   PlanResult plan_to_point(
       const GridMap2D& map,
       const core::Vector3d& start_world,
-      const core::Vector3d& goal_world) const {
+      const core::Vector3d& goal_world) {
     return plan_to_point(
         map,
         start_world.x,
@@ -305,7 +322,7 @@ class AStarPlanner {
       double start_x_m,
       double start_y_m,
       double goal_x_m,
-      double goal_y_m) const {
+      double goal_y_m) {
     PlanResult result;
     if (!map.valid()) {
       result.message = "invalid occupancy grid";
@@ -326,7 +343,7 @@ class AStarPlanner {
   PlanResult plan_to_grid(
       const GridMap2D& map,
       const GridCoord& start_in,
-      const GridCoord& goal_in) const {
+      const GridCoord& goal_in) override {
     PlanResult result;
     if (!map.valid()) {
       result.message = "invalid occupancy grid";
@@ -510,6 +527,294 @@ class AStarPlanner {
 
  private:
   PlannerConfig cfg_;
+};
+
+// ---------------------------------------------------------------------------
+// D* Lite incremental planner
+// Searches backwards from goal, maintaining g[] and rhs[] arrays across
+// calls.  On map updates only cells adjacent to changed obstacles are
+// re-expanded; on start movement only k_m is updated.  Both operations are
+// O(k log k) where k is the number of affected cells, vs O(N log N) for A*.
+// ---------------------------------------------------------------------------
+class DStarLitePlanner : public GridPlanner {
+ public:
+  explicit DStarLitePlanner(const PlannerConfig& cfg = {}) : cfg_(cfg) {}
+
+  void set_config(const PlannerConfig& cfg) override { cfg_ = cfg; invalidate(); }
+  const PlannerConfig& config() const override { return cfg_; }
+  void invalidate() override { initialized_ = false; }
+
+  PlanResult plan_to_grid(
+      const GridMap2D& map,
+      const GridCoord& start_in,
+      const GridCoord& goal_in) override {
+    PlanResult result;
+    if (!map.valid()) { result.message = "invalid occupancy grid"; return result; }
+    if (!map.in_bounds(start_in.x, start_in.y) || !map.in_bounds(goal_in.x, goal_in.y)) {
+      result.message = "start or goal outside map bounds"; return result;
+    }
+
+    const std::vector<int8_t> new_occ = inflate_obstacles(map, cfg_);
+
+    GridCoord start = start_in;
+    GridCoord goal  = goal_in;
+    if (is_cell_blocked(map, cfg_, start.x, start.y, &new_occ)) {
+      if (!cfg_.snap_start_to_free ||
+          !find_nearest_free_cell(map, cfg_, new_occ, start,
+                                  cfg_.snap_search_radius_cells, &start)) {
+        result.message = "start cell is occupied"; return result;
+      }
+    }
+    if (is_cell_blocked(map, cfg_, goal.x, goal.y, &new_occ)) {
+      if (!cfg_.snap_goal_to_free ||
+          !find_nearest_free_cell(map, cfg_, new_occ, goal,
+                                  cfg_.snap_search_radius_cells, &goal)) {
+        result.message = "goal cell is occupied"; return result;
+      }
+    }
+
+    const bool goal_changed = !initialized_ || !(goal == goal_);
+    const bool map_resized  = !initialized_ ||
+                               map.width  != map_w_ ||
+                               map.height != map_h_;
+
+    if (goal_changed || map_resized) {
+      map_w_ = map.width;
+      map_h_ = map.height;
+      full_init(map, new_occ, start, goal);
+    } else {
+      // Update k_m before any vertex modifications (D* Lite §3).
+      if (!(start == start_)) {
+        k_m_ += h(start_, start);
+        start_ = start;
+      }
+      apply_map_changes(map, new_occ);
+    }
+    initialized_ = true;
+
+    compute_shortest_path(map, start);
+    return extract_path(map, new_occ, start, goal);
+  }
+
+ private:
+  using Key = std::pair<double, double>;
+  struct HeapEntry {
+    Key      key{};
+    int32_t  idx = -1;
+    uint32_t gen = 0;
+    bool operator>(const HeapEntry& o) const { return key > o.key; }
+  };
+  using MinHeap =
+      std::priority_queue<HeapEntry, std::vector<HeapEntry>,
+                          std::greater<HeapEntry>>;
+
+  // ---- constants ----
+  static constexpr double  kInf   = std::numeric_limits<double>::infinity();
+  static constexpr double  kSqrt2 = 1.4142135623730951;
+  static constexpr int32_t kDX[8] = { 1,-1, 0, 0, 1,-1, 1,-1};
+  static constexpr int32_t kDY[8] = { 0, 0, 1,-1, 1,-1,-1, 1};
+
+  // ---- state ----
+  PlannerConfig cfg_;
+  bool      initialized_ = false;
+  int32_t   map_w_ = 0, map_h_ = 0;
+  GridCoord start_{}, goal_{};
+  std::vector<int8_t>   occupancy_; // inflated occupancy from previous call
+  std::vector<double>   g_, rhs_;
+  std::vector<uint32_t> ver_;       // per-cell generation for lazy deletion
+  double    k_m_ = 0.0;
+  MinHeap   U_;
+
+  // ---- helpers ----
+  double h(const GridCoord& a, const GridCoord& b) const noexcept {
+    const double dx = static_cast<double>(a.x - b.x);
+    const double dy = static_cast<double>(a.y - b.y);
+    return std::sqrt(dx * dx + dy * dy);
+  }
+
+  // Priority key: (min(g,rhs) + h(s_start,u) + k_m,  min(g,rhs))
+  Key key_of(int32_t idx, const GridCoord& s) const noexcept {
+    const double mn = std::min(g_[idx], rhs_[idx]);
+    const GridCoord c{idx % map_w_, idx / map_w_};
+    return {mn + h(s, c) + k_m_, mn};
+  }
+
+  int32_t nc() const noexcept { return cfg_.allow_diagonal ? 8 : 4; }
+
+  // Cost of edge (x0,y0)→(x1,y1); ∞ if a cell or cut-corner is blocked.
+  double cedge(const GridMap2D& map, const std::vector<int8_t>& occ,
+               int32_t x0, int32_t y0, int32_t x1, int32_t y1) const {
+    if (is_cell_blocked(map, cfg_, x0, y0, &occ) ||
+        is_cell_blocked(map, cfg_, x1, y1, &occ)) return kInf;
+    const bool diag = (x0 != x1) && (y0 != y1);
+    if (diag && cfg_.prevent_corner_cutting &&
+        (is_cell_blocked(map, cfg_, x1, y0, &occ) ||
+         is_cell_blocked(map, cfg_, x0, y1, &occ))) return kInf;
+    return diag ? kSqrt2 : 1.0;
+  }
+
+  template <typename Fn>
+  void for_each_neighbor(const GridMap2D& map, int32_t idx, Fn fn) {
+    const int32_t x = idx % map_w_, y = idx / map_w_;
+    for (int32_t i = 0; i < nc(); ++i) {
+      const int32_t nx = x + kDX[i], ny = y + kDY[i];
+      if (map.in_bounds(nx, ny)) fn(map.index(nx, ny));
+    }
+  }
+
+  // Recompute rhs(u) and re-enqueue u if inconsistent (lazy-delete style).
+  void update_vertex(const GridMap2D& map, int32_t u) {
+    if (u != map_w_ * goal_.y + goal_.x) {
+      const int32_t ux = u % map_w_, uy = u / map_w_;
+      rhs_[u] = kInf;
+      for (int32_t i = 0; i < nc(); ++i) {
+        const int32_t nx = ux + kDX[i], ny = uy + kDY[i];
+        if (!map.in_bounds(nx, ny)) continue;
+        const double c = cedge(map, occupancy_, ux, uy, nx, ny);
+        if (c < kInf)
+          rhs_[u] = std::min(rhs_[u], c + g_[map.index(nx, ny)]);
+      }
+    }
+    if (std::abs(g_[u] - rhs_[u]) > 1e-12) {
+      ++ver_[u];
+      U_.push(HeapEntry{key_of(u, start_), u, ver_[u]});
+    }
+    // If newly consistent the cell is implicitly removed: stale entries in
+    // U_ (ver mismatch) are skipped on pop.
+  }
+
+  void full_init(const GridMap2D& map,
+                 const std::vector<int8_t>& occ,
+                 const GridCoord& start,
+                 const GridCoord& goal) {
+    const int32_t N = map_w_ * map_h_;
+    g_.assign(N, kInf);
+    rhs_.assign(N, kInf);
+    ver_.assign(N, 0);
+    while (!U_.empty()) U_.pop();
+    k_m_  = 0.0;
+    start_ = start;
+    goal_  = goal;
+    occupancy_ = occ;
+    const int32_t gi = map_w_ * goal.y + goal.x;
+    rhs_[gi] = 0.0;
+    ++ver_[gi];
+    U_.push(HeapEntry{key_of(gi, start), gi, ver_[gi]});
+  }
+
+  // Diff old occupancy_ vs new_occ; call update_vertex for each changed cell
+  // and its neighbours, then commit new_occ as the current occupancy.
+  void apply_map_changes(const GridMap2D& map,
+                         const std::vector<int8_t>& new_occ) {
+    const int32_t N = map_w_ * map_h_;
+    std::vector<bool> dirty(static_cast<size_t>(N), false);
+
+    auto blocked_in = [this](const std::vector<int8_t>& v, int32_t x, int32_t y) {
+      const int8_t c = v[static_cast<size_t>(map_w_ * y + x)];
+      return (c < 0) ? cfg_.treat_unknown_as_occupied
+                     : (c >= cfg_.occupied_threshold);
+    };
+
+    for (int32_t y = 0; y < map_h_; ++y) {
+      for (int32_t x = 0; x < map_w_; ++x) {
+        if (blocked_in(occupancy_, x, y) != blocked_in(new_occ, x, y)) {
+          dirty[static_cast<size_t>(map_w_ * y + x)] = true;
+          for (int32_t i = 0; i < nc(); ++i) {
+            const int32_t nx = x + kDX[i], ny = y + kDY[i];
+            if (map.in_bounds(nx, ny))
+              dirty[static_cast<size_t>(map_w_ * ny + nx)] = true;
+          }
+        }
+      }
+    }
+    // Commit new occupancy before recomputing rhs (cedge reads occupancy_).
+    occupancy_ = new_occ;
+    for (int32_t i = 0; i < N; ++i)
+      if (dirty[static_cast<size_t>(i)]) update_vertex(map, i);
+  }
+
+  // D* Lite ComputeShortestPath().
+  void compute_shortest_path(const GridMap2D& map, const GridCoord& start) {
+    const int32_t si = map_w_ * start.y + start.x;
+    int32_t expanded = 0;
+    while (true) {
+      while (!U_.empty() && U_.top().gen != ver_[U_.top().idx]) U_.pop();
+      if (U_.empty()) break;
+
+      const Key  top_k   = U_.top().key;
+      const Key  start_k = key_of(si, start);
+      if (!(top_k < start_k) &&
+          std::abs(g_[si] - rhs_[si]) < 1e-12) break;
+      if (expanded++ >= cfg_.max_expanded_nodes) break;
+
+      const HeapEntry e = U_.top(); U_.pop();
+      if (e.gen != ver_[e.idx]) continue;
+
+      const Key k_new = key_of(e.idx, start);
+      if (e.key < k_new) {
+        // Key increased since enqueue — re-insert.
+        ++ver_[e.idx];
+        U_.push(HeapEntry{k_new, e.idx, ver_[e.idx]});
+      } else if (g_[e.idx] > rhs_[e.idx] + 1e-12) {
+        // Overconsistent: lower g to rhs.
+        g_[e.idx] = rhs_[e.idx];
+        for_each_neighbor(map, e.idx,
+                          [&](int32_t nb){ update_vertex(map, nb); });
+      } else {
+        // Underconsistent: raise g to ∞.
+        g_[e.idx] = kInf;
+        update_vertex(map, e.idx);
+        for_each_neighbor(map, e.idx,
+                          [&](int32_t nb){ update_vertex(map, nb); });
+      }
+    }
+  }
+
+  // Greedy descent on g[] to recover start→goal path.
+  PlanResult extract_path(const GridMap2D& map,
+                          const std::vector<int8_t>& occ,
+                          const GridCoord& start,
+                          const GridCoord& goal) const {
+    PlanResult result;
+    if (g_[map_w_ * start.y + start.x] >= kInf * 0.5) {
+      result.message = "no path found"; return result;
+    }
+    std::vector<GridCoord> path;
+    path.reserve(64);
+    GridCoord cur = start;
+    path.push_back(cur);
+    constexpr int32_t kMaxSteps = 10000;
+    while (!(cur == goal) && static_cast<int32_t>(path.size()) <= kMaxSteps) {
+      double    best = kInf;
+      GridCoord next = cur;
+      for (int32_t i = 0; i < nc(); ++i) {
+        const int32_t nx = cur.x + kDX[i], ny = cur.y + kDY[i];
+        if (!map.in_bounds(nx, ny)) continue;
+        const double c = cedge(map, occ, cur.x, cur.y, nx, ny);
+        if (c >= kInf) continue;
+        const double t = c + g_[map.index(nx, ny)];
+        if (t < best) { best = t; next = GridCoord{nx, ny}; }
+      }
+      if (next == cur) { result.message = "path extraction stuck"; return result; }
+      cur = next;
+      path.push_back(cur);
+    }
+    if (!(cur == goal)) { result.message = "no path found (max steps)"; return result; }
+
+    result.path_grid = path;
+    if (cfg_.simplify_path)
+      result.path_grid = simplify_grid_path(map, cfg_, occ, result.path_grid);
+
+    result.path_world.reserve(result.path_grid.size());
+    for (const GridCoord& gc : result.path_grid) {
+      double wx = 0.0, wy = 0.0;
+      grid_to_world(map, gc, &wx, &wy);
+      result.path_world.push_back(core::Vector3d{wx, wy, 0.0});
+    }
+    result.success = true;
+    result.message = "ok";
+    return result;
+  }
 };
 
 }  // namespace planning

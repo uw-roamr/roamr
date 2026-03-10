@@ -918,6 +918,44 @@
         </div>
 
         <div class="viewer-grid">
+            <div id="mapSection" class="map-section">
+                <div class="map-header">
+                    <div class="map-title">🗺️ WASM Map Preview</div>
+                    <div class="map-stats">
+                        <span class="map-stat">Frames: <strong id="mapFrames">0</strong></span>
+                        <span class="map-stat">Size: <strong id="mapSize">0 KB</strong></span>
+                        <span class="map-stat">Time: <strong id="mapTimestamp">-</strong></span>
+                    </div>
+                </div>
+                <div id="mapContainer" class="map-container">
+                    <img id="mapPreview" alt="WASM Map Preview">
+                    <div class="map-placeholder" id="mapPlaceholder">
+                        <div class="map-placeholder-icon">🗺️</div>
+                        <div>Waiting for map preview...</div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="consoleSection" class="console-section">
+                <div class="console-header">
+                    <div class="console-title">🧾 WASM Console</div>
+                    <div class="console-stats">
+                        <span class="console-stat">Lines: <strong id="consoleLineCount">0</strong></span>
+                    </div>
+                </div>
+                <div class="console-container">
+                    <div class="console-log" id="consoleLog">
+                        <div class="console-placeholder" id="consolePlaceholder">
+                            <div class="console-placeholder-icon">🧾</div>
+                            <div>Waiting for WASM console output...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+
+        <div class="viewer-grid">
             <div id="videoSection" class="video-section">
                 <div class="video-header">
                     <div class="video-title">📹 Live Video Stream</div>
@@ -956,43 +994,6 @@
                         <div class="point-cloud-placeholder-icon">✳️</div>
                         <div id="pointCloudStatusText">Waiting for the current WASM point cloud...</div>
                         <div id="pointCloudHelpText" class="point-cloud-help">Drag to orbit. Scroll to zoom.</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="viewer-grid">
-            <div id="mapSection" class="map-section">
-                <div class="map-header">
-                    <div class="map-title">🗺️ WASM Map Preview</div>
-                    <div class="map-stats">
-                        <span class="map-stat">Frames: <strong id="mapFrames">0</strong></span>
-                        <span class="map-stat">Size: <strong id="mapSize">0 KB</strong></span>
-                        <span class="map-stat">Time: <strong id="mapTimestamp">-</strong></span>
-                    </div>
-                </div>
-                <div id="mapContainer" class="map-container">
-                    <img id="mapPreview" alt="WASM Map Preview">
-                    <div class="map-placeholder" id="mapPlaceholder">
-                        <div class="map-placeholder-icon">🗺️</div>
-                        <div>Waiting for map preview...</div>
-                    </div>
-                </div>
-            </div>
-
-            <div id="consoleSection" class="console-section">
-                <div class="console-header">
-                    <div class="console-title">🧾 WASM Console</div>
-                    <div class="console-stats">
-                        <span class="console-stat">Lines: <strong id="consoleLineCount">0</strong></span>
-                    </div>
-                </div>
-                <div class="console-container">
-                    <div class="console-log" id="consoleLog">
-                        <div class="console-placeholder" id="consolePlaceholder">
-                            <div class="console-placeholder-icon">🧾</div>
-                            <div>Waiting for WASM console output...</div>
-                        </div>
                     </div>
                 </div>
             </div>
