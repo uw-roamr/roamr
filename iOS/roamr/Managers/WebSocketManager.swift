@@ -30,6 +30,8 @@ private struct IncomingTeleopCommand {
 class WebSocketManager: ObservableObject {
     static let shared = WebSocketManager()
     private static let maxRecentWasmLogs = 200
+    private static let defaultBundledWasmId = "builtin:slam_main"
+    private static let defaultBundledWasmName = "slam_main"
 
     @Published var isServerRunning = false
     @Published var localIPAddress: String = "Not available"
@@ -42,11 +44,17 @@ class WebSocketManager: ObservableObject {
     private var connectionStates: [ObjectIdentifier: Bool] = [:] // Track handshake completion
     private var latestPointCloudData: Data?
     private var latestMapFrameMessage: String?
+    private var latestWasmStateMessage: String?
     private var recentWasmLogMessages: [String] = []
+    private var selectedWasmTargetId: String
     private let port: NWEndpoint.Port = 8080
 
     // Bluetooth manager for forwarding messages
     var bluetoothManager: BluetoothManager?
+
+    private init() {
+        self.selectedWasmTargetId = Self.defaultBundledWasmId
+    }
 
     func startServer() {
         do {
@@ -88,6 +96,7 @@ class WebSocketManager: ObservableObject {
         listener?.cancel()
         connections.forEach { $0.cancel() }
         connections.removeAll()
+        connectionStates.removeAll()
         isServerRunning = false
         serverStatus = "Stopped"
         connectedClients = 0
@@ -415,6 +424,42 @@ class WebSocketManager: ObservableObject {
         broadcastTextMessage(payload)
     }
 
+    func publishMapFrameReset() {
+        latestMapFrameMessage = nil
+        guard let payload = makeJSONString([
+            "type": "map_frame_reset"
+        ]) else {
+            return
+        }
+        broadcastTextMessage(payload)
+    }
+
+    func publishWasmControlState() {
+        DownloadManager.shared.refreshDownloadedFiles()
+        let files = availableWasmTargets()
+        if !files.contains(where: { ($0["id"] as? String) == selectedWasmTargetId }) {
+            selectedWasmTargetId = Self.defaultBundledWasmId
+        }
+
+        let selectedName = wasmTargetName(for: selectedWasmTargetId) ?? Self.defaultBundledWasmName
+        guard let payload = makeJSONString([
+            "type": "wasm_state",
+            "is_running": WasmManager.shared.isRunning,
+            "selected_target_id": selectedWasmTargetId,
+            "selected_target_name": selectedName,
+            "running_file_name": WasmManager.shared.currentRunDisplayName ?? "",
+            "files": files,
+            "hub_files": availableHubFiles(),
+            "is_loading_hub": WasmHubService.shared.isLoadingPublic,
+            "hub_error": WasmHubService.shared.error ?? ""
+        ]) else {
+            return
+        }
+
+        latestWasmStateMessage = payload
+        broadcastTextMessage(payload)
+    }
+
     func publishWasmConsoleLine(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
@@ -430,6 +475,16 @@ class WebSocketManager: ObservableObject {
             recentWasmLogMessages.removeFirst(recentWasmLogMessages.count - Self.maxRecentWasmLogs)
         }
 
+        broadcastTextMessage(payload)
+    }
+
+    func publishWasmConsoleReset() {
+        recentWasmLogMessages.removeAll()
+        guard let payload = makeJSONString([
+            "type": "wasm_console_reset"
+        ]) else {
+            return
+        }
         broadcastTextMessage(payload)
     }
 
@@ -463,6 +518,15 @@ class WebSocketManager: ObservableObject {
     }
 
     private func sendLatestTelemetryState(to connection: NWConnection) {
+        if let latestWasmStateMessage {
+            sendTextFrame(latestWasmStateMessage, to: connection, label: "latest wasm state")
+        } else {
+            publishWasmControlState()
+            if let latestWasmStateMessage {
+                sendTextFrame(latestWasmStateMessage, to: connection, label: "latest wasm state")
+            }
+        }
+
         if let latestMapFrameMessage {
             sendTextFrame(latestMapFrameMessage, to: connection, label: "latest map frame")
         }
@@ -522,6 +586,10 @@ class WebSocketManager: ObservableObject {
     }
 
     private func handleIncomingMessage(_ message: String) {
+        if handleWasmControlMessage(message) {
+            return
+        }
+
         if let teleopCommand = parseTeleopCommand(message) {
             let phoneReceivedAt = Date().timeIntervalSince1970
             if let btManager = bluetoothManager {
@@ -556,6 +624,180 @@ class WebSocketManager: ObservableObject {
         } else {
             print("⚠️ Bluetooth manager not available")
         }
+    }
+
+    private func handleWasmControlMessage(_ message: String) -> Bool {
+        guard let data = message.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let json = object as? [String: Any],
+              let type = json["type"] as? String else {
+            return false
+        }
+
+        switch type {
+        case "wasm_select":
+            guard let targetId = json["target_id"] as? String else { return true }
+            selectWasmTarget(targetId)
+            return true
+        case "wasm_download":
+            guard let remoteId = json["remote_id"] as? String else { return true }
+            downloadWasmHubFile(remoteId: remoteId)
+            return true
+        case "wasm_run":
+            runSelectedWasm()
+            return true
+        case "wasm_stop":
+            stopSelectedWasm()
+            return true
+        case "wasm_refresh":
+            refreshWasmHubFiles()
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func selectWasmTarget(_ targetId: String) {
+        guard !WasmManager.shared.isRunning else {
+            publishWasmConsoleLine("[web][wasm] stop the current module before changing selection")
+            publishWasmControlState()
+            return
+        }
+
+        guard wasmTargetName(for: targetId) != nil else {
+            publishWasmConsoleLine("[web][wasm] unknown selection \(targetId)")
+            publishWasmControlState()
+            return
+        }
+
+        selectedWasmTargetId = targetId
+        publishWasmControlState()
+    }
+
+    private func runSelectedWasm() {
+        guard !WasmManager.shared.isRunning else {
+            publishWasmControlState()
+            return
+        }
+
+        let targetId = selectedWasmTargetId
+        guard let targetName = wasmTargetName(for: targetId) else {
+            publishWasmConsoleLine("[web][wasm] no valid WASM target selected")
+            publishWasmControlState()
+            return
+        }
+
+        publishWasmConsoleLine("[web][wasm] starting \(targetName)")
+        publishWasmControlState()
+        let localFile = localWasmFile(for: targetId)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            IMUManager.shared.start()
+            AVManager.shared.start()
+
+            if targetId == Self.defaultBundledWasmId {
+                WasmManager.shared.runWasmFile(named: targetName)
+            } else if let file = localFile {
+                WasmManager.shared.runWasmFile(at: file.fileURL)
+            } else {
+                WebSocketManager.shared.publishWasmConsoleLine("[web][wasm] selected file is no longer available")
+            }
+
+            AVManager.shared.stop()
+            IMUManager.shared.stop()
+            WebSocketManager.shared.publishWasmControlState()
+        }
+    }
+
+    private func stopSelectedWasm() {
+        WasmManager.shared.stop()
+        AVManager.shared.stop()
+        IMUManager.shared.stop()
+        publishWasmControlState()
+    }
+
+    private func refreshWasmHubFiles() {
+        publishWasmControlState()
+        Task {
+            await WasmHubService.shared.fetchPublicFiles()
+            self.publishWasmControlState()
+        }
+    }
+
+    private func downloadWasmHubFile(remoteId: String) {
+        guard let file = WasmHubService.shared.publicFiles.first(where: { $0.id == remoteId }) else {
+            publishWasmConsoleLine("[web][wasmhub] unknown file \(remoteId)")
+            publishWasmControlState()
+            return
+        }
+
+        publishWasmConsoleLine("[web][wasmhub] downloading \(file.name)")
+        publishWasmControlState()
+
+        Task {
+            do {
+                let localFile = try await DownloadManager.shared.download(file: file)
+                self.selectedWasmTargetId = "local:\(localFile.id)"
+                self.publishWasmConsoleLine("[web][wasmhub] downloaded \(file.name)")
+            } catch {
+                self.publishWasmConsoleLine("[web][wasmhub] download failed: \(error.localizedDescription)")
+            }
+            self.publishWasmControlState()
+        }
+    }
+
+    private func availableWasmTargets() -> [[String: Any]] {
+        var targets: [[String: Any]] = [[
+            "id": Self.defaultBundledWasmId,
+            "name": Self.defaultBundledWasmName,
+            "kind": "bundled",
+            "detail": "Built into the app"
+        ]]
+
+        let downloadedTargets = DownloadManager.shared.downloadedFiles
+            .filter(\.exists)
+            .map { file in
+                [
+                    "id": "local:\(file.id)",
+                    "name": file.name,
+                    "kind": "downloaded",
+                    "detail": file.fileName,
+                    "uploader_name": file.uploaderName,
+                    "file_size": file.formattedFileSize
+                ] as [String : Any]
+            }
+
+        targets.append(contentsOf: downloadedTargets)
+        return targets
+    }
+
+    private func availableHubFiles() -> [[String: Any]] {
+        WasmHubService.shared.publicFiles.compactMap { file in
+            guard let remoteId = file.id else { return nil }
+            return [
+                "id": remoteId,
+                "name": file.name,
+                "file_name": file.fileName,
+                "description": file.description,
+                "uploader_name": file.uploaderName,
+                "file_size": file.formattedFileSize,
+                "download_count": file.downloadCount,
+                "is_downloaded": DownloadManager.shared.isDownloaded(fileId: remoteId)
+            ]
+        }
+    }
+
+    private func wasmTargetName(for targetId: String) -> String? {
+        if targetId == Self.defaultBundledWasmId {
+            return Self.defaultBundledWasmName
+        }
+        return localWasmFile(for: targetId)?.name
+    }
+
+    private func localWasmFile(for targetId: String) -> LocalWasmFile? {
+        guard targetId.hasPrefix("local:") else { return nil }
+        let localId = String(targetId.dropFirst("local:".count))
+        return DownloadManager.shared.downloadedFiles.first { $0.id == localId && $0.exists }
     }
 
     private func publishTeleopAck(seq: Int, forwarded: Bool, sampledForLatency: Bool) {

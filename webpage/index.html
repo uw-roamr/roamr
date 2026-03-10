@@ -59,6 +59,72 @@
             max-width: 420px;
         }
 
+        .wasm-control-card {
+            background: #f4f7ff;
+            border-radius: 14px;
+            padding: 16px;
+            box-shadow: inset 0 0 0 1px rgba(102, 126, 234, 0.08);
+        }
+
+        .wasm-control-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 12px;
+        }
+
+        .wasm-control-title {
+            font-weight: 700;
+            color: #334;
+        }
+
+        .wasm-control-status {
+            font-size: 12px;
+            color: #5f6981;
+            background: white;
+            padding: 4px 10px;
+            border-radius: 999px;
+        }
+
+        .wasm-control-status strong {
+            color: #667eea;
+        }
+
+        .wasm-control-meta {
+            margin-top: 10px;
+            font-size: 12px;
+            color: #667085;
+            font-family: monospace;
+            min-height: 2.8em;
+        }
+
+        .wasm-control-divider {
+            height: 1px;
+            background: rgba(102, 126, 234, 0.14);
+            margin: 14px 0;
+        }
+
+        .wasm-hub-title {
+            font-weight: 700;
+            color: #334;
+            margin-bottom: 10px;
+        }
+
+        .wasm-control-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        .wasm-control-actions button {
+            width: auto;
+            flex: 1 1 0;
+            margin-bottom: 0;
+            padding: 12px 14px;
+        }
+
         .status {
             padding: 15px;
             border-radius: 10px;
@@ -125,7 +191,18 @@
             transition: border-color 0.3s;
         }
 
-        input[type="text"]:focus {
+        select {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #ddd;
+            border-radius: 10px;
+            font-size: 15px;
+            background: white;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        select:focus {
             outline: none;
             border-color: #667eea;
         }
@@ -182,6 +259,15 @@
             background: #5568d3;
             transform: translateY(-2px);
             box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-secondary {
+            background: #dfe7fb;
+            color: #31456a;
+        }
+
+        .btn-secondary:hover:not(:disabled) {
+            background: #d0dcfb;
         }
 
         .message-log {
@@ -602,6 +688,10 @@
                 gap: 18px;
             }
 
+            .wasm-control-actions {
+                flex-direction: column;
+            }
+
             #pointCloudCanvas {
                 height: 320px;
             }
@@ -647,6 +737,53 @@
                     <button id="disconnectBtn" class="btn-disconnect" onclick="disconnect()" style="display: none;">
                         Disconnect
                     </button>
+
+                    <div class="wasm-control-card">
+                        <div class="wasm-control-header">
+                            <div class="wasm-control-title">WASM Control</div>
+                            <div class="wasm-control-status">Status: <strong id="wasmRunStatus">Idle</strong></div>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="wasmProgramSelect">Program</label>
+                            <select id="wasmProgramSelect" disabled></select>
+                        </div>
+
+                        <div id="wasmSelectionMeta" class="wasm-control-meta">
+                            Connect to the iPhone to load available WASM programs.
+                        </div>
+
+                        <div class="wasm-control-actions">
+                            <button id="wasmRefreshBtn" class="btn-secondary" onclick="refreshWasmPrograms()" disabled>
+                                Refresh
+                            </button>
+                            <button id="wasmRunBtn" class="btn-connect" onclick="runSelectedWasmRemote()" disabled>
+                                Run
+                            </button>
+                            <button id="wasmStopBtn" class="btn-disconnect" onclick="stopSelectedWasmRemote()" disabled>
+                                Stop
+                            </button>
+                        </div>
+
+                        <div class="wasm-control-divider"></div>
+
+                        <div class="wasm-hub-title">WasmHub Public Files</div>
+
+                        <div class="input-group">
+                            <label for="hubProgramSelect">Download From Hub</label>
+                            <select id="hubProgramSelect" disabled></select>
+                        </div>
+
+                        <div id="hubSelectionMeta" class="wasm-control-meta">
+                            Refresh to load public WasmHub files.
+                        </div>
+
+                        <div class="wasm-control-actions">
+                            <button id="hubDownloadBtn" class="btn-send" onclick="downloadSelectedHubFileRemote()" disabled>
+                                Download
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -802,6 +939,15 @@
         const ipInput = document.getElementById('ipAddress');
         const messageInput = document.getElementById('message');
         const sendBtn = document.getElementById('sendBtn');
+        const wasmProgramSelect = document.getElementById('wasmProgramSelect');
+        const wasmSelectionMetaEl = document.getElementById('wasmSelectionMeta');
+        const wasmRunStatusEl = document.getElementById('wasmRunStatus');
+        const wasmRefreshBtn = document.getElementById('wasmRefreshBtn');
+        const wasmRunBtn = document.getElementById('wasmRunBtn');
+        const wasmStopBtn = document.getElementById('wasmStopBtn');
+        const hubProgramSelect = document.getElementById('hubProgramSelect');
+        const hubSelectionMetaEl = document.getElementById('hubSelectionMeta');
+        const hubDownloadBtn = document.getElementById('hubDownloadBtn');
         const messageLog = document.getElementById('messageLog');
         const joystickContainer = document.getElementById('joystickContainer');
         const videoSection = document.getElementById('videoSection');
@@ -862,6 +1008,18 @@
         let pointCloudDiagnosticTimer = null;
         let mapFrameCount = 0;
 
+        const wasmControlState = {
+            files: [],
+            hubFiles: [],
+            selectedTargetId: '',
+            selectedHubFileId: '',
+            selectedTargetName: '',
+            runningFileName: '',
+            isRunning: false,
+            isLoadingHub: false,
+            hubError: ''
+        };
+
         const pointCloudState = {
             points: null,
             colors: null,
@@ -899,6 +1057,7 @@
                 initJoystick();
                 initPointCloudViewer();
                 startPointCloudDiagnosticTimer();
+                updateWasmControlUI();
                 schedulePointCloudRender();
             } else {
                 statusEl.className = 'status disconnected';
@@ -925,6 +1084,7 @@
                 resetPointCloudData();
                 resetMapPreview();
                 resetConsoleOutput();
+                resetWasmControlState();
                 pendingTeleopSamples.clear();
                 teleopMetrics.lastSeq = null;
                 teleopMetrics.lastRttMs = null;
@@ -965,6 +1125,7 @@
                 ws.onopen = function() {
                     updateStatus(true);
                     addLog('✅ Connected to iPhone!');
+                    refreshWasmPrograms();
                 };
 
                 ws.onmessage = function(event) {
@@ -1098,8 +1259,23 @@
                 return;
             }
 
+            if (parsed.type === 'wasm_state') {
+                handleWasmStateMessage(parsed);
+                return;
+            }
+
+            if (parsed.type === 'map_frame_reset') {
+                resetMapPreview();
+                return;
+            }
+
             if (parsed.type === 'map_frame') {
                 handleMapFrameMessage(parsed);
+                return;
+            }
+
+            if (parsed.type === 'wasm_console_reset') {
+                resetConsoleOutput();
                 return;
             }
 
@@ -1130,6 +1306,170 @@
                 return;
             }
             appendConsoleLine(message.text.trim());
+        }
+
+        function handleWasmStateMessage(message) {
+            wasmControlState.files = Array.isArray(message.files) ? message.files : [];
+            wasmControlState.hubFiles = Array.isArray(message.hub_files) ? message.hub_files : [];
+            wasmControlState.selectedTargetId = typeof message.selected_target_id === 'string'
+                ? message.selected_target_id
+                : '';
+            wasmControlState.selectedTargetName = typeof message.selected_target_name === 'string'
+                ? message.selected_target_name
+                : '';
+            wasmControlState.runningFileName = typeof message.running_file_name === 'string'
+                ? message.running_file_name
+                : '';
+            wasmControlState.isRunning = Boolean(message.is_running);
+            wasmControlState.isLoadingHub = Boolean(message.is_loading_hub);
+            wasmControlState.hubError = typeof message.hub_error === 'string' ? message.hub_error : '';
+            updateWasmControlUI();
+        }
+
+        function updateWasmControlUI() {
+            const isConnected = ws && ws.readyState === WebSocket.OPEN;
+            const files = wasmControlState.files;
+            const hubFiles = wasmControlState.hubFiles;
+            const desiredHubFileId = wasmControlState.selectedHubFileId || hubProgramSelect.value;
+
+            wasmProgramSelect.innerHTML = '';
+            if (files.length === 0) {
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = isConnected ? 'No programs available' : 'Connect to load programs';
+                wasmProgramSelect.appendChild(option);
+            } else {
+                for (const file of files) {
+                    const option = document.createElement('option');
+                    option.value = file.id || '';
+                    const detail = file.kind === 'bundled'
+                        ? 'bundled'
+                        : ((file.file_size && file.detail) ? `${file.detail} • ${file.file_size}` : (file.detail || 'downloaded'));
+                    option.textContent = detail ? `${file.name} (${detail})` : file.name;
+                    wasmProgramSelect.appendChild(option);
+                }
+            }
+
+            if (files.some((file) => file.id === wasmControlState.selectedTargetId)) {
+                wasmProgramSelect.value = wasmControlState.selectedTargetId;
+            }
+
+            const selectedFile = files.find((file) => file.id === wasmProgramSelect.value) || null;
+            const statusText = wasmControlState.isRunning ? 'Running' : (selectedFile ? 'Ready' : 'Idle');
+            wasmRunStatusEl.textContent = statusText;
+
+            if (wasmControlState.isRunning) {
+                wasmSelectionMetaEl.textContent = wasmControlState.runningFileName
+                    ? `running ${wasmControlState.runningFileName}`
+                    : 'WASM module is running';
+            } else if (selectedFile) {
+                const metaParts = [];
+                if (selectedFile.kind) metaParts.push(selectedFile.kind);
+                if (selectedFile.detail) metaParts.push(selectedFile.detail);
+                if (selectedFile.file_size) metaParts.push(selectedFile.file_size);
+                if (selectedFile.uploader_name) metaParts.push(`by ${selectedFile.uploader_name}`);
+                wasmSelectionMetaEl.textContent = metaParts.join(' • ') || selectedFile.name || 'Ready';
+            } else {
+                wasmSelectionMetaEl.textContent = isConnected
+                    ? 'No WASM programs available on the phone yet.'
+                    : 'Connect to the iPhone to load available WASM programs.';
+            }
+
+            wasmProgramSelect.disabled = !isConnected || files.length === 0 || wasmControlState.isRunning;
+            wasmRefreshBtn.disabled = !isConnected;
+            wasmRunBtn.disabled = !isConnected || wasmControlState.isRunning || files.length === 0;
+            wasmStopBtn.disabled = !isConnected || !wasmControlState.isRunning;
+
+            hubProgramSelect.innerHTML = '';
+            if (hubFiles.length === 0) {
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = wasmControlState.isLoadingHub
+                    ? 'Loading WasmHub files...'
+                    : (isConnected ? 'No public hub files loaded' : 'Connect to load hub files');
+                hubProgramSelect.appendChild(option);
+            } else {
+                for (const file of hubFiles) {
+                    const option = document.createElement('option');
+                    option.value = file.id || '';
+                    const downloadedSuffix = file.is_downloaded ? ' • downloaded' : '';
+                    option.textContent = `${file.name}${downloadedSuffix}`;
+                    hubProgramSelect.appendChild(option);
+                }
+            }
+
+            let selectedHubFile = hubFiles.find((file) => file.id === desiredHubFileId) || null;
+            if (!selectedHubFile && hubFiles.length > 0) {
+                selectedHubFile = hubFiles[0];
+            }
+            if (selectedHubFile) {
+                hubProgramSelect.value = selectedHubFile.id || '';
+                wasmControlState.selectedHubFileId = selectedHubFile.id || '';
+            } else {
+                wasmControlState.selectedHubFileId = '';
+            }
+
+            if (wasmControlState.hubError) {
+                hubSelectionMetaEl.textContent = wasmControlState.hubError;
+            } else if (selectedHubFile) {
+                const metaParts = [];
+                if (selectedHubFile.file_name) metaParts.push(selectedHubFile.file_name);
+                if (selectedHubFile.file_size) metaParts.push(selectedHubFile.file_size);
+                if (selectedHubFile.uploader_name) metaParts.push(`by ${selectedHubFile.uploader_name}`);
+                if (Number.isFinite(selectedHubFile.download_count)) metaParts.push(`${selectedHubFile.download_count} downloads`);
+                if (selectedHubFile.is_downloaded) metaParts.push('already downloaded');
+                hubSelectionMetaEl.textContent = metaParts.join(' • ') || selectedHubFile.name || 'Ready';
+            } else {
+                hubSelectionMetaEl.textContent = wasmControlState.isLoadingHub
+                    ? 'Loading public WasmHub files...'
+                    : (isConnected ? 'Refresh to load public WasmHub files.' : 'Connect to load public WasmHub files.');
+            }
+
+            hubProgramSelect.disabled = !isConnected || wasmControlState.isLoadingHub || hubFiles.length === 0;
+            hubDownloadBtn.disabled = !isConnected || wasmControlState.isLoadingHub || !selectedHubFile || Boolean(selectedHubFile.is_downloaded);
+        }
+
+        function resetWasmControlState() {
+            wasmControlState.files = [];
+            wasmControlState.hubFiles = [];
+            wasmControlState.selectedTargetId = '';
+            wasmControlState.selectedHubFileId = '';
+            wasmControlState.selectedTargetName = '';
+            wasmControlState.runningFileName = '';
+            wasmControlState.isRunning = false;
+            wasmControlState.isLoadingHub = false;
+            wasmControlState.hubError = '';
+            updateWasmControlUI();
+        }
+
+        function sendWasmControlMessage(payload) {
+            if (!(ws && ws.readyState === WebSocket.OPEN)) {
+                return;
+            }
+            ws.send(JSON.stringify(payload));
+        }
+
+        function refreshWasmPrograms() {
+            sendWasmControlMessage({ type: 'wasm_refresh' });
+        }
+
+        function runSelectedWasmRemote() {
+            sendWasmControlMessage({ type: 'wasm_run' });
+        }
+
+        function stopSelectedWasmRemote() {
+            sendWasmControlMessage({ type: 'wasm_stop' });
+        }
+
+        function downloadSelectedHubFileRemote() {
+            const remoteId = hubProgramSelect.value;
+            if (!remoteId) {
+                return;
+            }
+            sendWasmControlMessage({
+                type: 'wasm_download',
+                remote_id: remoteId
+            });
         }
 
         function handlePointCloudBinaryFrame(arrayBuffer) {
@@ -1510,7 +1850,16 @@
                 }
             }
 
+            function sendStopCommand() {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    sendTeleopCommand(0, 0, HOLD_DURATION);
+                }
+            }
+
             function startSending() {
+                if (joystickTimer) {
+                    clearInterval(joystickTimer);
+                }
                 sendMotorCommand();
                 joystickTimer = setInterval(sendMotorCommand, SEND_INTERVAL);
             }
@@ -1520,10 +1869,25 @@
                     clearInterval(joystickTimer);
                     joystickTimer = null;
                 }
-                // Send stop command
-                if (ws && ws.readyState === WebSocket.OPEN) {
-                    sendTeleopCommand(0, 0, HOLD_DURATION);
+            }
+
+            function resetJoystickToCenter(sendStop = true) {
+                knobX = centerX;
+                knobY = centerY;
+                drawJoystick();
+                updateMotorDisplay();
+                if (sendStop) {
+                    sendStopCommand();
                 }
+            }
+
+            function releaseJoystick(sendStop = true) {
+                if (!isDragging && !joystickTimer) {
+                    return;
+                }
+                isDragging = false;
+                stopSending();
+                resetJoystickToCenter(sendStop);
             }
 
             function updateKnobPosition(clientX, clientY) {
@@ -1565,12 +1929,7 @@
             // Release anywhere on the page
             document.addEventListener('mouseup', () => {
                 if (isDragging) {
-                    isDragging = false;
-                    knobX = centerX;
-                    knobY = centerY;
-                    drawJoystick();
-                    updateMotorDisplay();
-                    stopSending();
+                    releaseJoystick(true);
                 }
             });
 
@@ -1591,15 +1950,21 @@
                 }
             });
 
-            canvas.addEventListener('touchend', (e) => {
+            function handleTouchRelease(e) {
                 e.preventDefault();
                 if (isDragging) {
-                    isDragging = false;
-                    knobX = centerX;
-                    knobY = centerY;
-                    drawJoystick();
-                    updateMotorDisplay();
-                    stopSending();
+                    releaseJoystick(true);
+                }
+            }
+
+            canvas.addEventListener('touchend', handleTouchRelease);
+            canvas.addEventListener('touchcancel', handleTouchRelease);
+            window.addEventListener('touchend', handleTouchRelease, { passive: false });
+            window.addEventListener('touchcancel', handleTouchRelease, { passive: false });
+            window.addEventListener('blur', () => releaseJoystick(true));
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) {
+                    releaseJoystick(true);
                 }
             });
 
@@ -1769,6 +2134,22 @@
             pointCloudCtx.stroke();
         }
 
+        wasmProgramSelect.addEventListener('change', () => {
+            const selectedTargetId = wasmProgramSelect.value;
+            if (!selectedTargetId) {
+                return;
+            }
+            sendWasmControlMessage({
+                type: 'wasm_select',
+                target_id: selectedTargetId
+            });
+        });
+
+        hubProgramSelect.addEventListener('change', () => {
+            wasmControlState.selectedHubFileId = hubProgramSelect.value;
+            updateWasmControlUI();
+        });
+
         // Focus message input when page loads
         window.addEventListener('load', () => {
             ipInput.focus();
@@ -1777,6 +2158,7 @@
             resetPointCloudData();
             resetMapPreview();
             resetConsoleOutput();
+            resetWasmControlState();
         });
     </script>
 </body>

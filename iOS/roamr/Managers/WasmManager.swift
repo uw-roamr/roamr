@@ -26,6 +26,7 @@ final class WasmManager: ObservableObject {
     private var shouldStop = false
     private let lock = NSLock()
     @Published var isRunning = false
+    @Published var currentRunDisplayName: String?
     @Published var logLines: [String] = []
     @Published var latestMapJPEGData: Data?
     @Published var latestMapTimestamp: Double = 0
@@ -147,9 +148,7 @@ final class WasmManager: ObservableObject {
         clearLogs()
         clearMapPreview()
         appendLogLine("Running \(fileURL.lastPathComponent)")
-        DispatchQueue.main.async {
-            self.isRunning = true
-        }
+        updateRunningState(true, currentRunDisplayName: fileURL.lastPathComponent)
 
         do {
             let wasmBytes = try Data(contentsOf: fileURL)
@@ -165,9 +164,7 @@ final class WasmManager: ObservableObject {
                 guard let wasmModule = wasm_runtime_load(wasmBuffer, wasmBufferSize, &errorBuf, UInt32(errorBuf.count)) else {
                     let message = "Error loading WASM module: \(String(cString: errorBuf))"
                     appendLogLine(message)
-                    DispatchQueue.main.async {
-                        self.isRunning = false
-                    }
+                    updateRunningState(false, currentRunDisplayName: nil)
                     return
                 }
 
@@ -178,9 +175,7 @@ final class WasmManager: ObservableObject {
                 guard let moduleInstance = wasm_runtime_instantiate(wasmModule, stackSize, heapSize, &errorBuf, UInt32(errorBuf.count)) else {
                     let message = "Error instantiating WASM module: \(String(cString: errorBuf))"
                     appendLogLine(message)
-                    DispatchQueue.main.async {
-                        self.isRunning = false
-                    }
+                    updateRunningState(false, currentRunDisplayName: nil)
                     wasm_runtime_unload(wasmModule)
                     return
                 }
@@ -194,9 +189,7 @@ final class WasmManager: ObservableObject {
                 guard let execEnv = wasm_runtime_create_exec_env(moduleInstance, stackSize) else {
                     let message = "Error creating execution environment"
                     appendLogLine(message)
-                    DispatchQueue.main.async {
-                        self.isRunning = false
-                    }
+                    updateRunningState(false, currentRunDisplayName: nil)
                     lock.lock()
                     currentModuleInstance = nil
                     lock.unlock()
@@ -231,25 +224,31 @@ final class WasmManager: ObservableObject {
                 wasm_runtime_unload(wasmModule)
 
                 appendLogLine("WASM execution finished.")
-                DispatchQueue.main.async {
-                    self.isRunning = false
-                }
+                updateRunningState(false, currentRunDisplayName: nil)
             }
         } catch {
             appendLogLine("Error reading WASM file: \(error.localizedDescription)")
-            DispatchQueue.main.async {
-                self.isRunning = false
-            }
+            updateRunningState(false, currentRunDisplayName: nil)
+        }
+    }
+
+    private func updateRunningState(_ isRunning: Bool, currentRunDisplayName: String?) {
+        DispatchQueue.main.async {
+            self.isRunning = isRunning
+            self.currentRunDisplayName = currentRunDisplayName
+            WebSocketManager.shared.publishWasmControlState()
         }
     }
 
     func clearLogs() {
+        WebSocketManager.shared.publishWasmConsoleReset()
         DispatchQueue.main.async {
             self.logLines.removeAll()
         }
     }
 
     func clearMapPreview() {
+        WebSocketManager.shared.publishMapFrameReset()
         DispatchQueue.main.async {
             self.latestMapJPEGData = nil
             self.latestMapTimestamp = 0

@@ -18,7 +18,7 @@ namespace mapping{
         static constexpr float kGridResolution = 0.02f; // meters
         static constexpr int32_t kMapSizeX = 400;
         static constexpr int32_t kMapSizeY = 400;
-        static constexpr int32_t kScanThreshold = 5;
+        static constexpr int32_t kScanThreshold = 1;
         static constexpr int32_t kDecayFactor = 20;
         static constexpr int32_t kClearThreshold = 1; // clear confirmed cells after enough free-space passes
         static constexpr float kMinRange = 0.1f; // meters

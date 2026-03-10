@@ -27,6 +27,8 @@ namespace mapping {
   constexpr bool kRerunHighlightFiltered = true;
   constexpr double kMapLogIntervalSec = 0.1;
   constexpr int kOccupancyRayBins = 360;
+  constexpr int kObstacleEndpointCenterRepeats = 5;
+  constexpr double kObstacleEndpointSplatHalfWidthM = 0;
 
 
   struct MapPerfWindow {
@@ -48,6 +50,8 @@ namespace mapping {
     double free_range2 = std::numeric_limits<double>::infinity();
     double hit_world_x = 0.0;
     double hit_world_y = 0.0;
+    double hit_dir_x = 0.0;
+    double hit_dir_y = 0.0;
     double free_world_x = 0.0;
     double free_world_y = 0.0;
   };
@@ -189,6 +193,9 @@ namespace mapping {
           bin.hit_range2 = planar_range2;
           bin.hit_world_x = map_point.x;
           bin.hit_world_y = map_point.y;
+          const double ray_norm = std::sqrt(std::max(r2, 1e-12));
+          bin.hit_dir_x = rdx / ray_norm;
+          bin.hit_dir_y = rdy / ray_norm;
         }
       } else if (keep && !in_range && r2 > 1e-9) {
         // Clip the ray to the max-range radius and register it as free-space
@@ -208,8 +215,29 @@ namespace mapping {
 
     for (const RayBinSample& bin : ray_bins) {
       if (bin.has_hit && used_points < kMaxMapPoints) {
-        map.set_point(used_points, bin.hit_world_x, bin.hit_world_y);
-        ++used_points;
+        for (int repeat = 0; repeat < kObstacleEndpointCenterRepeats; ++repeat) {
+          if (used_points >= kMaxMapPoints) {
+            break;
+          }
+          map.set_point(used_points, bin.hit_world_x, bin.hit_world_y);
+          ++used_points;
+        }
+
+        const double tangent_x = -bin.hit_dir_y;
+        const double tangent_y = bin.hit_dir_x;
+        const std::array<double, 2> lateral_offsets{
+            -kObstacleEndpointSplatHalfWidthM,
+            kObstacleEndpointSplatHalfWidthM};
+        for (const double lateral_offset : lateral_offsets) {
+          if (used_points >= kMaxMapPoints) {
+            break;
+          }
+          map.set_point(
+              used_points,
+              bin.hit_world_x + tangent_x * lateral_offset,
+              bin.hit_world_y + tangent_y * lateral_offset);
+          ++used_points;
+        }
         continue;
       }
       if (bin.has_free && free_points < kMaxFreeRays) {
