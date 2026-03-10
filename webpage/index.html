@@ -618,9 +618,9 @@
         }
 
         #mapPreview {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
+            position: absolute;
+            left: 0;
+            top: 0;
             display: none;
             image-rendering: crisp-edges;
             transform-origin: top left;
@@ -907,6 +907,9 @@
                 </div>
 
                 <div class="wasm-control-actions">
+                    <button id="hubRefreshBtn" class="btn-secondary" onclick="refreshHubPrograms()" disabled>
+                        Refresh
+                    </button>
                     <button id="hubDownloadBtn" class="btn-send" onclick="downloadSelectedHubFileRemote()" disabled>
                         Download
                     </button>
@@ -1035,6 +1038,7 @@
         const wasmRunBtn = document.getElementById('wasmRunBtn');
         const wasmStopBtn = document.getElementById('wasmStopBtn');
         const hubProgramSelect = document.getElementById('hubProgramSelect');
+        const hubRefreshBtn = document.getElementById('hubRefreshBtn');
         const hubSelectionMetaEl = document.getElementById('hubSelectionMeta');
         const hubDownloadBtn = document.getElementById('hubDownloadBtn');
         const messageLog = document.getElementById('messageLog');
@@ -1545,6 +1549,7 @@
             }
 
             hubProgramSelect.disabled = !isConnected || wasmControlState.isLoadingHub || hubFiles.length === 0;
+            hubRefreshBtn.disabled = !isConnected || wasmControlState.isLoadingHub;
             hubDownloadBtn.disabled = !isConnected || wasmControlState.isLoadingHub || !selectedHubFile || Boolean(selectedHubFile.is_downloaded);
         }
 
@@ -1569,6 +1574,10 @@
         }
 
         function refreshWasmPrograms() {
+            sendWasmControlMessage({ type: 'wasm_refresh' });
+        }
+
+        function refreshHubPrograms() {
             sendWasmControlMessage({ type: 'wasm_refresh' });
         }
 
@@ -2213,9 +2222,14 @@
                 }
 
                 event.preventDefault();
+                const metrics = getMapRenderMetrics();
+                if (!metrics) {
+                    return;
+                }
+
                 const rect = mapContainerEl.getBoundingClientRect();
-                const pointerX = event.clientX - rect.left;
-                const pointerY = event.clientY - rect.top;
+                const pointerX = event.clientX - rect.left - metrics.fittedLeft;
+                const pointerY = event.clientY - rect.top - metrics.fittedTop;
                 const zoomFactor = event.deltaY > 0 ? 0.9 : 1.1;
                 const nextScale = Math.max(
                     mapViewState.minScale,
@@ -2241,21 +2255,58 @@
         }
 
         function clampMapTransform() {
-            if (mapViewState.scale <= 1) {
+            const metrics = getMapRenderMetrics();
+            if (!metrics) {
                 mapViewState.offsetX = 0;
                 mapViewState.offsetY = 0;
                 return;
             }
 
+            const overflowX = Math.max(0, (metrics.fittedWidth * mapViewState.scale) - metrics.containerWidth);
+            const overflowY = Math.max(0, (metrics.fittedHeight * mapViewState.scale) - metrics.containerHeight);
+            mapViewState.offsetX = Math.max(-overflowX, Math.min(0, mapViewState.offsetX));
+            mapViewState.offsetY = Math.max(-overflowY, Math.min(0, mapViewState.offsetY));
+        }
+
+        function getMapRenderMetrics() {
             const rect = mapContainerEl.getBoundingClientRect();
-            const maxOffsetX = ((mapViewState.scale - 1) * rect.width) / 2;
-            const maxOffsetY = ((mapViewState.scale - 1) * rect.height) / 2;
-            mapViewState.offsetX = Math.max(-maxOffsetX, Math.min(maxOffsetX, mapViewState.offsetX));
-            mapViewState.offsetY = Math.max(-maxOffsetY, Math.min(maxOffsetY, mapViewState.offsetY));
+            const containerWidth = rect.width;
+            const containerHeight = rect.height;
+            if (containerWidth <= 0 || containerHeight <= 0) {
+                return null;
+            }
+
+            const naturalWidth = mapPreviewEl.naturalWidth || containerWidth;
+            const naturalHeight = mapPreviewEl.naturalHeight || containerHeight;
+            if (naturalWidth <= 0 || naturalHeight <= 0) {
+                return null;
+            }
+
+            const fitScale = Math.min(containerWidth / naturalWidth, containerHeight / naturalHeight);
+            const fittedWidth = naturalWidth * fitScale;
+            const fittedHeight = naturalHeight * fitScale;
+
+            return {
+                containerWidth,
+                containerHeight,
+                fittedWidth,
+                fittedHeight,
+                fittedLeft: (containerWidth - fittedWidth) / 2,
+                fittedTop: (containerHeight - fittedHeight) / 2
+            };
         }
 
         function updateMapTransform() {
+            const metrics = getMapRenderMetrics();
+            if (!metrics) {
+                return;
+            }
+
             clampMapTransform();
+            mapPreviewEl.style.left = `${metrics.fittedLeft}px`;
+            mapPreviewEl.style.top = `${metrics.fittedTop}px`;
+            mapPreviewEl.style.width = `${metrics.fittedWidth}px`;
+            mapPreviewEl.style.height = `${metrics.fittedHeight}px`;
             mapPreviewEl.style.transform = `translate(${mapViewState.offsetX}px, ${mapViewState.offsetY}px) scale(${mapViewState.scale})`;
         }
 
