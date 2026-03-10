@@ -61,6 +61,8 @@ static std::atomic<bool> g_wheel_odom_ready{false};
 static std::mutex g_latest_wheel_odom_mutex;
 static sensors::WheelOdometryData g_latest_wheel_odom = {0.0, -1, 0, 0, 0};
 static sensors::PoseLog g_pose;
+static std::atomic<bool> g_scan_active{false};
+static std::atomic<bool> g_scan_requested{false};
 
 static bool read_latest_wheel_odom_snapshot(sensors::WheelOdometryData* out) {
     if (!out) {
@@ -324,12 +326,23 @@ int main(){
         }
 
         if (!g_initial_spin_done.load(std::memory_order_acquire)) {
+            g_scan_active.store(true, std::memory_order_release);
             scan_4x90(motors, m_pose);
+            g_scan_active.store(false, std::memory_order_release);
             g_initial_spin_done.store(true, std::memory_order_release);
         }
 
         wasm_log_line("AUTONOMY_INIT -> AUTONOMY_ENGAGED");
         g_state.store(RobotState::AUTONOMY_ENGAGED, std::memory_order_release);
+
+        while (true) {
+            if (g_scan_requested.exchange(false, std::memory_order_acq_rel)) {
+                g_scan_active.store(true, std::memory_order_release);
+                scan_4x90(motors, m_pose);
+                g_scan_active.store(false, std::memory_order_release);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
+        }
     });
 
     std::thread imu_thread([&m_imu, &m_pose](){
@@ -762,6 +775,9 @@ int main(){
             if (state != RobotState::AUTONOMY_ENGAGED) {
                 continue;
             }
+            if (g_scan_active.load(std::memory_order_acquire)) {
+                continue;
+            }
 
             const uint64_t latest_path_revision =
                 planning::bridge::copy_latest_plan_world(&planned_path_world);
@@ -804,7 +820,7 @@ int main(){
                 }
                 path_follower.clear_path();
                 motors.stop();
-                scan_4x90(motors, m_pose);
+                g_scan_requested.store(true, std::memory_order_release);
                 continue;
             }
             goal_reached_logged = false;
