@@ -326,7 +326,7 @@ class BluetoothManager: NSObject, ObservableObject {
         lastOdomSeq = seq
 
         let samplePeriodSeconds = Double(latestOdomSamplePeriodMs) / 1000.0
-        let baseTimestamp = Date().timeIntervalSince1970
+        let baseTimestamp = ProcessInfo.processInfo.systemUptime
         var samples: [WheelOdometrySample] = []
         samples.reserveCapacity(sampleCount)
         var offset = 3

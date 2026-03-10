@@ -12,6 +12,7 @@
 
 #include "controls/motors.h"
 #include "core/math_utils.h"
+#include "core/ring_buffer.h"
 #include "controls/path_following.h"
 #include "core/telemetry.h"
 #include "mapping/map_update.h"
@@ -34,12 +35,22 @@ static std::atomic<RobotState> g_state{RobotState::SENSOR_INIT};
 
 static mapping::Map g_map;
 static mapping::MapImage g_map_image;
+static std::mutex g_map_mutex;
 static std::atomic<bool> g_first_map_update_done{false};
 static std::atomic<uint64_t> g_map_update_revision{0};
 static std::mutex g_map_publish_mutex;
 static mapping::MapSnapshot g_latest_map_snapshot;
 static std::mutex g_plan_publish_mutex;
 static planning::bridge::PlanningOverlay g_latest_plan_overlay;
+
+struct LatestMapState {
+    core::PoseSE3d body_to_world;
+    double timestamp = 0.0;
+    uint64_t revision = 0;
+    bool valid = false;
+};
+
+static LatestMapState g_latest_map_state;
 
 // IMU globals
 static sensors::calibration::IMUHistoryBuffer g_imu_history;
@@ -49,9 +60,19 @@ static std::atomic<bool> g_imu_ready{false};
 
 // lidar camera globals
 static sensors::CameraConfig g_cam_config;
-static std::array<sensors::LidarCameraData, 2> g_lc_buffers;
-static std::atomic<int> g_lc_ready_idx{-1};
-static std::atomic<int> g_lc_in_use_idx{-1};
+static constexpr int kLidarQueueCapacity = 4;
+enum class LidarSlotState : uint8_t {
+    FREE = 0,
+    WRITING = 1,
+    QUEUED = 2,
+    READING = 3,
+};
+static std::array<sensors::LidarCameraData, kLidarQueueCapacity> g_lc_buffers;
+static std::array<sensors::PoseLog, kLidarQueueCapacity> g_lc_pose_buffers;
+static std::array<LidarSlotState, kLidarQueueCapacity> g_lc_slot_states{};
+static std::array<int, kLidarQueueCapacity> g_lc_ready_queue{};
+static size_t g_lc_ready_head = 0;
+static size_t g_lc_ready_size = 0;
 static std::atomic<bool> g_lc_ready{false};
 static std::mutex g_lc_cv_mutex;
 static std::condition_variable g_lc_cv;
@@ -61,8 +82,11 @@ static std::atomic<bool> g_wheel_odom_ready{false};
 static std::mutex g_latest_wheel_odom_mutex;
 static sensors::WheelOdometryData g_latest_wheel_odom = {0.0, -1, 0, 0, 0};
 static sensors::PoseLog g_pose;
+static constexpr size_t kPoseHistoryCapacity = 256;
+static core::RingBuffer<sensors::PoseLog, kPoseHistoryCapacity> g_pose_history;
 static std::atomic<bool> g_scan_active{false};
 static std::atomic<bool> g_scan_requested{false};
+static std::atomic<double> g_scan_map_skip_until_timestamp{-1.0};
 
 static bool read_latest_wheel_odom_snapshot(sensors::WheelOdometryData* out) {
     if (!out) {
@@ -85,6 +109,120 @@ static bool read_latest_pose_snapshot(std::mutex& m_pose, sensors::PoseLog* out)
     std::lock_guard<std::mutex> lk(m_pose);
     *out = g_pose;
     return out->timestamp > 0.0;
+}
+
+static core::Vector4d quat_nlerp(
+    const core::Vector4d& a,
+    const core::Vector4d& b,
+    double t) {
+    core::Vector4d b_adjusted = b;
+    const double dot =
+        (a.x * b.x) + (a.y * b.y) + (a.z * b.z) + (a.w * b.w);
+    if (dot < 0.0) {
+        b_adjusted.x = -b_adjusted.x;
+        b_adjusted.y = -b_adjusted.y;
+        b_adjusted.z = -b_adjusted.z;
+        b_adjusted.w = -b_adjusted.w;
+    }
+    const double inv_t = 1.0 - t;
+    return core::quat_normalize(core::Vector4d{
+        inv_t * a.x + t * b_adjusted.x,
+        inv_t * a.y + t * b_adjusted.y,
+        inv_t * a.z + t * b_adjusted.z,
+        inv_t * a.w + t * b_adjusted.w});
+}
+
+static void record_pose_history_locked(const sensors::PoseLog& pose) {
+    if (pose.timestamp <= 0.0) {
+        return;
+    }
+    if (!g_pose_history.empty()) {
+        sensors::PoseLog& back = g_pose_history.back();
+        if (pose.timestamp < back.timestamp) {
+            return;
+        }
+        if (pose.timestamp == back.timestamp) {
+            back = pose;
+            return;
+        }
+    }
+    g_pose_history.push(pose);
+}
+
+static bool sample_pose_at_timestamp_locked(double timestamp, sensors::PoseLog* out) {
+    if (!out || timestamp <= 0.0 || g_pose_history.empty()) {
+        return false;
+    }
+    const size_t history_size = g_pose_history.size();
+    const sensors::PoseLog& front = g_pose_history.front();
+    if (timestamp <= front.timestamp || history_size == 1) {
+        *out = front;
+        return true;
+    }
+    const sensors::PoseLog& back = g_pose_history.back();
+    if (timestamp >= back.timestamp) {
+        *out = back;
+        return true;
+    }
+
+    for (size_t i = 1; i < history_size; ++i) {
+        const sensors::PoseLog& prev = g_pose_history.at(i - 1);
+        const sensors::PoseLog& next = g_pose_history.at(i);
+        if (timestamp > next.timestamp) {
+            continue;
+        }
+        const double span = next.timestamp - prev.timestamp;
+        if (span <= 1e-6) {
+            *out = next;
+            return true;
+        }
+        const double alpha = std::clamp((timestamp - prev.timestamp) / span, 0.0, 1.0);
+        out->timestamp = timestamp;
+        out->translation = core::Vector3d{
+            prev.translation.x + (next.translation.x - prev.translation.x) * alpha,
+            prev.translation.y + (next.translation.y - prev.translation.y) * alpha,
+            prev.translation.z + (next.translation.z - prev.translation.z) * alpha};
+        out->quaternion = quat_nlerp(prev.quaternion, next.quaternion, alpha);
+        return true;
+    }
+
+    *out = back;
+    return true;
+}
+
+static bool lidar_queue_has_free_slot_locked() {
+    for (const LidarSlotState state : g_lc_slot_states) {
+        if (state == LidarSlotState::FREE) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static int claim_lidar_free_slot_locked() {
+    for (size_t idx = 0; idx < g_lc_slot_states.size(); ++idx) {
+        if (g_lc_slot_states[idx] == LidarSlotState::FREE) {
+            g_lc_slot_states[idx] = LidarSlotState::WRITING;
+            return static_cast<int>(idx);
+        }
+    }
+    return -1;
+}
+
+static void push_lidar_ready_slot_locked(int slot_idx) {
+    const size_t tail = (g_lc_ready_head + g_lc_ready_size) % g_lc_ready_queue.size();
+    g_lc_ready_queue[tail] = slot_idx;
+    ++g_lc_ready_size;
+}
+
+static int pop_lidar_ready_slot_locked() {
+    if (g_lc_ready_size == 0) {
+        return -1;
+    }
+    const int slot_idx = g_lc_ready_queue[g_lc_ready_head];
+    g_lc_ready_head = (g_lc_ready_head + 1) % g_lc_ready_queue.size();
+    --g_lc_ready_size;
+    return slot_idx;
 }
 
 static core::PoseSE2d pose_log_to_se2(const sensors::PoseLog& pose) {
@@ -131,10 +269,10 @@ static constexpr double kWheelPoseLogIntervalSec = 0.2;
 static constexpr bool kEnableVerboseAutonomyLogs = false;
 static constexpr int32_t kPlannerPollMs = 50;
 static constexpr double kPlannerMinIntervalSec = 0.35;
-static constexpr int32_t kTelemetryRenderIntervalMs = 66;
+static constexpr int32_t kTelemetryRenderIntervalMs = 33;
 static constexpr double kPoseTrailMinDistanceM = 0.05;
 static constexpr double kPoseTrailMinYawDeltaRad = 10.0 * core::pi / 180.0;
-static constexpr double kPoseTrailMinIntervalSec = 0.15;
+static constexpr double kPoseTrailMinIntervalSec = 0.05;
 
 struct OuterLoopTurnPidConfig {
     double kp_omega_per_rad;
@@ -165,12 +303,13 @@ static bool read_scan_odom_sample(sensors::WheelOdometryData* out) {
 }
 
 void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
-    wasm_log_line("[autonomy][scan] starting 4x90 scan");
     constexpr int kSegments = 4;
     constexpr double kQuarterTurnRad = 0.5 * core::pi;
     constexpr int kTurnHoldMs = 150;
     constexpr int kPollSleepMs = 5;
     constexpr int kSegmentSettleMs = 100;
+    constexpr double kScanWarmupSec = 5.0;
+    constexpr int kScanWarmupSleepMs = 1000;
 
     sensors::WheelOdometryData odom{};
     while (!read_scan_odom_sample(&odom)) {
@@ -188,6 +327,14 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
 
     motors.stop();
     motors.reset_twist_controller();
+    g_scan_map_skip_until_timestamp.store(
+        odom.timestamp + kScanWarmupSec,
+        std::memory_order_release);
+    wasm_log_line("[autonomy][scan] warmup: lidar on, skipping map updates for 1.0s");
+    std::this_thread::sleep_for(std::chrono::milliseconds(kScanWarmupSleepMs));
+    g_scan_map_skip_until_timestamp.store(-1.0, std::memory_order_release);
+    wasm_log_line("[autonomy][scan] warmup complete: resuming map updates");
+    wasm_log_line("[autonomy][scan] starting 4x90 scan");
 
     for (int segment = 0; segment < kSegments; ++segment) {
         const double segment_start_yaw = yaw;
@@ -397,20 +544,19 @@ int main(){
             last_sample_time = Clock::now();
         }
     });
-    std::thread lidar_camera_thread([&m_lc](){
-        using Clock = std::chrono::steady_clock;
-        const auto target_interval = std::chrono::milliseconds(sensors::LidarCameraIntervalMs);
-        int write_idx = 0;
+    std::thread lidar_camera_thread([&m_lc, &m_pose](){
         double last_lidar_log_timestamp = -1.0;
-        auto last_sample_time = Clock::now();
 
         while(true){
-            const int in_use = g_lc_in_use_idx.load(std::memory_order_acquire);
-            if (write_idx == in_use) {
-                write_idx = 1 - write_idx;
+            int write_idx = -1;
+            {
+                std::unique_lock<std::mutex> lk(g_lc_cv_mutex);
+                g_lc_cv.wait(lk, [&]{
+                    return lidar_queue_has_free_slot_locked();
+                });
+                write_idx = claim_lidar_free_slot_locked();
             }
-            if (write_idx == in_use) {
-                // Both slots claimed — shouldn't happen with 2 buffers but yield defensively.
+            if (write_idx < 0) {
                 continue;
             }
 
@@ -420,6 +566,14 @@ int main(){
             g_lc_buffers[write_idx].image_size = 0;
             read_lidar_camera(&g_lc_buffers[write_idx]);
             sensors::ensure_points_flu(g_lc_buffers[write_idx]);
+            {
+                std::lock_guard<std::mutex> lk(m_pose);
+                if (!sample_pose_at_timestamp_locked(
+                        g_lc_buffers[write_idx].timestamp,
+                        &g_lc_pose_buffers[write_idx])) {
+                    g_lc_pose_buffers[write_idx] = g_pose;
+                }
+            }
 
             if (g_lc_buffers[write_idx].points_size > 0) {
                 if (g_lc_buffers[write_idx].timestamp > 0.0 &&
@@ -430,34 +584,33 @@ int main(){
                     last_lidar_log_timestamp = g_lc_buffers[write_idx].timestamp;
                 }
 
-                // Timestamp deduplication is intentionally omitted here: the mapping
-                // thread's do_map_update interval check (mapMinInterval) handles
-                // rate-limiting and will drop frames whose timestamps haven't advanced
-                // enough. Deduplicating here caused a permanent stall whenever the host
-                // returned a frame with the same timestamp as the previous call.
+                // Timestamp deduplication is intentionally omitted here. Mapping only
+                // requires monotonically advancing timestamps, and deduplicating at the
+                // producer caused a permanent stall whenever the host returned the same
+                // timestamp on consecutive calls.
                 if (!g_lc_ready.load(std::memory_order_relaxed)) {
                     g_lc_ready.store(true, std::memory_order_release);
                     wasm_log_line("Lidar camera initialized");
                 }
-                g_lc_ready_idx.store(write_idx, std::memory_order_release);
+                {
+                    std::lock_guard<std::mutex> lk(g_lc_cv_mutex);
+                    g_lc_slot_states[write_idx] = LidarSlotState::QUEUED;
+                    push_lidar_ready_slot_locked(write_idx);
+                }
                 g_lc_cv.notify_one();
                 // wasm_log_line("lidar: " + std::to_string(g_lc_buffers[write_idx].timestamp) + ", " + std::to_string(g_lc_buffers[write_idx].points_size));
+            } else {
+                {
+                    std::lock_guard<std::mutex> lk(g_lc_cv_mutex);
+                    g_lc_slot_states[write_idx] = LidarSlotState::FREE;
+                }
+                g_lc_cv.notify_one();
             }
-
-            write_idx = 1 - write_idx;
-            const auto curr_time = Clock::now();
-            const auto elapsed = curr_time - last_sample_time;
-            if (elapsed < target_interval) {
-                std::this_thread::sleep_for(target_interval - elapsed);
-            }
-            last_sample_time = Clock::now();
         }
     });
 
 
     std::thread mapping_thread([&m_pose](){
-      constexpr int kUnusedIdx = -1;
-
       double last_map_timestamp = -1.0;
 
       RobotState state;
@@ -466,33 +619,39 @@ int main(){
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
       } while (state != RobotState::AUTONOMY_ENGAGED && state != RobotState::AUTONOMY_INIT);
 
-        mapping::initialize_map(g_map);
+        {
+            std::lock_guard<std::mutex> lk(g_map_mutex);
+            mapping::initialize_map(g_map);
+            g_latest_map_state = LatestMapState{};
+        }
       wasm_log_line("Map initialized");
 
       while(true){
 
         // get a valid lidar-camera frame, then get the most recent pose
-        int ready_idx = kUnusedIdx;
+        int ready_idx = -1;
         {
             std::unique_lock<std::mutex> lk(g_lc_cv_mutex);
-            g_lc_cv.wait(lk, []{return g_lc_ready_idx.load(std::memory_order_acquire) >= 0;});
-            ready_idx = g_lc_ready_idx.exchange(kUnusedIdx, std::memory_order_acq_rel);
+            g_lc_cv.wait(lk, []{return g_lc_ready_size > 0;});
+            ready_idx = pop_lidar_ready_slot_locked();
+            if (ready_idx >= 0) {
+                g_lc_slot_states[ready_idx] = LidarSlotState::READING;
+            }
         }
         if (ready_idx < 0) {
             std::this_thread::yield();
             continue;
         }
-        g_lc_in_use_idx.store(ready_idx, std::memory_order_release);
         const sensors::LidarCameraData& lc_data = g_lc_buffers[ready_idx];
+        const sensors::PoseLog& pose_snapshot = g_lc_pose_buffers[ready_idx];
         if (lc_data.points_size <= 0) {
-            g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> lk(g_lc_cv_mutex);
+                g_lc_slot_states[ready_idx] = LidarSlotState::FREE;
+            }
+            g_lc_cv.notify_one();
             std::this_thread::yield();
             continue;
-        }
-        sensors::PoseLog pose_snapshot{};
-        {
-            std::lock_guard<std::mutex> lk(m_pose);
-            pose_snapshot = g_pose;
         }
         core::PoseSE3d body_to_world;
         body_to_world.quaternion = pose_snapshot.quaternion;
@@ -500,41 +659,55 @@ int main(){
         const double pose_timestamp = pose_snapshot.timestamp;
         const double candidate_timestamp = std::max(lc_data.timestamp, pose_timestamp);
         if (candidate_timestamp <= 0.0 ||
-            (last_map_timestamp > 0.0 &&
-             (candidate_timestamp <= last_map_timestamp ||
-              (candidate_timestamp - last_map_timestamp) < mapping::mapMinIntervalSeconds))) {
-            g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
+            (last_map_timestamp > 0.0 && candidate_timestamp <= last_map_timestamp)) {
+            {
+                std::lock_guard<std::mutex> lk(g_lc_cv_mutex);
+                g_lc_slot_states[ready_idx] = LidarSlotState::FREE;
+            }
+            g_lc_cv.notify_one();
+            continue;
+        }
+        const double scan_skip_until =
+            g_scan_map_skip_until_timestamp.load(std::memory_order_acquire);
+        if (g_scan_active.load(std::memory_order_acquire) &&
+            scan_skip_until > 0.0 &&
+            candidate_timestamp < scan_skip_until) {
+            {
+                std::lock_guard<std::mutex> lk(g_lc_cv_mutex);
+                g_lc_slot_states[ready_idx] = LidarSlotState::FREE;
+            }
+            g_lc_cv.notify_one();
             continue;
         }
 
-        // project the filtered lidar scan into the occupancy grid.
-        mapping::update_map_from_lidar(
-            g_map,
-            lc_data,
-            body_to_world
-        );
+        uint64_t map_revision = 0;
+        {
+            std::lock_guard<std::mutex> lk(g_map_mutex);
+            // project the filtered lidar scan into the occupancy grid.
+            mapping::update_map_from_lidar(
+                g_map,
+                lc_data,
+                body_to_world
+            );
+            map_revision =
+                g_map_update_revision.fetch_add(1, std::memory_order_acq_rel) + 1;
+            g_latest_map_state.body_to_world = body_to_world;
+            g_latest_map_state.timestamp = candidate_timestamp;
+            g_latest_map_state.revision = map_revision;
+            g_latest_map_state.valid = true;
+        }
         if (!g_first_map_update_done.load(std::memory_order_relaxed)) {
             g_first_map_update_done.store(true, std::memory_order_release);
         }
-        const uint64_t map_revision =
-            g_map_update_revision.fetch_add(1, std::memory_order_acq_rel) + 1;
-        mapping::MapSnapshot snapshot;
-        if (mapping::build_map_snapshot(
-                g_map,
-                body_to_world,
-                candidate_timestamp,
-                map_revision,
-                &snapshot)) {
-            {
-                std::lock_guard<std::mutex> lk(g_map_publish_mutex);
-                g_latest_map_snapshot = std::move(snapshot);
-            }
-            last_map_timestamp = candidate_timestamp;
-        }
+        last_map_timestamp = candidate_timestamp;
 
         // wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
 
-        g_lc_in_use_idx.store(kUnusedIdx, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lk(g_lc_cv_mutex);
+            g_lc_slot_states[ready_idx] = LidarSlotState::FREE;
+        }
+        g_lc_cv.notify_one();
       }
     });
 
@@ -636,7 +809,26 @@ int main(){
         while (true) {
             mapping::MapSnapshot snapshot;
             planning::bridge::PlanningOverlay overlay;
-            {
+            const uint64_t latest_map_revision =
+                g_map_update_revision.load(std::memory_order_acquire);
+            if (latest_map_revision != last_rendered_map_revision) {
+                bool built_snapshot = false;
+                {
+                    std::lock_guard<std::mutex> lk(g_map_mutex);
+                    if (g_latest_map_state.valid) {
+                        built_snapshot = mapping::build_map_snapshot(
+                            g_map,
+                            g_latest_map_state.body_to_world,
+                            g_latest_map_state.timestamp,
+                            g_latest_map_state.revision,
+                            &snapshot);
+                    }
+                }
+                if (built_snapshot) {
+                    std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+                    g_latest_map_snapshot = snapshot;
+                }
+            } else {
                 std::lock_guard<std::mutex> lk(g_map_publish_mutex);
                 snapshot = g_latest_map_snapshot;
             }
@@ -759,6 +951,7 @@ int main(){
                     g_pose.quaternion = wheel_quaternion;
                 }
                 pose_copy = g_pose;
+                record_pose_history_locked(pose_copy);
             } else {
                 std::lock_guard<std::mutex> lk(m_pose);
                 pose_copy = g_pose;
