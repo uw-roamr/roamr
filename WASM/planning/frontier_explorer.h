@@ -12,8 +12,8 @@ struct FrontierExplorerConfig {
   int8_t occupied_threshold = 50;
   bool allow_diagonal = true;
   bool prevent_corner_cutting = true;
-  double detection_inflation_radius_m = 0.0;
-  double inflation_radius_m = 0.07;
+  double detection_inflation_radius_m = 0.02;
+  double inflation_radius_m = 0.15;
   bool simplify_path = true;
   bool snap_start_to_free = true;
   bool snap_goal_to_free = true;

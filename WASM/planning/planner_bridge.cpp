@@ -49,7 +49,7 @@ FrontierExplorerConfig build_frontier_config() {
   cfg.occupied_threshold = 50;
   cfg.allow_diagonal = true;
   cfg.prevent_corner_cutting = true;
-  cfg.detection_inflation_radius_m = 0.0;
+  cfg.detection_inflation_radius_m = 0.04;
   cfg.inflation_radius_m = mapping::default_navigation_costmap_config().inflation_radius_m;
   cfg.simplify_path = true;
   cfg.snap_start_to_free = true;

@@ -203,6 +203,8 @@ void detect_frontiers(
 
   constexpr int32_t kNeighborDx[8] = {1, 1, 0, -1, -1, -1, 0, 1};
   constexpr int32_t kNeighborDy[8] = {0, 1, 1, 1, 0, -1, -1, -1};
+  constexpr int32_t kCardinalDx[4] = {1, -1, 0, 0};
+  constexpr int32_t kCardinalDy[4] = {0, 0, 1, -1};
 
   for (int32_t y = 0; y < map.height; ++y) {
     for (int32_t x = 0; x < map.width; ++x) {
@@ -218,7 +220,9 @@ void detect_frontiers(
         continue;
       }
 
-      bool has_unknown_neighbor = false;
+      int32_t unknown_neighbor_count = 0;
+      int32_t cardinal_unknown_neighbor_count = 0;
+      int32_t cardinal_free_neighbor_count = 0;
       for (int32_t i = 0; i < 8; ++i) {
         const int32_t nx = x + kNeighborDx[i];
         const int32_t ny = y + kNeighborDy[i];
@@ -227,11 +231,25 @@ void detect_frontiers(
         }
         const int8_t neighbor_value = map.data[static_cast<size_t>(map.index(nx, ny))];
         if (neighbor_value < 0) {
-          has_unknown_neighbor = true;
-          break;
+          ++unknown_neighbor_count;
         }
       }
-      if (has_unknown_neighbor) {
+      for (int32_t i = 0; i < 4; ++i) {
+        const int32_t nx = x + kCardinalDx[i];
+        const int32_t ny = y + kCardinalDy[i];
+        if (!map.in_bounds(nx, ny)) {
+          continue;
+        }
+        const int8_t neighbor_value = map.data[static_cast<size_t>(map.index(nx, ny))];
+        if (neighbor_value < 0) {
+          ++cardinal_unknown_neighbor_count;
+        } else if (neighbor_value >= 0 && neighbor_value < cfg.occupied_threshold) {
+          ++cardinal_free_neighbor_count;
+        }
+      }
+      if (unknown_neighbor_count >= 2 &&
+          cardinal_unknown_neighbor_count >= 1 &&
+          cardinal_free_neighbor_count >= 2) {
         frontier_cells->push_back(GridCoord{x, y});
       }
     }

@@ -100,7 +100,7 @@ static std::condition_variable g_lc_cv;
 static std::atomic<bool> g_wheel_odom_ready{false};
 static std::mutex g_latest_wheel_odom_mutex;
 static sensors::WheelOdometryData g_latest_wheel_odom = {0.0, -1, 0, 0, 0};
-static sensors::PoseLog g_pose;
+static sensors::PoseLog g_pose{-1.0, core::Vector3d{}, core::Vector4d{0.0, 0.0, 0.0, 1.0}};
 static constexpr size_t kPoseHistoryCapacity = 256;
 static core::RingBuffer<sensors::PoseLog, kPoseHistoryCapacity> g_pose_history;
 static std::atomic<bool> g_scan_active{false};
@@ -148,6 +148,15 @@ static bool read_latest_pose_snapshot(std::mutex& m_pose, sensors::PoseLog* out)
     std::lock_guard<std::mutex> lk(m_pose);
     *out = g_pose;
     return out->timestamp > 0.0;
+}
+
+static bool pose_log_valid(const sensors::PoseLog& pose) {
+    const double q_norm2 =
+        pose.quaternion.x * pose.quaternion.x +
+        pose.quaternion.y * pose.quaternion.y +
+        pose.quaternion.z * pose.quaternion.z +
+        pose.quaternion.w * pose.quaternion.w;
+    return pose.timestamp > 0.0 && q_norm2 > 1e-6;
 }
 
 static void notify_planner_wake() {
@@ -657,6 +666,9 @@ int main(){
                     g_lc_pose_buffers[write_idx] = g_pose;
                 }
             }
+            if (!pose_log_valid(g_lc_pose_buffers[write_idx])) {
+                g_lc_pose_buffers[write_idx].timestamp = -1.0;
+            }
 
             if (g_lc_buffers[write_idx].points_size > 0) {
                 if (g_lc_buffers[write_idx].timestamp > 0.0 &&
@@ -702,11 +714,17 @@ int main(){
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
       } while (state != RobotState::AUTONOMY_ENGAGED && state != RobotState::AUTONOMY_INIT);
 
-        {
-            std::lock_guard<std::mutex> lk(g_map_mutex);
-            mapping::initialize_map(g_map);
-            g_latest_map_state = LatestMapState{};
+      if (pose_source == PoseSource::fused_IMU_wheel_odom || pose_source == PoseSource::wheel_odom){
+        while(!g_wheel_odom_ready.load(std::memory_order_acquire)){
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+      }
+
+      {
+        std::lock_guard<std::mutex> lk(g_map_mutex);
+        mapping::initialize_map(g_map);
+        g_latest_map_state = LatestMapState{};
+      }
       wasm_log_line("Map initialized");
 
       while(true){
@@ -734,6 +752,19 @@ int main(){
             }
             g_lc_cv.notify_one();
             std::this_thread::yield();
+            continue;
+        }
+        if (!pose_log_valid(pose_snapshot)) {
+            static bool warned_about_invalid_pose = false;
+            if (!warned_about_invalid_pose) {
+                wasm_log_line("[mapping] skipping lidar frame until pose is initialized");
+                warned_about_invalid_pose = true;
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_lc_cv_mutex);
+                g_lc_slot_states[ready_idx] = LidarSlotState::FREE;
+            }
+            g_lc_cv.notify_one();
             continue;
         }
         core::PoseSE3d body_to_world;
