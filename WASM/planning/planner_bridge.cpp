@@ -30,6 +30,7 @@ struct PlannerGoalPixel {
 std::mutex g_planner_goal_mutex;
 PlannerGoalPixel g_planner_goal;
 std::atomic<uint64_t> g_goal_revision{0};
+GoalChangeCallback g_goal_change_callback = nullptr;
 std::mutex g_planned_path_mutex;
 std::vector<core::Vector3d> g_planned_path_world;
 uint64_t g_planned_path_revision = 0;
@@ -94,6 +95,98 @@ bool load_planner_grid(const mapping::MapSnapshot& snapshot, GridMap2D* out_map)
     return false;
   }
   return true;
+}
+
+bool is_path_segment_traversable(
+    const GridMap2D& map,
+    const PlannerConfig& cfg,
+    const std::vector<int8_t>& occupancy,
+    const GridCoord& a,
+    const GridCoord& b) {
+  if (!map.in_bounds(a.x, a.y) || !map.in_bounds(b.x, b.y)) {
+    return false;
+  }
+  return line_of_sight_free(map, cfg, occupancy, a, b);
+}
+
+bool is_path_grid_traversable(
+    const GridMap2D& map,
+    const PlannerConfig& cfg,
+    const std::vector<int8_t>& occupancy,
+    const std::vector<GridCoord>& path_grid) {
+  if (path_grid.empty()) {
+    return false;
+  }
+  for (const GridCoord& cell : path_grid) {
+    if (!map.in_bounds(cell.x, cell.y) ||
+        is_cell_blocked(map, cfg, cell.x, cell.y, &occupancy)) {
+      return false;
+    }
+  }
+  for (size_t i = 1; i < path_grid.size(); ++i) {
+    if (!is_path_segment_traversable(
+            map, cfg, occupancy, path_grid[i - 1], path_grid[i])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void mark_inflated_cell(
+    const GridMap2D& map,
+    int32_t cx,
+    int32_t cy,
+    int32_t radius_cells,
+    std::vector<uint8_t>* mask) {
+  if (!mask || !map.in_bounds(cx, cy)) {
+    return;
+  }
+  for (int32_t dy = -radius_cells; dy <= radius_cells; ++dy) {
+    for (int32_t dx = -radius_cells; dx <= radius_cells; ++dx) {
+      if ((dx * dx + dy * dy) > (radius_cells * radius_cells)) {
+        continue;
+      }
+      const int32_t x = cx + dx;
+      const int32_t y = cy + dy;
+      if (!map.in_bounds(x, y)) {
+        continue;
+      }
+      (*mask)[static_cast<size_t>(map.index(x, y))] = 1;
+    }
+  }
+}
+
+void mark_inflated_segment(
+    const GridMap2D& map,
+    const GridCoord& a,
+    const GridCoord& b,
+    int32_t radius_cells,
+    std::vector<uint8_t>* mask) {
+  int32_t x0 = a.x;
+  int32_t y0 = a.y;
+  const int32_t x1 = b.x;
+  const int32_t y1 = b.y;
+  const int32_t dx = std::abs(x1 - x0);
+  const int32_t sx = x0 < x1 ? 1 : -1;
+  const int32_t dy = -std::abs(y1 - y0);
+  const int32_t sy = y0 < y1 ? 1 : -1;
+  int32_t err = dx + dy;
+
+  while (true) {
+    mark_inflated_cell(map, x0, y0, radius_cells, mask);
+    if (x0 == x1 && y0 == y1) {
+      break;
+    }
+    const int32_t e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      x0 += sx;
+    }
+    if (e2 <= dx) {
+      err += dx;
+      y0 += sy;
+    }
+  }
 }
 
 bool render_pixel_to_map_cell(
@@ -213,23 +306,114 @@ PlanningOverlay overlay_from_frontier_result(
 }  // namespace
 
 void set_goal_map_pixel(int32_t x, int32_t y) {
-  std::lock_guard<std::mutex> lk(g_planner_goal_mutex);
-  g_planner_goal.active = true;
-  g_planner_goal.x = x;
-  g_planner_goal.y = y;
-  g_goal_revision.fetch_add(1, std::memory_order_acq_rel);
+  GoalChangeCallback callback = nullptr;
+  {
+    std::lock_guard<std::mutex> lk(g_planner_goal_mutex);
+    g_planner_goal.active = true;
+    g_planner_goal.x = x;
+    g_planner_goal.y = y;
+    g_goal_revision.fetch_add(1, std::memory_order_acq_rel);
+    callback = g_goal_change_callback;
+  }
+  if (callback) {
+    callback();
+  }
 }
 
 void clear_goal() {
-  std::lock_guard<std::mutex> lk(g_planner_goal_mutex);
-  if (g_planner_goal.active) {
-    g_planner_goal.active = false;
-    g_goal_revision.fetch_add(1, std::memory_order_acq_rel);
+  GoalChangeCallback callback = nullptr;
+  {
+    std::lock_guard<std::mutex> lk(g_planner_goal_mutex);
+    if (g_planner_goal.active) {
+      g_planner_goal.active = false;
+      g_goal_revision.fetch_add(1, std::memory_order_acq_rel);
+      callback = g_goal_change_callback;
+    }
+  }
+  if (callback) {
+    callback();
   }
 }
 
 uint64_t latest_goal_revision() {
   return g_goal_revision.load(std::memory_order_acquire);
+}
+
+void set_goal_change_callback(GoalChangeCallback callback) {
+  std::lock_guard<std::mutex> lk(g_planner_goal_mutex);
+  g_goal_change_callback = callback;
+}
+
+bool is_overlay_path_valid(
+    const mapping::MapSnapshot& snapshot,
+    const PlanningOverlay& overlay) {
+  if (!snapshot.valid() || overlay.path_grid.empty()) {
+    return false;
+  }
+  GridMap2D planner_map;
+  if (!load_planner_grid(snapshot, &planner_map)) {
+    return false;
+  }
+  const PlannerConfig cfg = build_planner_config();
+  const std::vector<int8_t> inflated = inflate_obstacles(planner_map, cfg);
+  return is_path_grid_traversable(planner_map, cfg, inflated, overlay.path_grid);
+}
+
+bool does_new_occupancy_intersect_overlay_path(
+    const mapping::MapSnapshot& snapshot,
+    const PlanningOverlay& overlay,
+    const std::vector<GridCoord>& newly_occupied_cells) {
+  if (!snapshot.valid() ||
+      overlay.path_grid.empty() ||
+      newly_occupied_cells.empty()) {
+    return false;
+  }
+  GridMap2D planner_map;
+  if (!load_planner_grid(snapshot, &planner_map)) {
+    return false;
+  }
+  const PlannerConfig cfg = build_planner_config();
+  const int32_t radius_cells = std::max<int32_t>(
+      1,
+      static_cast<int32_t>(
+          std::ceil(cfg.inflation_radius_m / planner_map.resolution_m)) + 1);
+  std::vector<uint8_t> path_mask(
+      static_cast<size_t>(planner_map.width * planner_map.height),
+      0);
+  mark_inflated_cell(
+      planner_map,
+      overlay.path_grid.front().x,
+      overlay.path_grid.front().y,
+      radius_cells,
+      &path_mask);
+  for (size_t i = 1; i < overlay.path_grid.size(); ++i) {
+    mark_inflated_segment(
+        planner_map,
+        overlay.path_grid[i - 1],
+        overlay.path_grid[i],
+        radius_cells,
+        &path_mask);
+  }
+  for (const GridCoord& cell : newly_occupied_cells) {
+    if (!planner_map.in_bounds(cell.x, cell.y)) {
+      continue;
+    }
+    if (path_mask[static_cast<size_t>(planner_map.index(cell.x, cell.y))] != 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void invalidate_current_plan() {
+  {
+    std::lock_guard<std::mutex> lk(g_planned_path_mutex);
+    if (!g_planned_path_world.empty()) {
+      g_planned_path_world.clear();
+      ++g_planned_path_revision;
+    }
+  }
+  g_planner.invalidate();
 }
 
 PlanningOverlay update_plan_overlay(

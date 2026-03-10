@@ -30,7 +30,7 @@ struct PathFollowerConfig {
 
   double lookahead_m = 0.14;
   double waypoint_reached_m = 0.08;
-  double goal_tolerance_m = 0.05;
+  double goal_tolerance_m = 0.1;
   double goal_heading_tolerance_rad = 0.22;
 
   double max_linear_speed_mps = kMaxLinearSpeedMps;

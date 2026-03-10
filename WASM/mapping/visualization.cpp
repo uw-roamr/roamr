@@ -16,8 +16,14 @@ constexpr int32_t kMaxPixels = Map::kMaxImageWidth * Map::kMaxImageHeight;
 constexpr int32_t kPoseLineLength = 10; // pixels for x and y axes
 
 static std::array<uint8_t, kMaxPixels * 4> s_image_buf{};
+static std::array<uint8_t, kMaxPixels * 4> s_base_image_buf{};
 static int32_t s_cur_w = 0;
 static int32_t s_cur_h = 0;
+static uint64_t s_cached_map_revision = 0;
+static uint64_t s_cached_path_hash = 0;
+static int32_t s_cached_w = 0;
+static int32_t s_cached_h = 0;
+static bool s_have_cached_base = false;
 
 inline void paint_pixel(
     int32_t x, int32_t y,
@@ -199,6 +205,42 @@ void draw_map_layer(
     }
 }
 
+uint64_t overlay_path_hash(const planning::bridge::PlanningOverlay& overlay) {
+    uint64_t h = 1469598103934665603ull;
+    const auto mix = [&h](uint64_t v) {
+        h ^= v;
+        h *= 1099511628211ull;
+    };
+    mix(static_cast<uint64_t>(overlay.goal_enabled ? 1 : 0));
+    mix(static_cast<uint64_t>(static_cast<uint32_t>(overlay.goal_cell.x)));
+    mix(static_cast<uint64_t>(static_cast<uint32_t>(overlay.goal_cell.y)));
+    mix(static_cast<uint64_t>(overlay.path_grid.size()));
+    for (const planning::GridCoord& cell : overlay.path_grid) {
+        mix(static_cast<uint64_t>(static_cast<uint32_t>(cell.x)));
+        mix(static_cast<uint64_t>(static_cast<uint32_t>(cell.y)));
+    }
+    return h;
+}
+
+void render_base_layers(
+    const MapSnapshot& snapshot,
+    const planning::bridge::PlanningOverlay& overlay,
+    float scale, float off_x, float off_y) {
+    static std::array<uint8_t, kMaxPixels> s_painted;
+    std::fill_n(s_painted.begin(), s_cur_w * s_cur_h, static_cast<uint8_t>(0));
+    draw_path_layer(snapshot, overlay, scale, off_x, off_y, s_painted);
+    draw_map_layer(snapshot, scale, off_x, off_y, s_painted);
+    std::memcpy(
+        s_base_image_buf.data(),
+        s_image_buf.data(),
+        static_cast<size_t>(s_cur_w * s_cur_h * 4));
+    s_cached_map_revision = snapshot.map_revision;
+    s_cached_path_hash = overlay_path_hash(overlay);
+    s_cached_w = s_cur_w;
+    s_cached_h = s_cur_h;
+    s_have_cached_base = true;
+}
+
 }
 
 void render_map_frame(
@@ -220,14 +262,23 @@ void render_map_frame(
 
     float scale = 1.0f, off_x = 0.0f, off_y = 0.0f;
     compute_snapshot_viewport(snapshot.meta, s_cur_w, s_cur_h, &scale, &off_x, &off_y);
+    const uint64_t path_hash = overlay_path_hash(overlay);
+    if (!s_have_cached_base ||
+        s_cached_w != s_cur_w ||
+        s_cached_h != s_cur_h ||
+        s_cached_map_revision != snapshot.map_revision ||
+        s_cached_path_hash != path_hash) {
+        render_base_layers(snapshot, overlay, scale, off_x, off_y);
+    }
 
-    // One byte per pixel — 0 = unclaimed, 1 = claimed by a higher-priority layer.
+    std::memcpy(
+        s_image_buf.data(),
+        s_base_image_buf.data(),
+        static_cast<size_t>(s_cur_w * s_cur_h * 4));
+
     static std::array<uint8_t, kMaxPixels> s_painted;
     std::fill_n(s_painted.begin(), s_cur_w * s_cur_h, static_cast<uint8_t>(0));
-
-    draw_pose_layer(snapshot, pose_trail, scale, off_x, off_y, s_painted); // Layer 1
-    draw_path_layer(snapshot, overlay, scale, off_x, off_y, s_painted); // Layer 2
-    draw_map_layer(snapshot, scale, off_x, off_y, s_painted); // Layer 3 (base)
+    draw_pose_layer(snapshot, pose_trail, scale, off_x, off_y, s_painted); // Pose only
 
     out_frame.timestamp = snapshot.timestamp;
     out_frame.width     = s_cur_w;

@@ -20,5 +20,7 @@ namespace mapping{
 
     void update_map_from_lidar(Map& map,
                                const sensors::LidarCameraData& lc_data,
-                               const core::PoseSE3d& body_to_world);
+                               const core::PoseSE3d& body_to_world,
+                               std::vector<planning::GridCoord>* out_changed_cells = nullptr,
+                               std::vector<planning::GridCoord>* out_newly_occupied_cells = nullptr);
 };

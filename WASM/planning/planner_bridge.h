@@ -16,9 +16,20 @@ struct PlanningOverlay {
   std::vector<GridCoord> path_grid;
 };
 
+using GoalChangeCallback = void (*)();
+
 void set_goal_map_pixel(int32_t x, int32_t y);
 void clear_goal();
 uint64_t latest_goal_revision();
+void set_goal_change_callback(GoalChangeCallback callback);
+bool is_overlay_path_valid(
+    const mapping::MapSnapshot& snapshot,
+    const PlanningOverlay& overlay);
+bool does_new_occupancy_intersect_overlay_path(
+    const mapping::MapSnapshot& snapshot,
+    const PlanningOverlay& overlay,
+    const std::vector<GridCoord>& newly_occupied_cells);
+void invalidate_current_plan();
 
 PlanningOverlay update_plan_overlay(
     const mapping::MapSnapshot& snapshot,
