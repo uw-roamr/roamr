@@ -72,11 +72,59 @@ int32_t Map::get_occupancy_meta(OccupancyGridMetadata* out_meta) const {
   out_meta->origin_initialized = map_origin_initialized_ ? 1 : 0;
   return 1;
 }
+int32_t Map::get_occupancy_meta(OccupancyGridMetadata* out_meta) const {
+  if (!out_meta) {
+    return 0;
+  }
+  out_meta->width = kMapSizeX;
+  out_meta->height = kMapSizeY;
+  out_meta->resolution_m = kGridResolution;
+  out_meta->origin_x_m =
+      -((double)kMapSizeX * 0.5 * kGridResolution) + map_origin_offset_x_;
+  out_meta->origin_y_m =
+      -((double)kMapSizeY * 0.5 * kGridResolution) + map_origin_offset_y_;
+  out_meta->origin_initialized = map_origin_initialized_ ? 1 : 0;
+  return 1;
+}
 
 void Map::set_points_world(int32_t in_world) {
   points_in_world_ = in_world ? 1 : 0;
 }
+void Map::set_points_world(int32_t in_world) {
+  points_in_world_ = in_world ? 1 : 0;
+}
 
+void Map::set_point(int32_t idx, double x, double y) {
+  if (idx < 0 || idx >= kMaxMapPoints) {
+    return;
+  }
+  const int32_t base = idx * 2;
+  points_[base + 0] = static_cast<float>(x);
+  points_[base + 1] = static_cast<float>(y);
+  if (idx + 1 > points_count_) {
+    points_count_ = idx + 1;
+  }
+}
+
+void Map::set_free_point(int32_t idx, double x, double y) {
+  if (idx < 0 || idx >= kMaxFreeRays) {
+    return;
+  }
+  const int32_t base = idx * 2;
+  free_points_[base + 0] = static_cast<float>(x);
+  free_points_[base + 1] = static_cast<float>(y);
+  if (idx + 1 > free_points_count_) {
+    free_points_count_ = idx + 1;
+  }
+}
+
+int32_t Map::is_finite(float v) {
+  return std::isfinite(v) ? 1 : 0;
+}
+
+int32_t Map::grid_index(int32_t gx, int32_t gy) const {
+  return gx + gy * kMapSizeX;
+}
 void Map::set_point(int32_t idx, double x, double y) {
   if (idx < 0 || idx >= kMaxMapPoints) {
     return;
@@ -123,7 +171,28 @@ int32_t Map::world_to_grid(double x, double y, int32_t* gx, int32_t* gy) const {
   *gy = iy;
   return 1;
 }
+int32_t Map::world_to_grid(double x, double y, int32_t* gx, int32_t* gy) const {
+  if (map_origin_initialized_) {
+    x -= map_origin_offset_x_;
+    y -= map_origin_offset_y_;
+  }
+  const int32_t ix = static_cast<int32_t>(x / kGridResolution) + kMapSizeX / 2;
+  const int32_t iy = static_cast<int32_t>(y / kGridResolution) + kMapSizeY / 2;
+  if (ix < 0 || ix >= kMapSizeX || iy < 0 || iy >= kMapSizeY) {
+    return 0;
+  }
+  *gx = ix;
+  *gy = iy;
+  return 1;
+}
 
+void Map::maybe_init_origin(double x, double y) {
+  if (!map_origin_initialized_) {
+    map_origin_offset_x_ = static_cast<float>(x);
+    map_origin_offset_y_ = static_cast<float>(y);
+    map_origin_initialized_ = 1;
+  }
+}
 void Map::maybe_init_origin(double x, double y) {
   if (!map_origin_initialized_) {
     map_origin_offset_x_ = static_cast<float>(x);
@@ -155,6 +224,11 @@ void Map::integrate_ray(int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
   while (1) {
     const int32_t idx = grid_index(x, y);
     visited_[idx] = 1;
+  int x = x0;
+  int y = y0;
+  while (1) {
+    const int32_t idx = grid_index(x, y);
+    visited_[idx] = 1;
 
     if (x == x1 && y == y1) {
       const int16_t count = clamp_cell_score(scan_count_[idx] + kHitIncrement);
@@ -171,6 +245,17 @@ void Map::integrate_ray(int32_t x0, int32_t y0, int32_t x1, int32_t y1) {
       }
     }
 
+    const int e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      x += sx;
+    }
+    if (e2 <= dx) {
+      err += dx;
+      y += sy;
+    }
+  }
+}
     const int e2 = 2 * err;
     if (e2 >= dy) {
       err += dy;
