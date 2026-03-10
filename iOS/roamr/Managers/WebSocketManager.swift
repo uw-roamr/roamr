@@ -652,6 +652,9 @@ class WebSocketManager: ObservableObject {
         case "wasm_stop":
             stopSelectedWasm()
             return true
+        case "emergency_stop":
+            triggerEmergencyStop()
+            return true
         case "wasm_refresh":
             refreshWasmHubFiles()
             return true
@@ -716,6 +719,15 @@ class WebSocketManager: ObservableObject {
         WasmManager.shared.stop()
         AVManager.shared.stop()
         IMUManager.shared.stop()
+        publishWasmControlState()
+    }
+
+    private func triggerEmergencyStop() {
+        publishWasmConsoleLine("[web][estop] emergency stop triggered")
+        WasmManager.shared.stop()
+        AVManager.shared.stop()
+        IMUManager.shared.stop()
+        bluetoothManager?.emergencyStop()
         publishWasmControlState()
     }
 

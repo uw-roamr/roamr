@@ -155,6 +155,18 @@ class BluetoothManager: NSObject, ObservableObject {
         return TeleopForwardResult(forwarded: forwarded, sampledForLatency: forwarded && shouldSample)
     }
 
+    func emergencyStop() {
+        teleopStopWatchdogToken += 1
+        let token = teleopStopWatchdogToken
+        pendingTeleopTrace = nil
+        lastMotorLeftPercent = 0
+        lastMotorRightPercent = 0
+        lastMotorHoldMs = 0
+        lastMotorCommandTimestamp = Date().timeIntervalSince1970
+        lastMotorCommandText = "TX motor: 0 0 0"
+        sendTeleopStopBurst(token: token)
+    }
+
     private func updateTeleopStopWatchdog(left: Int, right: Int, holdMs: Int, commandWasForwarded: Bool) {
         teleopStopWatchdogToken += 1
         let token = teleopStopWatchdogToken
