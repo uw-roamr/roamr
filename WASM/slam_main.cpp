@@ -361,8 +361,8 @@ struct OuterLoopTurnPidConfig {
 };
 
 static constexpr OuterLoopTurnPidConfig kScan4x90TurnPidCfg{
-    18.0,
-    0.05,
+    8.0,
+    0.25,
     1.0,
     0.5 * core::pi,
     0.2,
