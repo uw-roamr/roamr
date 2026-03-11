@@ -186,6 +186,48 @@ static void enqueue_planner_delta_event(
     g_planner_wake_cv.notify_one();
 }
 
+static bool publish_latest_map_snapshot_if_needed(
+    uint64_t min_revision,
+    mapping::MapSnapshot* out_snapshot = nullptr) {
+    {
+        std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+        if (g_latest_map_snapshot.valid() &&
+            g_latest_map_snapshot.map_revision >= min_revision) {
+            if (out_snapshot) {
+                *out_snapshot = g_latest_map_snapshot;
+            }
+            return true;
+        }
+    }
+
+    mapping::MapSnapshot built_snapshot;
+    {
+        std::lock_guard<std::mutex> lk(g_map_mutex);
+        if (!g_latest_map_state.valid ||
+            g_latest_map_state.revision < min_revision) {
+            return false;
+        }
+        if (!mapping::build_map_snapshot(
+                g_map,
+                g_latest_map_state.body_to_world,
+                g_latest_map_state.timestamp,
+                g_latest_map_state.revision,
+                &built_snapshot)) {
+            return false;
+        }
+    }
+
+    std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+    if (!g_latest_map_snapshot.valid() ||
+        g_latest_map_snapshot.map_revision < built_snapshot.map_revision) {
+        g_latest_map_snapshot = built_snapshot;
+    }
+    if (out_snapshot) {
+        *out_snapshot = g_latest_map_snapshot;
+    }
+    return true;
+}
+
 static core::Vector4d quat_nlerp(
     const core::Vector4d& a,
     const core::Vector4d& b,
@@ -704,6 +746,8 @@ int main(){
 
     std::thread mapping_thread([&m_pose](){
       double last_map_timestamp = -1.0;
+      std::vector<planning::GridCoord> newly_occupied_cells;
+      newly_occupied_cells.reserve(2048);
 
       RobotState state;
       do{
@@ -779,7 +823,7 @@ int main(){
             continue;
         }
         uint64_t map_revision = 0;
-        std::vector<planning::GridCoord> newly_occupied_cells;
+        newly_occupied_cells.clear();
         {
             std::lock_guard<std::mutex> lk(g_map_mutex);
             // project the filtered lidar scan into the occupancy grid.
@@ -795,16 +839,6 @@ int main(){
             g_latest_map_state.timestamp = candidate_timestamp;
             g_latest_map_state.revision = map_revision;
             g_latest_map_state.valid = true;
-            mapping::MapSnapshot snapshot;
-            if (mapping::build_map_snapshot(
-                    g_map,
-                    body_to_world,
-                    candidate_timestamp,
-                    map_revision,
-                    &snapshot)) {
-                std::lock_guard<std::mutex> publish_lk(g_map_publish_mutex);
-                g_latest_map_snapshot = std::move(snapshot);
-            }
         }
         if (!g_first_map_update_done.load(std::memory_order_relaxed)) {
             g_first_map_update_done.store(true, std::memory_order_release);
@@ -843,6 +877,8 @@ int main(){
         uint64_t observed_wake_revision = 0;
         std::vector<MapDeltaEvent> pending_delta_events;
         std::vector<planning::GridCoord> merged_newly_occupied_cells;
+        pending_delta_events.reserve(kPlannerDeltaQueueCapacity);
+        merged_newly_occupied_cells.reserve(2048);
         bool delta_overflowed = false;
 
         while(true){
@@ -864,8 +900,18 @@ int main(){
             }
 
             mapping::MapSnapshot snapshot;
+            uint64_t required_snapshot_revision = 0;
+            if (!pending_delta_events.empty()) {
+                required_snapshot_revision = pending_delta_events.back().map_revision;
+            } else {
+                required_snapshot_revision =
+                    g_map_update_revision.load(std::memory_order_acquire);
+            }
+            publish_latest_map_snapshot_if_needed(
+                required_snapshot_revision,
+                &snapshot);
             planning::bridge::PlanningOverlay current_overlay;
-            {
+            if (!snapshot.valid()) {
                 std::lock_guard<std::mutex> lk(g_map_publish_mutex);
                 snapshot = g_latest_map_snapshot;
             }
@@ -989,6 +1035,7 @@ int main(){
                     kRenderWidth,
                     kRenderHeight);
             const bool published_path = !overlay.path_grid.empty();
+            const bool have_frontier_candidates = !overlay.frontier_candidates.empty();
             last_planned_revision = snapshot.map_revision;
             last_goal_revision = goal_revision;
             if (have_start_cell) {
@@ -1002,6 +1049,7 @@ int main(){
             if (!published_path) {
                 set_autonomy_substate(autonomy::AutonomySubstate::NO_PATH_AVAILABLE, "planner_produced_no_path");
                 if (!goal_changed &&
+                    !have_frontier_candidates &&
                     g_planner_initialized.load(std::memory_order_acquire) &&
                     !g_scan_requested.load(std::memory_order_acquire) &&
                     !g_scan_active.load(std::memory_order_acquire)) {
@@ -1022,7 +1070,7 @@ int main(){
     std::thread telemetry_thread([&m_pose](){
         mapping::PoseTrailState pose_trail;
         uint64_t last_rendered_map_revision = 0;
-        uint64_t last_rendered_path_revision = 0;
+        uint64_t last_rendered_overlay_revision = 0;
         double last_rendered_pose_timestamp = -1.0;
         double last_pose_trail_timestamp = -1.0;
         core::PoseSE2d last_trail_pose{};
@@ -1030,7 +1078,12 @@ int main(){
         while (true) {
             mapping::MapSnapshot snapshot;
             planning::bridge::PlanningOverlay overlay;
-            {
+            const uint64_t latest_map_revision =
+                g_map_update_revision.load(std::memory_order_acquire);
+            publish_latest_map_snapshot_if_needed(
+                latest_map_revision,
+                &snapshot);
+            if (!snapshot.valid()) {
                 std::lock_guard<std::mutex> lk(g_map_publish_mutex);
                 snapshot = g_latest_map_snapshot;
             }
@@ -1053,11 +1106,11 @@ int main(){
             snapshot.pose = pose_log_to_se2(pose_snapshot);
             snapshot.timestamp = std::max(snapshot.timestamp, pose_snapshot.timestamp);
 
-            const uint64_t path_revision = planning::bridge::copy_latest_plan_world(nullptr);
+            const uint64_t overlay_revision = planning::bridge::latest_overlay_revision();
             const bool map_changed = snapshot.map_revision != last_rendered_map_revision;
-            const bool path_changed = path_revision != last_rendered_path_revision;
+            const bool overlay_changed = overlay_revision != last_rendered_overlay_revision;
             const bool pose_changed = pose_snapshot.timestamp > last_rendered_pose_timestamp;
-            if (!map_changed && !path_changed && !pose_changed) {
+            if (!map_changed && !overlay_changed && !pose_changed) {
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(kTelemetryRenderIntervalMs));
                 continue;
@@ -1094,7 +1147,7 @@ int main(){
                 kRenderHeight,
                 g_map_image);
             last_rendered_map_revision = snapshot.map_revision;
-            last_rendered_path_revision = path_revision;
+            last_rendered_overlay_revision = overlay_revision;
             last_rendered_pose_timestamp = pose_snapshot.timestamp;
             std::this_thread::sleep_for(
                 std::chrono::milliseconds(kTelemetryRenderIntervalMs));

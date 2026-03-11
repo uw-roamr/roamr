@@ -471,6 +471,7 @@ FrontierPlanResult plan_to_nearest_frontier(
   std::vector<GridCoord> frontier_cells;
   detect_frontiers(map, detection_cfg, inflated_detection, reachable, &frontier_cells);
   result.frontier_cell_count = static_cast<int32_t>(frontier_cells.size());
+  result.frontier_cells = frontier_cells;
   if (frontier_cells.empty()) {
     result.message = "no reachable frontier cells";
     return result;

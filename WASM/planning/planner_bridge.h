@@ -43,5 +43,6 @@ PlanningOverlay update_plan_overlay(
 // Copies the latest planned world path and returns its revision id.
 // Revision only changes when path content changes.
 uint64_t copy_latest_plan_world(std::vector<core::Vector3d>* out_path);
+uint64_t latest_overlay_revision();
 
 }  // namespace planning::bridge

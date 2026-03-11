@@ -34,6 +34,9 @@ std::atomic<uint64_t> g_goal_revision{0};
 GoalChangeCallback g_goal_change_callback = nullptr;
 std::mutex g_frontier_cache_mutex;
 std::vector<GridCoord> g_persistent_frontier_goals;
+std::mutex g_overlay_cache_mutex;
+PlanningOverlay g_cached_overlay;
+std::atomic<uint64_t> g_cached_overlay_revision{0};
 std::mutex g_planned_path_mutex;
 std::vector<core::Vector3d> g_planned_path_world;
 uint64_t g_planned_path_revision = 0;
@@ -254,6 +257,18 @@ bool same_path_world(
   return true;
 }
 
+bool same_overlay_content(
+    const PlanningOverlay& a,
+    const PlanningOverlay& b) {
+  return a.goal_enabled == b.goal_enabled &&
+         a.goal_cell == b.goal_cell &&
+         a.path_grid == b.path_grid &&
+         a.frontier_candidates == b.frontier_candidates &&
+         a.selected_frontier_cluster == b.selected_frontier_cluster &&
+         a.selected_frontier_seed_enabled == b.selected_frontier_seed_enabled &&
+         a.selected_frontier_seed == b.selected_frontier_seed;
+}
+
 void update_cached_path_world(const std::vector<core::Vector3d>& path_world) {
   std::lock_guard<std::mutex> lk(g_planned_path_mutex);
   if (same_path_world(g_planned_path_world, path_world)) {
@@ -263,6 +278,21 @@ void update_cached_path_world(const std::vector<core::Vector3d>& path_world) {
   ++g_planned_path_revision;
 }
 
+void update_cached_overlay(const PlanningOverlay& overlay) {
+  std::lock_guard<std::mutex> lk(g_overlay_cache_mutex);
+  if (same_overlay_content(g_cached_overlay, overlay)) {
+    g_cached_overlay.source_map_revision = overlay.source_map_revision;
+    return;
+  }
+  g_cached_overlay = overlay;
+  g_cached_overlay_revision.fetch_add(1, std::memory_order_acq_rel);
+}
+
+PlanningOverlay copy_cached_overlay() {
+  std::lock_guard<std::mutex> lk(g_overlay_cache_mutex);
+  return g_cached_overlay;
+}
+
 PlanningOverlay overlay_from_plan_result(
     uint64_t map_revision,
     const PlanResult& planned) {
@@ -270,6 +300,7 @@ PlanningOverlay overlay_from_plan_result(
   overlay.source_map_revision = map_revision;
   if (!planned.success || planned.path_grid.empty()) {
     update_cached_path_world({});
+    update_cached_overlay(overlay);
     return overlay;
   }
 
@@ -282,6 +313,7 @@ PlanningOverlay overlay_from_plan_result(
       planned.path_grid.begin(),
       planned.path_grid.begin() + limit);
   update_cached_path_world(planned.path_world);
+  update_cached_overlay(overlay);
   return overlay;
 }
 
@@ -290,6 +322,7 @@ PlanningOverlay overlay_from_frontier_result(
     const FrontierPlanResult& planned) {
   PlanningOverlay overlay;
   overlay.source_map_revision = map_revision;
+  overlay.frontier_candidates = planned.frontier_cells;
   overlay.selected_frontier_cluster = planned.selected_cluster_cells;
   if (planned.success || !planned.selected_cluster_cells.empty()) {
     overlay.selected_frontier_seed_enabled = true;
@@ -297,6 +330,7 @@ PlanningOverlay overlay_from_frontier_result(
   }
   if (!planned.success || planned.path_grid.empty()) {
     update_cached_path_world({});
+    update_cached_overlay(overlay);
     return overlay;
   }
 
@@ -309,6 +343,7 @@ PlanningOverlay overlay_from_frontier_result(
       planned.path_grid.begin(),
       planned.path_grid.begin() + limit);
   update_cached_path_world(planned.path_world);
+  update_cached_overlay(overlay);
   return overlay;
 }
 
@@ -425,6 +460,7 @@ void invalidate_current_plan() {
       ++g_planned_path_revision;
     }
   }
+  update_cached_overlay(PlanningOverlay{});
   g_planner.invalidate();
 }
 
@@ -481,6 +517,7 @@ PlanningOverlay update_plan_overlay(
       !mapping::load_snapshot_grid(snapshot, &planner_map)) {
     wasm_log_line("[planning] invalid snapshot or planner grid");
     update_cached_path_world({});
+    update_cached_overlay(overlay);
     return overlay;
   }
   if (!world_to_grid(
@@ -494,6 +531,7 @@ PlanningOverlay update_plan_overlay(
               << ")";
     wasm_log_line(start_log.str());
     update_cached_path_world({});
+    update_cached_overlay(overlay);
     return overlay;
   }
 
@@ -516,6 +554,7 @@ PlanningOverlay update_plan_overlay(
             render_height,
             &goal_cell)) {
       update_cached_path_world({});
+      update_cached_overlay(overlay);
       return overlay;
     }
 
@@ -532,6 +571,7 @@ PlanningOverlay update_plan_overlay(
 
   if (!kEnableAutoFrontierExploration) {
     update_cached_path_world({});
+    update_cached_overlay(overlay);
     return overlay;
   }
 
@@ -540,7 +580,11 @@ PlanningOverlay update_plan_overlay(
       now - g_last_auto_frontier_plan_time).count();
   if (g_last_auto_frontier_plan_time != std::chrono::steady_clock::time_point::min() &&
       elapsed_sec < kAutoFrontierReplanIntervalSec) {
-    return overlay;
+    PlanningOverlay cached = copy_cached_overlay();
+    if (cached.source_map_revision != 0) {
+      cached.source_map_revision = snapshot.map_revision;
+    }
+    return cached;
   }
   g_last_auto_frontier_plan_time = now;
 
@@ -548,10 +592,6 @@ PlanningOverlay update_plan_overlay(
   refresh_persistent_frontier_goals(
       planner_map,
       core::Vector3d{snapshot.pose.x, snapshot.pose.y, 0.0},
-      frontier_cfg);
-  overlay.frontier_candidates = collect_reachable_frontier_cells(
-      planner_map,
-      core::Vector3d{snapshot.pose.x, snapshot.pose.y, snapshot.pose.theta},
       frontier_cfg);
 
   const FrontierPlanResult planned = plan_to_nearest_frontier(
@@ -575,17 +615,14 @@ PlanningOverlay update_plan_overlay(
     std::lock_guard<std::mutex> lk(g_frontier_cache_mutex);
     const auto it = std::find(
         g_persistent_frontier_goals.begin(),
-        g_persistent_frontier_goals.end(),
-        planned.selected_seed);
+      g_persistent_frontier_goals.end(),
+      planned.selected_seed);
     if (it == g_persistent_frontier_goals.end()) {
       g_persistent_frontier_goals.push_back(planned.selected_seed);
     }
   }
   overlay = overlay_from_frontier_result(snapshot.map_revision, planned);
-  overlay.frontier_candidates = collect_reachable_frontier_cells(
-      planner_map,
-      core::Vector3d{snapshot.pose.x, snapshot.pose.y, snapshot.pose.theta},
-      frontier_cfg);
+  update_cached_overlay(overlay);
   return overlay;
 }
 
@@ -595,6 +632,10 @@ uint64_t copy_latest_plan_world(std::vector<core::Vector3d>* out_path) {
     *out_path = g_planned_path_world;
   }
   return g_planned_path_revision;
+}
+
+uint64_t latest_overlay_revision() {
+  return g_cached_overlay_revision.load(std::memory_order_acquire);
 }
 
 }  // namespace planning::bridge

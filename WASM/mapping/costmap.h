@@ -14,7 +14,7 @@ inline planning::PlannerConfig default_navigation_costmap_config() {
   cfg.treat_unknown_as_occupied = true;
   cfg.allow_diagonal = true;
   cfg.prevent_corner_cutting = true;
-  cfg.inflation_radius_m = 0.12;
+  cfg.inflation_radius_m = 0.18;
   cfg.simplify_path = true;
   cfg.snap_start_to_free = true;
   cfg.snap_goal_to_free = true;
