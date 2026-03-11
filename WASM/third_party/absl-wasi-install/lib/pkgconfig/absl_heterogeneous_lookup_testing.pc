@@ -1,0 +1,12 @@
+prefix=/usr/local
+exec_prefix=${prefix}
+libdir=/usr/local/lib
+includedir=/usr/local/include
+
+Name: absl_heterogeneous_lookup_testing
+Description: Abseil heterogeneous_lookup_testing library
+URL: https://abseil.io/
+Version: 20260107
+Requires: absl_config = 20260107, absl_test_instance_tracker = 20260107
+Libs: -L${libdir}  
+Cflags: -I${includedir} -Wno-float-conversion -Wno-implicit-float-conversion -Wno-implicit-int-float-conversion -Wno-unknown-warning-option -Wno-unused-command-line-argument -DNOMINMAX -Wno-deprecated-declarations -Wno-implicit-int-conversion -Wno-missing-prototypes -Wno-missing-variable-declarations -Wno-nullability-completeness -Wno-shadow -Wno-shorten-64-to-32 -Wno-sign-compare -Wno-sign-conversion -Wno-unreachable-code-loop-increment -Wno-unused-function -Wno-unused-member-function -Wno-unused-parameter -Wno-unused-private-field -Wno-unused-template -Wno-used-but-marked-unused -Wno-gnu-zero-variadic-macro-arguments

@@ -552,7 +552,7 @@ int main(){
 
     init_camera(&g_cam_config);
     log_config(g_cam_config);
-    core::recorder::initialize_from_env();
+    core::recorder::initialize_from_env(g_cam_config);
     planning::bridge::set_goal_change_callback(notify_planner_wake);
 
     if (kEnablePlannerDemoGoal) {
@@ -651,6 +651,11 @@ int main(){
                             g_pose.timestamp = pose_copy.timestamp;
                         }
                         pose_copy = g_pose;
+                    }
+                    if (pose_source == PoseSource::IMU) {
+                        core::recorder::enqueue_pose(
+                            pose_copy,
+                            core::recorder::PoseDataSource::kIMU);
                     }
                     rerun_log_pose(&pose_copy);
                 }
@@ -1201,6 +1206,15 @@ int main(){
                 }
                 pose_copy = g_pose;
                 record_pose_history_locked(pose_copy);
+                if (pose_source == PoseSource::wheel_odom) {
+                    core::recorder::enqueue_pose(
+                        pose_copy,
+                        core::recorder::PoseDataSource::kWheelOdometry);
+                } else if (pose_source == PoseSource::fused_IMU_wheel_odom) {
+                    core::recorder::enqueue_pose(
+                        pose_copy,
+                        core::recorder::PoseDataSource::kFusedImuWheelOdometry);
+                }
             } else {
                 std::lock_guard<std::mutex> lk(m_pose);
                 pose_copy = g_pose;
