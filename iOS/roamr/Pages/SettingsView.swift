@@ -7,9 +7,14 @@
 
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsPage: View {
 	@State private var rerunURL: String = RerunWebSocketClient.shared.serverURLString
+    @State private var recordingEnabled: Bool = WasmManager.shared.recordingEnabled
+    @State private var recordingPath: String = WasmManager.shared.recordingPath
+    @State private var selectedRecordingFolderPath: String? = WasmManager.shared.selectedRecordingFolderPath
+    @State private var isShowingRecordingFolderPicker = false
 
     @Environment(\.safeAreaInsets) private var safeAreaInsets
     @State private var isLoading = false
@@ -31,21 +36,39 @@ struct SettingsPage: View {
                 ProfileButton(isAuthenticated: authManager.isAuthenticated)
             }
 
-			VStack(spacing: 24) {
-				Spacer()
-				rerunSection
-				appInfoSection
-
-				accountSection
-				Spacer()
-			}
-			.padding(.vertical)
+            ScrollView {
+                VStack(spacing: 24) {
+                    rerunSection
+                    recordingSection
+                    appInfoSection
+                    accountSection
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical)
+            }
         }
         .padding(.top, safeAreaInsets.top)
         .padding(.bottom, safeAreaInsets.bottom + AppConstants.shared.tabBarHeight)
-		.onAppear {
+	    .onAppear {
 			rerunURL = RerunWebSocketClient.shared.serverURLString
+            recordingEnabled = WasmManager.shared.recordingEnabled
+            recordingPath = WasmManager.shared.recordingPath
+            selectedRecordingFolderPath = WasmManager.shared.selectedRecordingFolderPath
 		}
+        .fileImporter(
+            isPresented: $isShowingRecordingFolderPicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            do {
+                let urls = try result.get()
+                guard let url = urls.first else { return }
+                try WasmManager.shared.setRecordingFolderURL(url)
+                selectedRecordingFolderPath = WasmManager.shared.selectedRecordingFolderPath
+            } catch {
+                errorMessage = "Folder selection failed: \(error.localizedDescription)"
+            }
+        }
     }
 
 	@ViewBuilder
@@ -76,6 +99,82 @@ struct SettingsPage: View {
 		.cornerRadius(12)
 		.padding(.horizontal)
 	}
+
+    @ViewBuilder
+    private var recordingSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("WASM Recording")
+                .font(.headline)
+
+            Toggle("Enable sensor recording", isOn: $recordingEnabled)
+                .onChange(of: recordingEnabled) { _, isEnabled in
+                    WasmManager.shared.setRecordingEnabled(isEnabled)
+                }
+
+            TextField("Recording path", text: $recordingPath)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+                .textFieldStyle(.roundedBorder)
+
+            HStack(spacing: 12) {
+                Button("Apply Path") {
+                    WasmManager.shared.setRecordingPath(recordingPath)
+                    recordingPath = WasmManager.shared.recordingPath
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("Reset Path") {
+                    WasmManager.shared.resetRecordingPath()
+                    recordingPath = WasmManager.shared.recordingPath
+                }
+                .buttonStyle(.bordered)
+            }
+
+            HStack(spacing: 12) {
+                Button("Choose Folder") {
+                    isShowingRecordingFolderPicker = true
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("Clear Folder") {
+                    WasmManager.shared.clearRecordingFolderSelection()
+                    selectedRecordingFolderPath = WasmManager.shared.selectedRecordingFolderPath
+                }
+                .buttonStyle(.bordered)
+                .disabled(selectedRecordingFolderPath == nil)
+            }
+
+            Text("Writes IMU and LiDAR/depth logs from inside the WASM runtime.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Text("Choose Folder lets you target Files locations such as Downloads. If no folder is selected, the text path below uses an app-local directory.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Text("Selected folder: \(selectedRecordingFolderPath ?? "None")")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .textSelection(.enabled)
+
+            Text("Guest path: \(WasmManager.shared.recordingGuestDirectoryPath())")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Text("Host path: \(WasmManager.shared.recordingsDirectoryURL()?.path ?? "Unavailable")")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .textSelection(.enabled)
+
+            Text("Applies the next time a WASM module starts.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+        .padding(.horizontal)
+    }
 
     @ViewBuilder
     private var accountSection: some View {

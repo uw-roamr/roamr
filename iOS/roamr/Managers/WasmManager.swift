@@ -17,6 +17,13 @@ final class WasmManager: ObservableObject {
     static let shared = WasmManager()
     private static let maxWasmThreads: UInt32 = 8
     private static let maxLogLines = 200
+    private static let recordingEnabledDefaultsKey = "com.roamr.wasm.recordingEnabled"
+    private static let recordingPathDefaultsKey = "com.roamr.wasm.recordingPath"
+    private static let recordingFolderBookmarkDefaultsKey = "com.roamr.wasm.recordingFolderBookmark"
+    private static let recordingGuestDirectory = "/data"
+    private static let defaultRecordingPath = "WasmRecordings"
+    private static let recordingEnabledEnvKey = "ROAMR_RECORDING_ENABLED"
+    private static let recordingDirectoryEnvKey = "ROAMR_RECORDING_DIR"
 
     private var isInitialized = false
     private var globalNativeSymbolPtr: UnsafeMutablePointer<NativeSymbol>?
@@ -24,6 +31,7 @@ final class WasmManager: ObservableObject {
 
     private var currentModuleInstance: OpaquePointer?
     private var shouldStop = false
+    private var activeRecordingSecurityScopeURL: URL?
     private let lock = NSLock()
     @Published var isRunning = false
     @Published var currentRunDisplayName: String?
@@ -31,8 +39,86 @@ final class WasmManager: ObservableObject {
     @Published var latestMapJPEGData: Data?
     @Published var latestMapTimestamp: Double = 0
     @Published var latestMapFrameCount: Int = 0
+    @Published private(set) var recordingEnabled: Bool
+    @Published private(set) var recordingPath: String
+    @Published private(set) var selectedRecordingFolderPath: String?
 
-    private init() {}
+    private init() {
+        self.recordingEnabled =
+            UserDefaults.standard.object(forKey: Self.recordingEnabledDefaultsKey) as? Bool ?? false
+        let storedRecordingPath =
+            UserDefaults.standard.string(forKey: Self.recordingPathDefaultsKey) ?? Self.defaultRecordingPath
+        self.recordingPath = Self.normalizeRecordingPath(storedRecordingPath)
+        self.selectedRecordingFolderPath = Self.resolveStoredRecordingFolderURL()?.path
+    }
+
+    func setRecordingEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: Self.recordingEnabledDefaultsKey)
+        DispatchQueue.main.async {
+            self.recordingEnabled = enabled
+        }
+    }
+
+    func setRecordingPath(_ path: String) {
+        let normalizedPath = Self.normalizeRecordingPath(path)
+        UserDefaults.standard.set(normalizedPath, forKey: Self.recordingPathDefaultsKey)
+        DispatchQueue.main.async {
+            self.recordingPath = normalizedPath
+        }
+    }
+
+    func resetRecordingPath() {
+        setRecordingPath(Self.defaultRecordingPath)
+    }
+
+    func defaultRecordingPath() -> String {
+        Self.defaultRecordingPath
+    }
+
+    func setRecordingFolderURL(_ url: URL) throws {
+        let bookmarkData = try url.bookmarkData(
+            options: [],
+            includingResourceValuesForKeys: nil,
+            relativeTo: nil
+        )
+        UserDefaults.standard.set(bookmarkData, forKey: Self.recordingFolderBookmarkDefaultsKey)
+        let resolvedPath = Self.resolveRecordingFolderURL(from: bookmarkData)?.path ?? url.path
+        DispatchQueue.main.async {
+            self.selectedRecordingFolderPath = resolvedPath
+        }
+    }
+
+    func clearRecordingFolderSelection() {
+        releaseRecordingSecurityScope()
+        UserDefaults.standard.removeObject(forKey: Self.recordingFolderBookmarkDefaultsKey)
+        DispatchQueue.main.async {
+            self.selectedRecordingFolderPath = nil
+        }
+    }
+
+    func recordingGuestDirectoryPath() -> String {
+        Self.recordingGuestDirectory
+    }
+
+    func recordingsDirectoryURL() -> URL? {
+        if let selectedFolderURL = Self.resolveStoredRecordingFolderURL() {
+            return selectedFolderURL
+        }
+        let normalizedPath = Self.normalizeRecordingPath(recordingPath)
+        let fileManager = FileManager.default
+        if normalizedPath.hasPrefix("/") {
+            return URL(fileURLWithPath: normalizedPath, isDirectory: true)
+        }
+        guard let baseDirectory = try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ) else {
+            return nil
+        }
+        return baseDirectory.appendingPathComponent(normalizedPath, isDirectory: true)
+    }
 
     func stop() {
         lock.lock()
@@ -171,11 +257,19 @@ final class WasmManager: ObservableObject {
                 // Instantiate module
                 let stackSize: UInt32 = 65536  // 64KB for threading
                 let heapSize: UInt32 = 65536   // 64KB for threading
+                let wasiOptions = prepareWASIRuntimeOptions()
 
-                guard let moduleInstance = wasm_runtime_instantiate(wasmModule, stackSize, heapSize, &errorBuf, UInt32(errorBuf.count)) else {
+                guard let moduleInstance = instantiateModule(
+                    wasmModule,
+                    stackSize: stackSize,
+                    heapSize: heapSize,
+                    errorBuffer: &errorBuf,
+                    wasiOptions: wasiOptions
+                ) else {
                     let message = "Error instantiating WASM module: \(String(cString: errorBuf))"
                     appendLogLine(message)
                     updateRunningState(false, currentRunDisplayName: nil)
+                    releaseRecordingSecurityScope()
                     wasm_runtime_unload(wasmModule)
                     return
                 }
@@ -190,6 +284,7 @@ final class WasmManager: ObservableObject {
                     let message = "Error creating execution environment"
                     appendLogLine(message)
                     updateRunningState(false, currentRunDisplayName: nil)
+                    releaseRecordingSecurityScope()
                     lock.lock()
                     currentModuleInstance = nil
                     lock.unlock()
@@ -222,11 +317,13 @@ final class WasmManager: ObservableObject {
                 wasm_runtime_destroy_exec_env(execEnv)
                 wasm_runtime_deinstantiate(moduleInstance)
                 wasm_runtime_unload(wasmModule)
+                releaseRecordingSecurityScope()
 
                 appendLogLine("WASM execution finished.")
                 updateRunningState(false, currentRunDisplayName: nil)
             }
         } catch {
+            releaseRecordingSecurityScope()
             appendLogLine("Error reading WASM file: \(error.localizedDescription)")
             updateRunningState(false, currentRunDisplayName: nil)
         }
@@ -276,6 +373,180 @@ final class WasmManager: ObservableObject {
             self.latestMapFrameCount += 1
         }
     }
+
+    private struct WASIRuntimeOptions {
+        let env: [String]
+        let preopenedHostDirectories: [String]
+        let mappedDirectories: [String]
+    }
+
+    private func prepareWASIRuntimeOptions() -> WASIRuntimeOptions {
+        var env = [
+            "\(Self.recordingEnabledEnvKey)=0",
+            "\(Self.recordingDirectoryEnvKey)=\(Self.recordingGuestDirectory)"
+        ]
+
+        guard recordingEnabled else {
+            return WASIRuntimeOptions(
+                env: env,
+                preopenedHostDirectories: [],
+                mappedDirectories: []
+            )
+        }
+
+        do {
+            let directoryURL = try ensureRecordingsDirectory()
+            env[0] = "\(Self.recordingEnabledEnvKey)=1"
+            return WASIRuntimeOptions(
+                env: env,
+                preopenedHostDirectories: [directoryURL.path],
+                mappedDirectories: ["\(Self.recordingGuestDirectory)::\(directoryURL.path)"]
+            )
+        } catch {
+            appendLogLine("Recording disabled for this run: \(error.localizedDescription)")
+            return WASIRuntimeOptions(
+                env: env,
+                preopenedHostDirectories: [],
+                mappedDirectories: []
+            )
+        }
+    }
+
+    private func ensureRecordingsDirectory() throws -> URL {
+        releaseRecordingSecurityScope()
+        guard let directoryURL = runtimeRecordingDirectoryURL() else {
+            throw NSError(
+                domain: "WasmManager",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Application Support directory is unavailable"]
+            )
+        }
+        try FileManager.default.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true,
+            attributes: nil
+        )
+        return directoryURL
+    }
+
+    private static func normalizeRecordingPath(_ path: String) -> String {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmedPath.isEmpty ? defaultRecordingPath : trimmedPath
+    }
+
+    private func runtimeRecordingDirectoryURL() -> URL? {
+        if let selectedFolderURL = Self.resolveStoredRecordingFolderURL() {
+            guard selectedFolderURL.startAccessingSecurityScopedResource() else {
+                appendLogLine("Recording folder access denied; falling back to app-local path")
+                return fallbackRecordingDirectoryURL()
+            }
+            activeRecordingSecurityScopeURL = selectedFolderURL
+            return selectedFolderURL
+        }
+        return fallbackRecordingDirectoryURL()
+    }
+
+    private func fallbackRecordingDirectoryURL() -> URL? {
+        let normalizedPath = Self.normalizeRecordingPath(recordingPath)
+        let fileManager = FileManager.default
+        if normalizedPath.hasPrefix("/") {
+            return URL(fileURLWithPath: normalizedPath, isDirectory: true)
+        }
+        guard let baseDirectory = try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        ) else {
+            return nil
+        }
+        return baseDirectory.appendingPathComponent(normalizedPath, isDirectory: true)
+    }
+
+    private func releaseRecordingSecurityScope() {
+        guard let url = activeRecordingSecurityScopeURL else { return }
+        url.stopAccessingSecurityScopedResource()
+        activeRecordingSecurityScopeURL = nil
+    }
+
+    private static func resolveStoredRecordingFolderURL() -> URL? {
+        guard let bookmarkData =
+            UserDefaults.standard.data(forKey: recordingFolderBookmarkDefaultsKey) else {
+            return nil
+        }
+        return resolveRecordingFolderURL(from: bookmarkData)
+    }
+
+    private static func resolveRecordingFolderURL(from bookmarkData: Data) -> URL? {
+        var isStale = false
+        return try? URL(
+            resolvingBookmarkData: bookmarkData,
+            options: [],
+            relativeTo: nil,
+            bookmarkDataIsStale: &isStale
+        )
+    }
+
+    private func instantiateModule(
+        _ wasmModule: OpaquePointer,
+        stackSize: UInt32,
+        heapSize: UInt32,
+        errorBuffer: inout [CChar],
+        wasiOptions: WASIRuntimeOptions
+    ) -> OpaquePointer? {
+        return withOwnedCStringArray(wasiOptions.preopenedHostDirectories) { directoryPointers in
+            let directoryCount = UInt32(directoryPointers.count)
+            return directoryPointers.withUnsafeBufferPointer { directoryBuffer in
+                let directoryBase = directoryBuffer.baseAddress.map { UnsafeMutablePointer(mutating: $0) }
+                return withOwnedCStringArray(wasiOptions.mappedDirectories) { mappedDirectoryPointers in
+                    let mappedDirectoryCount = UInt32(mappedDirectoryPointers.count)
+                    return mappedDirectoryPointers.withUnsafeBufferPointer { mappedDirectoryBuffer in
+                        let mappedDirectoryBase =
+                            mappedDirectoryBuffer.baseAddress.map { UnsafeMutablePointer(mutating: $0) }
+                        return withOwnedCStringArray(wasiOptions.env) { envPointers in
+                            let envCount = UInt32(envPointers.count)
+                            return envPointers.withUnsafeBufferPointer { envBuffer in
+                                let envBase = envBuffer.baseAddress.map { UnsafeMutablePointer(mutating: $0) }
+                                wasm_runtime_set_wasi_args(
+                                    wasmModule,
+                                    directoryBase,
+                                    directoryCount,
+                                    mappedDirectoryBase,
+                                    mappedDirectoryCount,
+                                    envBase,
+                                    envCount,
+                                    nil,
+                                    0
+                                )
+                                return wasm_runtime_instantiate(
+                                    wasmModule,
+                                    stackSize,
+                                    heapSize,
+                                    &errorBuffer,
+                                    UInt32(errorBuffer.count)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private func withOwnedCStringArray<R>(
+    _ strings: [String],
+    body: ([UnsafePointer<CChar>?]) -> R
+) -> R {
+    let ownedPointers = strings.map { strdup($0) }
+    defer {
+        ownedPointers.forEach { free($0) }
+    }
+    return body(
+        ownedPointers.map { pointer in
+            pointer.map { UnsafePointer($0) }
+        }
+    )
 }
 
 func wasm_log_text_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {

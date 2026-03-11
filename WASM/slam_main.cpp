@@ -14,6 +14,7 @@
 #include "autonomy/autonomy.h"
 #include "controls/motors.h"
 #include "core/math_utils.h"
+#include "core/recorder.h"
 #include "core/ring_buffer.h"
 #include "controls/path_following.h"
 #include "core/telemetry.h"
@@ -375,9 +376,8 @@ enum class PoseSource{
     wheel_odom,
     fused_IMU_wheel_odom
 };
-// IMU preintegration drifts over time, so the shared autonomy/map pose should
-// not treat it as a drop-in orientation estimate.
-static constexpr PoseSource pose_source = PoseSource::fused_IMU_wheel_odom;
+
+static constexpr PoseSource pose_source = PoseSource::IMU;
 static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
 static constexpr int32_t kPathFollowHoldMs = 120;
@@ -426,9 +426,7 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
     constexpr int kTurnHoldMs = 150;
     constexpr int kPollSleepMs = 5;
     constexpr int kSegmentSettleMs = 100;
-    constexpr double kScanWarmupSec = 5.0;
-    constexpr int kScanWarmupSleepMs = 1000;
-
+   
     sensors::WheelOdometryData odom{};
     while (!read_scan_odom_sample(&odom)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kPollSleepMs));
@@ -554,6 +552,7 @@ int main(){
 
     init_camera(&g_cam_config);
     log_config(g_cam_config);
+    core::recorder::initialize_from_env();
     planning::bridge::set_goal_change_callback(notify_planner_wake);
 
     if (kEnablePlannerDemoGoal) {
@@ -566,7 +565,6 @@ int main(){
 
     std::thread autonomy_thread([&motors, &m_pose](){
         constexpr int kAutonomyFSMSleepMs = 100;
-        constexpr double kLidarWarmupSec = 2.0;
 
         // the main high level thread
         while(!g_imu_ready.load(std::memory_order_acquire) ||
@@ -579,15 +577,6 @@ int main(){
                 std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
             }
         }
-        {
-            std::ostringstream warmup_log;
-            warmup_log << "[autonomy][init] lidar warmup for "
-                       << kLidarWarmupSec
-                       << "s";
-            wasm_log_line(warmup_log.str());
-        }
-        std::this_thread::sleep_for(std::chrono::duration<double>(kLidarWarmupSec));
-        wasm_log_line("[autonomy][init] lidar warmup complete");
         wasm_log_line("SENSOR_INIT -> AUTONOMY_INIT");
         g_state.store(RobotState::AUTONOMY_INIT, std::memory_order_release);
         while(!g_first_map_update_done.load(std::memory_order_acquire)){
@@ -650,6 +639,7 @@ int main(){
                     g_imu_preintegrator.update_bias();
                 }
                 imu_copy = g_imu_calib.curr_slot();
+                core::recorder::enqueue_imu(imu_copy);
                 if (pose_source == PoseSource::IMU || pose_source == PoseSource::fused_IMU_wheel_odom){
                     // only update the rotation since the accelerometer drifts too much
                     sensors::PoseLog pose_copy{};
@@ -710,6 +700,9 @@ int main(){
             }
 
             if (g_lc_buffers[write_idx].points_size > 0) {
+                core::recorder::enqueue_lidar_frame(
+                    g_lc_buffers[write_idx],
+                    g_lc_pose_buffers[write_idx]);
                 if (g_lc_buffers[write_idx].timestamp > 0.0 &&
                     (last_lidar_log_timestamp < 0.0 ||
                      (g_lc_buffers[write_idx].timestamp - last_lidar_log_timestamp) >=

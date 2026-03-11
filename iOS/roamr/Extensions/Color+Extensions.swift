@@ -18,7 +18,12 @@ extension Color {
 
 		/// Returns a SwiftUI `Color` loaded from Assets.xcassets
 		var color: Color {
-			Color(self.rawValue)
+            switch self {
+            case .accent:
+                Color("AccentColor")
+            case .background:
+                Color("background")
+            }
 		}
 	}
 }
