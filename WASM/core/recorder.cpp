@@ -2,11 +2,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <iomanip>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -25,149 +27,162 @@ constexpr size_t kMaxPendingWrites = 128;
 constexpr size_t kBufferedFlushThreshold = 50;
 
 enum class TargetFile : uint8_t {
-  kImuProto,
-  kPoseProto,
-  kLidarCameraProto,
-};
-
-enum class WireType : uint8_t {
-  kVarint = 0,
-  kFixed64 = 1,
-  kLengthDelimited = 2,
+  kPoseCsv,
+  kStandaloneFile,
 };
 
 struct WriteRequest {
-  TargetFile target = TargetFile::kImuProto;
+  TargetFile target = TargetFile::kPoseCsv;
+  std::string path;
   std::vector<uint8_t> bytes;
   bool flush = false;
 };
 
-void append_varint(std::vector<uint8_t>* out, uint64_t value) {
-  while (value >= 0x80) {
-    out->push_back(static_cast<uint8_t>(value) | 0x80);
-    value >>= 7;
+bool create_directory_if_needed(const std::string& dir) {
+  if (dir.empty()) {
+    wasm_log_line("[recorder] empty recording directory");
+    return false;
   }
-  out->push_back(static_cast<uint8_t>(value));
+  if (mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST) {
+    std::ostringstream log;
+    log << "[recorder] mkdir failed path=" << dir << " errno=" << errno;
+    wasm_log_line(log.str());
+    return false;
+  }
+  return true;
 }
 
-void append_tag(std::vector<uint8_t>* out, uint32_t field_number, WireType wire_type) {
-  append_varint(out, (static_cast<uint64_t>(field_number) << 3) |
-                         static_cast<uint8_t>(wire_type));
-}
-
-void append_uint64_field(std::vector<uint8_t>* out, uint32_t field_number, uint64_t value) {
-  append_tag(out, field_number, WireType::kVarint);
-  append_varint(out, value);
-}
-
-void append_uint32_field(std::vector<uint8_t>* out, uint32_t field_number, uint32_t value) {
-  append_uint64_field(out, field_number, value);
-}
-
-void append_enum_field(std::vector<uint8_t>* out, uint32_t field_number, uint32_t value) {
-  append_uint64_field(out, field_number, value);
-}
-
-void append_double_field(std::vector<uint8_t>* out, uint32_t field_number, double value) {
-  append_tag(out, field_number, WireType::kFixed64);
-  uint64_t bits = 0;
-  std::memcpy(&bits, &value, sizeof(bits));
-  for (size_t i = 0; i < sizeof(bits); ++i) {
-    out->push_back(static_cast<uint8_t>((bits >> (8 * i)) & 0xFF));
+const char* pose_source_label(PoseDataSource source) {
+  switch (source) {
+    case PoseDataSource::kIMU:
+      return "imu";
+    case PoseDataSource::kWheelOdometry:
+      return "wheel_odometry";
+    case PoseDataSource::kFusedImuWheelOdometry:
+      return "fused_imu_wheel_odometry";
+    case PoseDataSource::kUnspecified:
+    default:
+      return "unspecified";
   }
 }
 
-void append_bytes_field(
-    std::vector<uint8_t>* out,
-    uint32_t field_number,
-    const uint8_t* data,
-    size_t size) {
-  if (!data || size == 0) {
-    return;
-  }
-  append_tag(out, field_number, WireType::kLengthDelimited);
-  append_varint(out, size);
-  out->insert(out->end(), data, data + size);
-}
-
-void append_packed_float_field(
-    std::vector<uint8_t>* out,
-    uint32_t field_number,
-    const float* data,
-    size_t count) {
-  if (!data || count == 0) {
-    return;
-  }
-  append_tag(out, field_number, WireType::kLengthDelimited);
-  const size_t byte_count = count * sizeof(float);
-  append_varint(out, byte_count);
-  const uint8_t* bytes = reinterpret_cast<const uint8_t*>(data);
-  out->insert(out->end(), bytes, bytes + byte_count);
-}
-
-std::vector<uint8_t> make_length_prefixed(const std::vector<uint8_t>& message) {
-  std::vector<uint8_t> output;
-  output.reserve(message.size() + 10);
-  append_varint(&output, message.size());
-  output.insert(output.end(), message.begin(), message.end());
-  return output;
-}
-
-std::vector<uint8_t> serialize_imu_message(const sensors::IMUData& data, uint64_t sequence) {
-  std::vector<uint8_t> message;
-  message.reserve(96);
-  append_uint64_field(&message, 1, sequence);
-  append_double_field(&message, 2, data.timestamp);
-  append_uint32_field(&message, 3, static_cast<uint32_t>(data.frame_id));
-  append_double_field(&message, 4, data.acc_x);
-  append_double_field(&message, 5, data.acc_y);
-  append_double_field(&message, 6, data.acc_z);
-  append_double_field(&message, 7, data.gyro_x);
-  append_double_field(&message, 8, data.gyro_y);
-  append_double_field(&message, 9, data.gyro_z);
-  return make_length_prefixed(message);
-}
-
-std::vector<uint8_t> serialize_pose_message(
+std::vector<uint8_t> serialize_pose_csv_line(
     const sensors::PoseLog& pose,
     PoseDataSource source,
     uint64_t sequence) {
-  std::vector<uint8_t> message;
-  message.reserve(120);
-  append_uint64_field(&message, 1, sequence);
-  append_double_field(&message, 2, pose.timestamp);
-  append_enum_field(&message, 3, static_cast<uint32_t>(source));
-  append_double_field(&message, 4, pose.translation.x);
-  append_double_field(&message, 5, pose.translation.y);
-  append_double_field(&message, 6, pose.translation.z);
-  append_double_field(&message, 7, pose.quaternion.x);
-  append_double_field(&message, 8, pose.quaternion.y);
-  append_double_field(&message, 9, pose.quaternion.z);
-  append_double_field(&message, 10, pose.quaternion.w);
-  return make_length_prefixed(message);
+  std::ostringstream line;
+  line << sequence << ','
+       << std::setprecision(17) << pose.timestamp << ','
+       << pose_source_label(source) << ','
+       << pose.translation.x << ','
+       << pose.translation.y << ','
+       << pose.translation.z << ','
+       << pose.quaternion.x << ','
+       << pose.quaternion.y << ','
+       << pose.quaternion.z << ','
+       << pose.quaternion.w << '\n';
+  const std::string text = line.str();
+  return std::vector<uint8_t>(text.begin(), text.end());
 }
 
-std::vector<uint8_t> serialize_lidar_camera_message(
+std::vector<uint8_t> serialize_ppm_image(
+    const uint8_t* image,
+    size_t image_size,
+    int width,
+    int height,
+    int channels) {
+  if (!image || image_size == 0 || width <= 0 || height <= 0) {
+    return {};
+  }
+
+  const size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height);
+  std::vector<uint8_t> rgb(pixel_count * 3, 0);
+
+  if (channels == 3 && image_size >= rgb.size()) {
+    std::memcpy(rgb.data(), image, rgb.size());
+  } else if (channels == 1 && image_size >= pixel_count) {
+    for (size_t i = 0; i < pixel_count; ++i) {
+      const uint8_t value = image[i];
+      rgb[i * 3 + 0] = value;
+      rgb[i * 3 + 1] = value;
+      rgb[i * 3 + 2] = value;
+    }
+  } else if (channels >= 4 && image_size >= pixel_count * static_cast<size_t>(channels)) {
+    for (size_t i = 0; i < pixel_count; ++i) {
+      const size_t src = i * static_cast<size_t>(channels);
+      const size_t dst = i * 3;
+      rgb[dst + 0] = image[src + 0];
+      rgb[dst + 1] = image[src + 1];
+      rgb[dst + 2] = image[src + 2];
+    }
+  } else {
+    return {};
+  }
+
+  std::ostringstream header;
+  header << "P6\n" << width << ' ' << height << "\n255\n";
+  const std::string header_text = header.str();
+
+  std::vector<uint8_t> output;
+  output.reserve(header_text.size() + rgb.size());
+  output.insert(output.end(), header_text.begin(), header_text.end());
+  output.insert(output.end(), rgb.begin(), rgb.end());
+  return output;
+}
+
+std::vector<uint8_t> serialize_depth_pgm(
     const sensors::LidarCameraData& data,
-    const sensors::PoseLog& matched_pose,
-    const sensors::CameraConfig& camera_config,
-    uint64_t sequence) {
-  std::vector<uint8_t> message;
-  message.reserve(
-      128 + data.points_size * sizeof(float) + data.colors_size + data.image_size);
-  append_uint64_field(&message, 1, sequence);
-  append_double_field(&message, 2, data.timestamp);
-  append_uint32_field(&message, 3, static_cast<uint32_t>(data.points_frame_id));
-  append_uint32_field(&message, 4, static_cast<uint32_t>(data.image_frame_id));
-  append_uint32_field(&message, 5, static_cast<uint32_t>(data.points_size / 3));
-  append_packed_float_field(&message, 6, data.points.data(), data.points_size);
-  append_bytes_field(&message, 7, data.colors.data(), data.colors_size);
-  append_uint32_field(&message, 8, static_cast<uint32_t>(camera_config.image_width));
-  append_uint32_field(&message, 9, static_cast<uint32_t>(camera_config.image_height));
-  append_uint32_field(&message, 10, static_cast<uint32_t>(camera_config.image_channels));
-  append_bytes_field(&message, 11, data.image.data(), data.image_size);
-  append_double_field(&message, 12, matched_pose.timestamp);
-  return make_length_prefixed(message);
+    const sensors::CameraConfig& camera_config) {
+  const size_t point_count = data.points_size / 3;
+  if (point_count == 0) {
+    return {};
+  }
+
+  int width = camera_config.image_width;
+  int height = camera_config.image_height;
+  if (width <= 0 || height <= 0 ||
+      static_cast<size_t>(width) * static_cast<size_t>(height) != point_count) {
+    width = static_cast<int>(point_count);
+    height = 1;
+  }
+
+  std::ostringstream header;
+  header << "P5\n" << width << ' ' << height << "\n65535\n";
+  const std::string header_text = header.str();
+
+  std::vector<uint8_t> output;
+  output.reserve(header_text.size() + point_count * 2);
+  output.insert(output.end(), header_text.begin(), header_text.end());
+
+  for (size_t i = 0; i < point_count; ++i) {
+    const size_t base = i * 3;
+    const float x = data.points[base + 0];
+    const float y = data.points[base + 1];
+    const float z = data.points[base + 2];
+    uint16_t depth_mm = 0;
+    if (std::isfinite(x) && std::isfinite(y) && std::isfinite(z)) {
+      const double range_m = std::sqrt(
+          static_cast<double>(x) * static_cast<double>(x) +
+          static_cast<double>(y) * static_cast<double>(y) +
+          static_cast<double>(z) * static_cast<double>(z));
+      if (range_m > 0.0) {
+        const double range_mm = range_m * 1000.0;
+        depth_mm = static_cast<uint16_t>(
+            range_mm >= 65535.0 ? 65535.0 : range_mm);
+      }
+    }
+    output.push_back(static_cast<uint8_t>((depth_mm >> 8) & 0xFF));
+    output.push_back(static_cast<uint8_t>(depth_mm & 0xFF));
+  }
+
+  return output;
+}
+
+std::string make_frame_stem(uint64_t sequence, double timestamp) {
+  std::ostringstream name;
+  name << "frame-" << std::setw(6) << std::setfill('0') << sequence
+       << "-" << std::fixed << std::setprecision(3) << timestamp;
+  return name.str();
 }
 
 class SessionRecorder {
@@ -187,7 +202,7 @@ class SessionRecorder {
 
     const char* dir_env = std::getenv("ROAMR_RECORDING_DIR");
     const std::string dir = (dir_env && dir_env[0] != '\0') ? dir_env : "/data";
-    if (!prepare_directory(dir)) {
+    if (!create_directory_if_needed(dir)) {
       return;
     }
 
@@ -195,30 +210,30 @@ class SessionRecorder {
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::system_clock::now().time_since_epoch())
             .count());
-    const std::string session_prefix =
-        dir + "/session-" + std::to_string(session_id);
-    imu_path_ = session_prefix + ".imu.pb";
-    pose_path_ = session_prefix + ".pose.pb";
-    lidar_camera_path_ = session_prefix + ".lidar_camera.pb";
-
-    imu_file_ = std::fopen(imu_path_.c_str(), "wb");
-    if (!imu_file_) {
-      log_open_error("imu", imu_path_);
+    session_dir_ = dir + "/session-" + std::to_string(session_id);
+    if (!create_directory_if_needed(session_dir_)) {
+      return;
+    }
+    image_dir_ = session_dir_ + "/images";
+    depth_dir_ = session_dir_ + "/depth";
+    if (!create_directory_if_needed(image_dir_) ||
+        !create_directory_if_needed(depth_dir_)) {
       return;
     }
 
+    pose_path_ = session_dir_ + "/pose.csv";
     pose_file_ = std::fopen(pose_path_.c_str(), "wb");
     if (!pose_file_) {
       log_open_error("pose", pose_path_);
-      close_file(&imu_file_);
       return;
     }
 
-    lidar_camera_file_ = std::fopen(lidar_camera_path_.c_str(), "wb");
-    if (!lidar_camera_file_) {
-      log_open_error("lidar_camera", lidar_camera_path_);
+    static constexpr char kPoseHeader[] =
+        "sequence,timestamp,source,tx,ty,tz,qx,qy,qz,qw\n";
+    if (std::fwrite(kPoseHeader, 1, sizeof(kPoseHeader) - 1, pose_file_) !=
+        sizeof(kPoseHeader) - 1) {
+      log_open_error("pose_header", pose_path_);
       close_file(&pose_file_);
-      close_file(&imu_file_);
       return;
     }
 
@@ -227,9 +242,10 @@ class SessionRecorder {
     writer_thread_.detach();
 
     std::ostringstream log;
-    log << "[recorder] enabled imu=" << imu_path_
+    log << "[recorder] enabled session_dir=" << session_dir_
         << " pose=" << pose_path_
-        << " lidar_camera=" << lidar_camera_path_;
+        << " images=" << image_dir_
+        << " depth=" << depth_dir_;
     wasm_log_line(log.str());
   }
 
@@ -239,13 +255,7 @@ class SessionRecorder {
   }
 
   void enqueue_imu(const sensors::IMUData& data) {
-    if (!is_enabled()) {
-      return;
-    }
-    WriteRequest request;
-    request.target = TargetFile::kImuProto;
-    request.bytes = serialize_imu_message(data, next_imu_sequence_.fetch_add(1));
-    enqueue_request(std::move(request));
+    (void)data;
   }
 
   void enqueue_pose(const sensors::PoseLog& pose, PoseDataSource source) {
@@ -253,8 +263,8 @@ class SessionRecorder {
       return;
     }
     WriteRequest request;
-    request.target = TargetFile::kPoseProto;
-    request.bytes = serialize_pose_message(
+    request.target = TargetFile::kPoseCsv;
+    request.bytes = serialize_pose_csv_line(
         pose, source, next_pose_sequence_.fetch_add(1));
     enqueue_request(std::move(request));
   }
@@ -265,29 +275,39 @@ class SessionRecorder {
     if (!is_enabled()) {
       return;
     }
-    WriteRequest request;
-    request.target = TargetFile::kLidarCameraProto;
-    request.flush = true;
-    request.bytes = serialize_lidar_camera_message(
-        data, pose, camera_config_, next_lidar_camera_sequence_.fetch_add(1));
-    enqueue_request(std::move(request));
+
+    const uint64_t sequence = next_lidar_camera_sequence_.fetch_add(1);
+    const std::string frame_stem = make_frame_stem(sequence, data.timestamp);
+
+    if (data.image_size > 0) {
+      std::vector<uint8_t> image_bytes = serialize_ppm_image(
+          data.image.data(),
+          data.image_size,
+          camera_config_.image_width,
+          camera_config_.image_height,
+          camera_config_.image_channels);
+      if (!image_bytes.empty()) {
+        WriteRequest image_request;
+        image_request.target = TargetFile::kStandaloneFile;
+        image_request.path = image_dir_ + "/" + frame_stem + ".ppm";
+        image_request.bytes = std::move(image_bytes);
+        enqueue_request(std::move(image_request));
+      }
+    }
+
+    std::vector<uint8_t> depth_bytes = serialize_depth_pgm(data, camera_config_);
+    if (!depth_bytes.empty()) {
+      WriteRequest depth_request;
+      depth_request.target = TargetFile::kStandaloneFile;
+      depth_request.path = depth_dir_ + "/" + frame_stem + ".pgm";
+      depth_request.bytes = std::move(depth_bytes);
+      enqueue_request(std::move(depth_request));
+    }
+
+    (void)pose;
   }
 
  private:
-  bool prepare_directory(const std::string& dir) {
-    if (dir.empty()) {
-      wasm_log_line("[recorder] empty recording directory");
-      return false;
-    }
-    if (mkdir(dir.c_str(), 0755) != 0 && errno != EEXIST) {
-      std::ostringstream log;
-      log << "[recorder] mkdir failed path=" << dir << " errno=" << errno;
-      wasm_log_line(log.str());
-      return false;
-    }
-    return true;
-  }
-
   void log_open_error(const char* label, const std::string& path) {
     std::ostringstream log;
     log << "[recorder] failed to open " << label
@@ -320,26 +340,12 @@ class SessionRecorder {
     queue_cv_.notify_one();
   }
 
-  std::FILE* target_file(TargetFile target) {
-    switch (target) {
-      case TargetFile::kImuProto:
-        return imu_file_;
-      case TargetFile::kPoseProto:
-        return pose_file_;
-      case TargetFile::kLidarCameraProto:
-        return lidar_camera_file_;
-    }
-    return nullptr;
-  }
-
   size_t* target_flush_counter(TargetFile target) {
     switch (target) {
-      case TargetFile::kImuProto:
-        return &imu_since_flush_;
-      case TargetFile::kPoseProto:
+      case TargetFile::kPoseCsv:
         return &pose_since_flush_;
-      case TargetFile::kLidarCameraProto:
-        return &lidar_camera_since_flush_;
+      case TargetFile::kStandaloneFile:
+        return nullptr;
     }
     return nullptr;
   }
@@ -354,8 +360,21 @@ class SessionRecorder {
         queue_.pop_front();
       }
 
-      std::FILE* file = target_file(request.target);
-      if (!file || request.bytes.empty()) {
+      if (request.bytes.empty()) {
+        continue;
+      }
+
+      std::FILE* file = nullptr;
+      bool close_after_write = false;
+      if (request.target == TargetFile::kPoseCsv) {
+        file = pose_file_;
+      } else if (!request.path.empty()) {
+        file = std::fopen(request.path.c_str(), "wb");
+        close_after_write = true;
+      }
+
+      if (!file) {
+        log_open_error("write_target", request.path);
         continue;
       }
 
@@ -363,6 +382,9 @@ class SessionRecorder {
           std::fwrite(request.bytes.data(), 1, request.bytes.size(), file);
       if (written != request.bytes.size()) {
         wasm_log_line("[recorder] short write");
+        if (close_after_write) {
+          std::fclose(file);
+        }
         continue;
       }
 
@@ -378,6 +400,10 @@ class SessionRecorder {
           *flush_counter = 0;
         }
       }
+
+      if (close_after_write) {
+        std::fclose(file);
+      }
     }
   }
 
@@ -387,21 +413,17 @@ class SessionRecorder {
   std::deque<WriteRequest> queue_;
   std::thread writer_thread_;
 
-  std::FILE* imu_file_ = nullptr;
   std::FILE* pose_file_ = nullptr;
-  std::FILE* lidar_camera_file_ = nullptr;
-  std::string imu_path_;
   std::string pose_path_;
-  std::string lidar_camera_path_;
+  std::string session_dir_;
+  std::string image_dir_;
+  std::string depth_dir_;
   sensors::CameraConfig camera_config_{};
   bool initialized_ = false;
   bool enabled_ = false;
   bool drop_warning_emitted_ = false;
   size_t dropped_request_count_ = 0;
-  size_t imu_since_flush_ = 0;
   size_t pose_since_flush_ = 0;
-  size_t lidar_camera_since_flush_ = 0;
-  std::atomic<uint64_t> next_imu_sequence_{1};
   std::atomic<uint64_t> next_pose_sequence_{1};
   std::atomic<uint64_t> next_lidar_camera_sequence_{1};
 };

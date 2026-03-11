@@ -30,9 +30,19 @@ Target details:
 - exceptions and RTTI disabled
 - output: `slam_main.wasm`
 
-This runtime does not link protobuf-lite. Recording code writes protobuf-wire-
-compatible bytes directly, and [WASM/proto/roamr_log.proto](/Users/thomasonzhou/src/roamr/WASM/proto/roamr_log.proto)
-remains the schema for desktop/offline tooling.
+If recording is enabled, the current recorder writes a simple session layout:
+
+```text
+session-<timestamp>/
+  pose.csv
+  images/
+    frame-000001-<timestamp>.ppm
+  depth/
+    frame-000001-<timestamp>.pgm
+```
+
+`pose.csv` stores timestamped predicted poses. Camera images are written as PPM,
+and depth is written as 16-bit PGM using per-point range in millimeters.
 
 ## Host Boundary
 
@@ -248,4 +258,3 @@ If you want the shortest accurate mental model for `slam_main.cpp`, it is this:
 ## Historical Notes
 
 [WASM/implementation_notes.md](/Users/thomasonzhou/src/roamr/WASM/implementation_notes.md) is still useful for context, but it should be read as design history rather than the current runtime contract. When that file and `slam_main.cpp` disagree, trust `slam_main.cpp`.
-
