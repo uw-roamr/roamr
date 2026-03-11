@@ -55,7 +55,6 @@ static constexpr size_t kPlannerDeltaQueueCapacity = 16;
 struct MapDeltaEvent {
     uint64_t map_revision = 0;
     double timestamp = 0.0;
-    std::vector<planning::GridCoord> changed_cells;
     std::vector<planning::GridCoord> newly_occupied_cells;
 };
 
@@ -170,7 +169,6 @@ static void notify_planner_wake() {
 static void enqueue_planner_delta_event(
     uint64_t map_revision,
     double timestamp,
-    std::vector<planning::GridCoord> changed_cells,
     std::vector<planning::GridCoord> newly_occupied_cells) {
     {
         std::lock_guard<std::mutex> lk(g_planner_wake_mutex);
@@ -181,7 +179,6 @@ static void enqueue_planner_delta_event(
         MapDeltaEvent event;
         event.map_revision = map_revision;
         event.timestamp = timestamp;
-        event.changed_cells = std::move(changed_cells);
         event.newly_occupied_cells = std::move(newly_occupied_cells);
         g_planner_delta_queue.push_back(std::move(event));
         ++g_planner_wake_revision;
@@ -782,7 +779,6 @@ int main(){
             continue;
         }
         uint64_t map_revision = 0;
-        std::vector<planning::GridCoord> changed_cells;
         std::vector<planning::GridCoord> newly_occupied_cells;
         {
             std::lock_guard<std::mutex> lk(g_map_mutex);
@@ -791,7 +787,6 @@ int main(){
                 g_map,
                 lc_data,
                 body_to_world,
-                &changed_cells,
                 &newly_occupied_cells
             );
             map_revision =
@@ -818,7 +813,6 @@ int main(){
         enqueue_planner_delta_event(
             map_revision,
             candidate_timestamp,
-            std::move(changed_cells),
             std::move(newly_occupied_cells));
 
         // wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
