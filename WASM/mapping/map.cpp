@@ -337,16 +337,14 @@ void Map::integrate_free_world(
     int32_t start_x,
     int32_t start_y,
     double wx,
-    double wy,
-    std::vector<planning::GridCoord>* changed_cells,
-    std::vector<uint8_t>* changed_mask) {
+    double wy) {
   int32_t end_x = 0;
   int32_t end_y = 0;
   if (!world_to_grid(wx, wy, &end_x, &end_y)) {
     return;
   }
 
-  integrate_free_ray(start_x, start_y, end_x, end_y, changed_cells, changed_mask);
+  integrate_free_ray(start_x, start_y, end_x, end_y);
 }
 
 void Map::integrate_scan(
