@@ -54,7 +54,9 @@ namespace mapping{
             int32_t start_x,
             int32_t start_y,
             double wx,
-            double wy);
+            double wy,
+            std::vector<planning::GridCoord>* changed_cells = nullptr,
+            std::vector<uint8_t>* changed_mask = nullptr);
         void draw_map(
             const core::PoseSE2d& pose,
             int32_t point_count,
