@@ -96,6 +96,26 @@ static std::mutex g_lc_cv_mutex;
 static std::condition_variable g_lc_cv;
 
 // motor encoder odometry globals
+static core::Vector3d g_latest_translation_odom = {0.0, 0.0, 0.0};
+static core::Vector4d g_latest_quat_odom = core::quat_identity();
+static std::mutex g_latest_wheel_odom_mutex;
+static sensors::WheelOdometryData g_latest_wheel_odom = {0.0, -1, 0, 0, 0};
+
+static bool read_latest_wheel_odom_snapshot(sensors::WheelOdometryData* out) {
+    if (!out) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lk(g_latest_wheel_odom_mutex);
+    if (g_latest_wheel_odom.seq < 0 ||
+        g_latest_wheel_odom.timestamp <= 0.0 ||
+        g_latest_wheel_odom.sample_period_ms <= 0) {
+        return false;
+    }
+    *out = g_latest_wheel_odom;
+    return true;
+}
+
+// motor encoder odometry globals
 static std::atomic<bool> g_wheel_odom_ready{false};
 static std::mutex g_latest_wheel_odom_mutex;
 static sensors::WheelOdometryData g_latest_wheel_odom = {0.0, -1, 0, 0, 0};
@@ -1120,6 +1140,52 @@ int main(){
             }
             if (!g_wheel_odom_ready.load(std::memory_order_relaxed)) {
                 g_wheel_odom_ready.store(true, std::memory_order_release);
+
+            {
+                std::lock_guard<std::mutex> lk(g_latest_wheel_odom_mutex);
+                g_latest_wheel_odom = odom;
+            }
+
+            sensors::integrate_wheel_odometry(odom, &x, &y, &yaw);
+            g_latest_translation_odom = {x, y, 0.0};
+            g_latest_quat_odom = {0.0, 0.0, std::sin(yaw * 0.5), std::cos(yaw * 0.5)};
+
+            if (!turn_done) {
+                if (!turn_active) {
+                    const double sign = (kOdomTurnDirection >= 0) ? 1.0 : -1.0;
+                    turn_target_yaw = yaw + (sign * kOdomTurnDeltaYawRad);
+                    turn_active = true;
+                    settled_samples = 0;
+                    turn_start = std::chrono::steady_clock::now();
+                    motors.reset_twist_controller();
+                }
+
+                const bool reached = motors.drive_turn_to_yaw(
+                    yaw,
+                    turn_target_yaw,
+                    odom,
+                    turn_cfg,
+                    kOdomTurnHoldMs);
+                if (reached) {
+                    settled_samples += 1;
+                    if (settled_samples >= kOdomTurnSettledSamples) {
+                        turn_done = true;
+                        turn_active = false;
+                        motors.stop();
+                        motors.reset_twist_controller();
+                    }
+                } else {
+                    settled_samples = 0;
+                }
+
+                const int64_t elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - turn_start).count();
+                if (turn_active && elapsed_ms > kOdomTurnTimeoutMs) {
+                    turn_done = true;
+                    turn_active = false;
+                    motors.stop();
+                    motors.reset_twist_controller();
+                }
             }
 
             {
