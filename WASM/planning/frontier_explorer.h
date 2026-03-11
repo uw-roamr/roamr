@@ -62,3 +62,12 @@ bool is_frontier_goal_candidate(
     const FrontierExplorerConfig& cfg = {});
 
 }  // namespace planning
+
+namespace planning::simplified {
+
+FrontierPlanResult plan_to_largest_frontier(
+    const GridMap2D& map,
+    const core::Vector3d& start_world,
+    const FrontierExplorerConfig& cfg = {});
+
+}  // namespace planning::simplified

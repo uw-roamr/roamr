@@ -343,6 +343,54 @@ GridCoord select_cluster_goal_cell(const std::vector<GridCoord>& cluster) {
   return best_cell;
 }
 
+std::vector<GridCoord> rank_cluster_goal_cells(
+    const std::vector<GridCoord>& cluster,
+    const GridCoord& start_cell) {
+  std::vector<GridCoord> ranked = cluster;
+  if (ranked.empty()) {
+    return ranked;
+  }
+
+  double sum_x = 0.0;
+  double sum_y = 0.0;
+  for (const GridCoord& cell : ranked) {
+    sum_x += static_cast<double>(cell.x);
+    sum_y += static_cast<double>(cell.y);
+  }
+  const double centroid_x = sum_x / static_cast<double>(ranked.size());
+  const double centroid_y = sum_y / static_cast<double>(ranked.size());
+
+  std::sort(
+      ranked.begin(),
+      ranked.end(),
+      [&](const GridCoord& a, const GridCoord& b) {
+        const double adx = static_cast<double>(a.x) - centroid_x;
+        const double ady = static_cast<double>(a.y) - centroid_y;
+        const double bdx = static_cast<double>(b.x) - centroid_x;
+        const double bdy = static_cast<double>(b.y) - centroid_y;
+        const double a_centroid_dist2 = adx * adx + ady * ady;
+        const double b_centroid_dist2 = bdx * bdx + bdy * bdy;
+        if (std::abs(a_centroid_dist2 - b_centroid_dist2) > 1e-6) {
+          return a_centroid_dist2 < b_centroid_dist2;
+        }
+
+        const int32_t a_start_dx = a.x - start_cell.x;
+        const int32_t a_start_dy = a.y - start_cell.y;
+        const int32_t b_start_dx = b.x - start_cell.x;
+        const int32_t b_start_dy = b.y - start_cell.y;
+        const int32_t a_start_dist2 = a_start_dx * a_start_dx + a_start_dy * a_start_dy;
+        const int32_t b_start_dist2 = b_start_dx * b_start_dx + b_start_dy * b_start_dy;
+        if (a_start_dist2 != b_start_dist2) {
+          return a_start_dist2 < b_start_dist2;
+        }
+        if (a.x != b.x) {
+          return a.x < b.x;
+        }
+        return a.y < b.y;
+      });
+  return ranked;
+}
+
 std::vector<GridCoord> collect_frontier_goal_cells_impl(
     const GridMap2D& map,
     const GridCoord& start_cell,
@@ -487,85 +535,114 @@ FrontierPlanResult plan_to_nearest_frontier(
 
   AStarPlanner planner(planner_cfg);
   constexpr int32_t kClusterNearEqualCells = 2;
+  constexpr size_t kMaxGoalSeedAttemptsPerCluster = 12;
   double best_path_length = std::numeric_limits<double>::infinity();
   double best_heading_delta = std::numeric_limits<double>::infinity();
   int32_t best_cluster_size = -1;
   const double start_heading_rad = start_world.z;
 
-  for (const std::vector<GridCoord>& cluster : clusters) {
-    if (static_cast<int32_t>(cluster.size()) < cfg.min_cluster_size) {
-      continue;
-    }
+  const auto evaluate_clusters = [&](int32_t min_cluster_size) {
+    for (const std::vector<GridCoord>& cluster : clusters) {
+      const int32_t cluster_size = static_cast<int32_t>(cluster.size());
+      if (cluster_size < min_cluster_size) {
+        continue;
+      }
 
-    const GridCoord goal_seed = select_cluster_goal_cell(cluster);
-    const PlanResult seed_plan = planner.plan_to_grid(map, start_cell, goal_seed);
-    if (!seed_plan.success || seed_plan.path_grid.empty() || seed_plan.path_world.empty()) {
-      continue;
-    }
+      const std::vector<GridCoord> ranked_goal_seeds =
+          rank_cluster_goal_cells(cluster, start_cell);
+      const size_t seed_attempt_count = std::min(
+          ranked_goal_seeds.size(),
+          kMaxGoalSeedAttemptsPerCluster);
+      bool cluster_had_plan = false;
 
-    PlanResult planned = seed_plan;
-    double applied_standoff_m = 0.0;
-    if (!apply_goal_standoff(
-            seed_plan,
-            cfg.goal_standoff_m,
-            cfg.min_standoff_path_progress_m,
-            &planned,
-            &applied_standoff_m)) {
-      continue;
-    }
+      for (size_t seed_index = 0; seed_index < seed_attempt_count; ++seed_index) {
+        const GridCoord goal_seed = ranked_goal_seeds[seed_index];
+        const PlanResult seed_plan = planner.plan_to_grid(map, start_cell, goal_seed);
+        if (!seed_plan.success || seed_plan.path_grid.empty() || seed_plan.path_world.empty()) {
+          continue;
+        }
 
-    const double candidate_length = path_length_m(planned.path_world);
-    const int32_t cluster_size = static_cast<int32_t>(cluster.size());
-    const double candidate_heading_delta =
-        heading_delta_rad(map, start_cell, planned.path_grid.back(), start_heading_rad);
+        PlanResult planned = seed_plan;
+        double applied_standoff_m = 0.0;
+        if (!apply_goal_standoff(
+                seed_plan,
+                cfg.goal_standoff_m,
+                cfg.min_standoff_path_progress_m,
+                &planned,
+                &applied_standoff_m)) {
+          continue;
+        }
 
-    bool better = false;
-    std::string candidate_reason;
-    if (best_cluster_size < 0 || cluster_size > best_cluster_size + kClusterNearEqualCells) {
-      better = true;
-      candidate_reason = "larger_cluster";
-    } else if (std::abs(cluster_size - best_cluster_size) <= kClusterNearEqualCells) {
-      if (candidate_length + 1e-6 < best_path_length) {
-        better = true;
-        candidate_reason = "near_equal_cluster_shorter_path";
-      } else if (std::abs(candidate_length - best_path_length) <= 1e-6 &&
-                 candidate_heading_delta + 1e-6 < best_heading_delta) {
-        better = true;
-        candidate_reason = "near_equal_cluster_heading_tiebreak";
+        cluster_had_plan = true;
+        const double candidate_length = path_length_m(planned.path_world);
+        const double candidate_heading_delta =
+            heading_delta_rad(map, start_cell, planned.path_grid.back(), start_heading_rad);
+
+        bool better = false;
+        std::string candidate_reason;
+        if (best_cluster_size < 0 || cluster_size > best_cluster_size + kClusterNearEqualCells) {
+          better = true;
+          candidate_reason = "larger_cluster";
+        } else if (std::abs(cluster_size - best_cluster_size) <= kClusterNearEqualCells) {
+          if (candidate_length > best_path_length + 1e-6) {
+            better = true;
+            candidate_reason = "near_equal_cluster_longer_path";
+          } else if (std::abs(candidate_length - best_path_length) <= 1e-6 &&
+                     candidate_heading_delta + 1e-6 < best_heading_delta) {
+            better = true;
+            candidate_reason = "near_equal_cluster_heading_tiebreak";
+          }
+        }
+
+        std::ostringstream candidate_log;
+        candidate_log << "[planning] frontier candidate seed=("
+                      << goal_seed.x << "," << goal_seed.y << ")"
+                      << " attempt=" << (seed_index + 1) << "/" << seed_attempt_count
+                      << " standoff_goal=("
+                      << planned.path_grid.back().x << "," << planned.path_grid.back().y << ")"
+                      << " cluster_size=" << cluster_size
+                      << " path_length_m=" << candidate_length
+                      << " applied_standoff_m=" << applied_standoff_m
+                      << " heading_delta_rad=" << candidate_heading_delta
+                      << " decision=" << (better ? "chosen" : "rejected")
+                      << " reason=" << (better ? candidate_reason : "ranked_lower");
+        wasm_log_line(candidate_log.str());
+
+        if (!better) {
+          continue;
+        }
+
+        best_path_length = candidate_length;
+        best_heading_delta = candidate_heading_delta;
+        best_cluster_size = cluster_size;
+        result.success = true;
+        result.message = "ok";
+        result.goal_cell = planned.path_grid.back();
+        result.selected_seed = goal_seed;
+        result.path_grid = planned.path_grid;
+        result.path_world = planned.path_world;
+        result.selected_cluster_cells = cluster;
+        result.selected_cluster_size = cluster_size;
+        result.selected_path_length_m = candidate_length;
+        result.selected_heading_delta_rad = candidate_heading_delta;
+        result.selected_goal_standoff_m = applied_standoff_m;
+      }
+
+      if (!cluster_had_plan) {
+        std::ostringstream cluster_log;
+        cluster_log << "[planning] frontier cluster rejected cluster_size="
+                    << cluster_size
+                    << " attempts=" << seed_attempt_count
+                    << " reason=no_seed_plan";
+        wasm_log_line(cluster_log.str());
       }
     }
+  };
 
-    std::ostringstream candidate_log;
-    candidate_log << "[planning] frontier candidate seed=("
-                  << goal_seed.x << "," << goal_seed.y << ")"
-                  << " standoff_goal=("
-                  << planned.path_grid.back().x << "," << planned.path_grid.back().y << ")"
-                  << " cluster_size=" << cluster_size
-                  << " path_length_m=" << candidate_length
-                  << " applied_standoff_m=" << applied_standoff_m
-                  << " heading_delta_rad=" << candidate_heading_delta
-                  << " decision=" << (better ? "chosen" : "rejected")
-                  << " reason=" << (better ? candidate_reason : "ranked_lower");
-    wasm_log_line(candidate_log.str());
-
-    if (!better) {
-      continue;
-    }
-
-    best_path_length = candidate_length;
-    best_heading_delta = candidate_heading_delta;
-    best_cluster_size = cluster_size;
-    result.success = true;
-    result.message = "ok";
-    result.goal_cell = planned.path_grid.back();
-    result.selected_seed = goal_seed;
-    result.path_grid = planned.path_grid;
-    result.path_world = planned.path_world;
-    result.selected_cluster_cells = cluster;
-    result.selected_cluster_size = cluster_size;
-    result.selected_path_length_m = candidate_length;
-    result.selected_heading_delta_rad = candidate_heading_delta;
-    result.selected_goal_standoff_m = applied_standoff_m;
+  evaluate_clusters(cfg.min_cluster_size);
+  if (!result.success && cfg.min_cluster_size > 1) {
+    wasm_log_line("[planning] retrying frontier selection with smaller clusters");
+    evaluate_clusters(1);
   }
 
   if (!result.success) {

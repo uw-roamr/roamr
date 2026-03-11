@@ -16,5 +16,5 @@ docker run -v `pwd`:/src -w /src ghcr.io/webassembly/wasi-sdk /opt/wasi-sdk/bin/
 $filename \
 core/telemetry.cpp \
 mapping/map.cpp mapping/map_update.cpp mapping/visualization.cpp \
-planning/frontier_explorer.cpp planning/planner_bridge.cpp \
+planning/frontier_explorer.cpp planning/frontier_simplified.cpp planning/planner_bridge.cpp \
 sensors/imu_calibration.cpp sensors/imu_preintegration.cpp

@@ -589,12 +589,7 @@ PlanningOverlay update_plan_overlay(
   g_last_auto_frontier_plan_time = now;
 
   const FrontierExplorerConfig frontier_cfg = build_frontier_config();
-  refresh_persistent_frontier_goals(
-      planner_map,
-      core::Vector3d{snapshot.pose.x, snapshot.pose.y, 0.0},
-      frontier_cfg);
-
-  const FrontierPlanResult planned = plan_to_nearest_frontier(
+  const FrontierPlanResult planned = planning::simplified::plan_to_largest_frontier(
       planner_map,
       core::Vector3d{snapshot.pose.x, snapshot.pose.y, snapshot.pose.theta},
       frontier_cfg);
@@ -611,16 +606,6 @@ PlanningOverlay update_plan_overlay(
                << planned.selected_seed.y << ")"
                << " message=" << planned.message;
   wasm_log_line(frontier_log.str());
-  if (planned.success) {
-    std::lock_guard<std::mutex> lk(g_frontier_cache_mutex);
-    const auto it = std::find(
-        g_persistent_frontier_goals.begin(),
-      g_persistent_frontier_goals.end(),
-      planned.selected_seed);
-    if (it == g_persistent_frontier_goals.end()) {
-      g_persistent_frontier_goals.push_back(planned.selected_seed);
-    }
-  }
   overlay = overlay_from_frontier_result(snapshot.map_revision, planned);
   update_cached_overlay(overlay);
   return overlay;

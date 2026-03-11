@@ -172,6 +172,9 @@ void draw_path_layer(
         paint_pixel(ppx, ppy, 255, 0, 220, 255, painted); // magenta selected cluster
     }
 
+    int32_t prev_ppx = 0;
+    int32_t prev_ppy = 0;
+    bool have_prev_path_pixel = false;
     for (const planning::GridCoord& cell : overlay.path_grid) {
         int32_t ppx = 0, ppy = 0;
         if (!snapshot_grid_to_pixel(
@@ -185,7 +188,13 @@ void draw_path_layer(
                 off_y,
                 &ppx,
                 &ppy)) continue;
+        if (have_prev_path_pixel) {
+            draw_line(prev_ppx, prev_ppy, ppx, ppy, 0, 150, 255, 255, painted);
+        }
         paint_pixel(ppx, ppy, 0, 150, 255, 255, painted); // blue path
+        prev_ppx = ppx;
+        prev_ppy = ppy;
+        have_prev_path_pixel = true;
     }
 
     if (overlay.goal_enabled) {
