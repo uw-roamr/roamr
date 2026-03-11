@@ -18,6 +18,7 @@ The script currently compiles:
 - `mapping/map_update.cpp`
 - `mapping/visualization.cpp`
 - `planning/frontier_explorer.cpp`
+- `planning/frontier_simplified.cpp`
 - `planning/planner_bridge.cpp`
 - `sensors/imu_calibration.cpp`
 - `sensors/imu_preintegration.cpp`
@@ -28,6 +29,10 @@ Target details:
 - shared memory enabled
 - exceptions and RTTI disabled
 - output: `slam_main.wasm`
+
+This runtime does not link protobuf-lite. Recording code writes protobuf-wire-
+compatible bytes directly, and [WASM/proto/roamr_log.proto](/Users/thomasonzhou/src/roamr/WASM/proto/roamr_log.proto)
+remains the schema for desktop/offline tooling.
 
 ## Host Boundary
 
@@ -244,57 +249,3 @@ If you want the shortest accurate mental model for `slam_main.cpp`, it is this:
 
 [WASM/implementation_notes.md](/Users/thomasonzhou/src/roamr/WASM/implementation_notes.md) is still useful for context, but it should be read as design history rather than the current runtime contract. When that file and `slam_main.cpp` disagree, trust `slam_main.cpp`.
 
-
-
-## protobuf
-
-```sh
-protoc --cpp_out=proto/gen --proto_path=proto proto/roamr_log.proto
-```
-
-
-build abseil (prefer LTS tags)
-```sh
-docker run --rm \
-  -v "$PWD":/src \
-  -w /src \
-  ghcr.io/webassembly/wasi-sdk \
-  bash -lc '
-    cmake -S third_party/abseil-cpp -B /tmp/absl-wasi \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_TOOLCHAIN_FILE=/opt/wasi-sdk/share/cmake/wasi-sdk.cmake \
-      -DCMAKE_CXX_FLAGS="--target=wasm32-wasip1-threads -pthread -fno-exceptions -fno-rtti -D_WASI_EMULATED_SIGNAL" \
-      -DCMAKE_EXE_LINKER_FLAGS="-lwasi-emulated-signal" \
-      -DCMAKE_SHARED_LINKER_FLAGS="-lwasi-emulated-signal" \
-      -DABSL_ENABLE_INSTALL=ON \
-      -DABSL_BUILD_TESTING=OFF \
-      -DBUILD_TESTING=OFF \
-    && cmake --build /tmp/absl-wasi -j
-  '
-```
-
-build protobuf (prefer releases)
-```sh
-docker run --rm \
-  -v "$PWD":/src \
-  -w /src \
-  ghcr.io/webassembly/wasi-sdk \
-  bash -lc '
-    cmake -S third_party/protobuf -B /tmp/protobuf-wasi \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_TOOLCHAIN_FILE=/opt/wasi-sdk/share/cmake/wasi-sdk.cmake \
-      -DCMAKE_INSTALL_PREFIX=/src/third_party/protobuf-wasi-install \
-      -DCMAKE_C_FLAGS="--target=wasm32-wasip1-threads -pthread" \
-      -DCMAKE_CXX_FLAGS="--target=wasm32-wasip1-threads -pthread -fno-exceptions -fno-rtti -D_WASI_EMULATED_SIGNAL" \
-      -Dprotobuf_BUILD_TESTS=OFF \
-      -Dprotobuf_BUILD_SHARED_LIBS=OFF \
-      -Dprotobuf_BUILD_PROTOC_BINARIES=OFF \
-      -Dprotobuf_BUILD_LIBPROTOC=OFF \
-      -Dprotobuf_BUILD_LIBUPB=OFF \
-      -Dprotobuf_WITH_ZLIB=OFF \
-      -Dprotobuf_LOCAL_DEPENDENCIES_ONLY=ON \
-      -Dabsl_DIR=/src/third_party/absl-wasi-install/lib/cmake/absl \
-    && cmake --build /tmp/protobuf-wasi --target utf8_range libprotobuf-lite -j
-  '
-
-```
