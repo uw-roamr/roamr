@@ -6,7 +6,7 @@ namespace planning {
 
     void initial_spin();
 
-    
+
     bool find_frontiers(std::vector<Frontier>& frontiers){
 
         const int num_found = 0;
@@ -18,7 +18,7 @@ namespace planning {
     {
 
     }
-    
+
     void explore_full_map(){
         // wait for init conditions to be satisfied:
         // lidar is active
@@ -37,7 +37,7 @@ namespace planning {
 
             //spin
         }
-        
+
         // A* plan to largest cluster
     }
 }; //namespace planning

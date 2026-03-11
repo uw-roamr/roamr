@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <deque>
 #include <iostream>
 #include <limits>
 #include <mutex>
@@ -10,6 +11,7 @@
 #include <thread>
 #include <vector>
 
+#include "autonomy/autonomy.h"
 #include "controls/motors.h"
 #include "core/math_utils.h"
 #include "core/ring_buffer.h"
@@ -33,6 +35,9 @@ enum class RobotState{
 };
 static std::atomic<RobotState> g_state{RobotState::SENSOR_INIT};
 
+static std::atomic<autonomy::AutonomySubstate> g_autonomy_substate{autonomy::AutonomySubstate::IDLE};
+static std::atomic<bool> g_planner_initialized{false};
+
 static mapping::Map g_map;
 static mapping::MapImage g_map_image;
 static std::mutex g_map_mutex;
@@ -42,6 +47,20 @@ static std::mutex g_map_publish_mutex;
 static mapping::MapSnapshot g_latest_map_snapshot;
 static std::mutex g_plan_publish_mutex;
 static planning::bridge::PlanningOverlay g_latest_plan_overlay;
+static std::mutex g_planner_wake_mutex;
+static std::condition_variable g_planner_wake_cv;
+static uint64_t g_planner_wake_revision = 0;
+static constexpr size_t kPlannerDeltaQueueCapacity = 16;
+
+struct MapDeltaEvent {
+    uint64_t map_revision = 0;
+    double timestamp = 0.0;
+    std::vector<planning::GridCoord> changed_cells;
+    std::vector<planning::GridCoord> newly_occupied_cells;
+};
+
+static std::deque<MapDeltaEvent> g_planner_delta_queue;
+static bool g_planner_delta_overflowed = false;
 
 struct LatestMapState {
     core::PoseSE3d body_to_world;
@@ -81,12 +100,32 @@ static std::condition_variable g_lc_cv;
 static std::atomic<bool> g_wheel_odom_ready{false};
 static std::mutex g_latest_wheel_odom_mutex;
 static sensors::WheelOdometryData g_latest_wheel_odom = {0.0, -1, 0, 0, 0};
-static sensors::PoseLog g_pose;
+static sensors::PoseLog g_pose{-1.0, core::Vector3d{}, core::Vector4d{0.0, 0.0, 0.0, 1.0}};
 static constexpr size_t kPoseHistoryCapacity = 256;
 static core::RingBuffer<sensors::PoseLog, kPoseHistoryCapacity> g_pose_history;
 static std::atomic<bool> g_scan_active{false};
 static std::atomic<bool> g_scan_requested{false};
 static std::atomic<double> g_scan_map_skip_until_timestamp{-1.0};
+
+
+static void set_autonomy_substate(
+    autonomy::AutonomySubstate next_state,
+    const char* reason = nullptr) {
+    const autonomy::AutonomySubstate previous =
+        g_autonomy_substate.exchange(next_state, std::memory_order_acq_rel);
+    if (previous == next_state) {
+        return;
+    }
+    std::ostringstream log;
+    log << "[autonomy][fsm] "
+        << autonomy::autonomy_substate_name(previous)
+        << " -> "
+        << autonomy::autonomy_substate_name(next_state);
+    if (reason && reason[0] != '\0') {
+        log << " reason=" << reason;
+    }
+    wasm_log_line(log.str());
+}
 
 static bool read_latest_wheel_odom_snapshot(sensors::WheelOdometryData* out) {
     if (!out) {
@@ -109,6 +148,45 @@ static bool read_latest_pose_snapshot(std::mutex& m_pose, sensors::PoseLog* out)
     std::lock_guard<std::mutex> lk(m_pose);
     *out = g_pose;
     return out->timestamp > 0.0;
+}
+
+static bool pose_log_valid(const sensors::PoseLog& pose) {
+    const double q_norm2 =
+        pose.quaternion.x * pose.quaternion.x +
+        pose.quaternion.y * pose.quaternion.y +
+        pose.quaternion.z * pose.quaternion.z +
+        pose.quaternion.w * pose.quaternion.w;
+    return pose.timestamp > 0.0 && q_norm2 > 1e-6;
+}
+
+static void notify_planner_wake() {
+    {
+        std::lock_guard<std::mutex> lk(g_planner_wake_mutex);
+        ++g_planner_wake_revision;
+    }
+    g_planner_wake_cv.notify_one();
+}
+
+static void enqueue_planner_delta_event(
+    uint64_t map_revision,
+    double timestamp,
+    std::vector<planning::GridCoord> changed_cells,
+    std::vector<planning::GridCoord> newly_occupied_cells) {
+    {
+        std::lock_guard<std::mutex> lk(g_planner_wake_mutex);
+        if (g_planner_delta_queue.size() >= kPlannerDeltaQueueCapacity) {
+            g_planner_delta_queue.pop_front();
+            g_planner_delta_overflowed = true;
+        }
+        MapDeltaEvent event;
+        event.map_revision = map_revision;
+        event.timestamp = timestamp;
+        event.changed_cells = std::move(changed_cells);
+        event.newly_occupied_cells = std::move(newly_occupied_cells);
+        g_planner_delta_queue.push_back(std::move(event));
+        ++g_planner_wake_revision;
+    }
+    g_planner_wake_cv.notify_one();
 }
 
 static core::Vector4d quat_nlerp(
@@ -266,6 +344,7 @@ static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
 static constexpr int32_t kPathFollowHoldMs = 120;
 static constexpr bool kEnableWheelPoseLogging = true;
 static constexpr double kWheelPoseLogIntervalSec = 0.2;
+static constexpr double kGoalCheckLogIntervalSec = 0.5;
 static constexpr bool kEnableVerboseAutonomyLogs = false;
 static constexpr int32_t kPlannerPollMs = 50;
 static constexpr double kPlannerMinIntervalSec = 0.35;
@@ -285,8 +364,8 @@ struct OuterLoopTurnPidConfig {
 };
 
 static constexpr OuterLoopTurnPidConfig kScan4x90TurnPidCfg{
-    18.0,
-    0.05,
+    8.0,
+    0.25,
     1.0,
     0.5 * core::pi,
     0.2,
@@ -327,13 +406,6 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
 
     motors.stop();
     motors.reset_twist_controller();
-    g_scan_map_skip_until_timestamp.store(
-        odom.timestamp + kScanWarmupSec,
-        std::memory_order_release);
-    wasm_log_line("[autonomy][scan] warmup: lidar on, skipping map updates for 1.0s");
-    std::this_thread::sleep_for(std::chrono::milliseconds(kScanWarmupSleepMs));
-    g_scan_map_skip_until_timestamp.store(-1.0, std::memory_order_release);
-    wasm_log_line("[autonomy][scan] warmup complete: resuming map updates");
     wasm_log_line("[autonomy][scan] starting 4x90 scan");
 
     for (int segment = 0; segment < kSegments; ++segment) {
@@ -443,6 +515,7 @@ int main(){
 
     init_camera(&g_cam_config);
     log_config(g_cam_config);
+    planning::bridge::set_goal_change_callback(notify_planner_wake);
 
     if (kEnablePlannerDemoGoal) {
         planning::bridge::set_goal_map_pixel(
@@ -454,6 +527,7 @@ int main(){
 
     std::thread autonomy_thread([&motors, &m_pose](){
         constexpr int kAutonomyFSMSleepMs = 100;
+        constexpr double kLidarWarmupSec = 2.0;
 
         // the main high level thread
         while(!g_imu_ready.load(std::memory_order_acquire) ||
@@ -466,6 +540,15 @@ int main(){
                 std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
             }
         }
+        {
+            std::ostringstream warmup_log;
+            warmup_log << "[autonomy][init] lidar warmup for "
+                       << kLidarWarmupSec
+                       << "s";
+            wasm_log_line(warmup_log.str());
+        }
+        std::this_thread::sleep_for(std::chrono::duration<double>(kLidarWarmupSec));
+        wasm_log_line("[autonomy][init] lidar warmup complete");
         wasm_log_line("SENSOR_INIT -> AUTONOMY_INIT");
         g_state.store(RobotState::AUTONOMY_INIT, std::memory_order_release);
         while(!g_first_map_update_done.load(std::memory_order_acquire)){
@@ -473,20 +556,29 @@ int main(){
         }
 
         if (!g_initial_spin_done.load(std::memory_order_acquire)) {
+            set_autonomy_substate(autonomy::AutonomySubstate::SCANNING, "initial_spin");
             g_scan_active.store(true, std::memory_order_release);
             scan_4x90(motors, m_pose);
             g_scan_active.store(false, std::memory_order_release);
             g_initial_spin_done.store(true, std::memory_order_release);
+            set_autonomy_substate(autonomy::AutonomySubstate::PLANNER_INIT, "initial_spin_complete");
         }
 
         wasm_log_line("AUTONOMY_INIT -> AUTONOMY_ENGAGED");
         g_state.store(RobotState::AUTONOMY_ENGAGED, std::memory_order_release);
+        set_autonomy_substate(autonomy::AutonomySubstate::PLANNER_INIT, "autonomy_engaged");
 
         while (true) {
             if (g_scan_requested.exchange(false, std::memory_order_acq_rel)) {
+                set_autonomy_substate(autonomy::AutonomySubstate::SCANNING, "scan_requested");
                 g_scan_active.store(true, std::memory_order_release);
                 scan_4x90(motors, m_pose);
                 g_scan_active.store(false, std::memory_order_release);
+                if (g_planner_initialized.load(std::memory_order_acquire)) {
+                    set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "scan_complete");
+                } else {
+                    set_autonomy_substate(autonomy::AutonomySubstate::PLANNER_INIT, "scan_complete_waiting_for_planner");
+                }
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
         }
@@ -574,6 +666,9 @@ int main(){
                     g_lc_pose_buffers[write_idx] = g_pose;
                 }
             }
+            if (!pose_log_valid(g_lc_pose_buffers[write_idx])) {
+                g_lc_pose_buffers[write_idx].timestamp = -1.0;
+            }
 
             if (g_lc_buffers[write_idx].points_size > 0) {
                 if (g_lc_buffers[write_idx].timestamp > 0.0 &&
@@ -619,11 +714,17 @@ int main(){
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
       } while (state != RobotState::AUTONOMY_ENGAGED && state != RobotState::AUTONOMY_INIT);
 
-        {
-            std::lock_guard<std::mutex> lk(g_map_mutex);
-            mapping::initialize_map(g_map);
-            g_latest_map_state = LatestMapState{};
+      if (pose_source == PoseSource::fused_IMU_wheel_odom || pose_source == PoseSource::wheel_odom){
+        while(!g_wheel_odom_ready.load(std::memory_order_acquire)){
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+      }
+
+      {
+        std::lock_guard<std::mutex> lk(g_map_mutex);
+        mapping::initialize_map(g_map);
+        g_latest_map_state = LatestMapState{};
+      }
       wasm_log_line("Map initialized");
 
       while(true){
@@ -653,6 +754,19 @@ int main(){
             std::this_thread::yield();
             continue;
         }
+        if (!pose_log_valid(pose_snapshot)) {
+            static bool warned_about_invalid_pose = false;
+            if (!warned_about_invalid_pose) {
+                wasm_log_line("[mapping] skipping lidar frame until pose is initialized");
+                warned_about_invalid_pose = true;
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_lc_cv_mutex);
+                g_lc_slot_states[ready_idx] = LidarSlotState::FREE;
+            }
+            g_lc_cv.notify_one();
+            continue;
+        }
         core::PoseSE3d body_to_world;
         body_to_world.quaternion = pose_snapshot.quaternion;
         body_to_world.translation = pose_snapshot.translation;
@@ -667,27 +781,18 @@ int main(){
             g_lc_cv.notify_one();
             continue;
         }
-        const double scan_skip_until =
-            g_scan_map_skip_until_timestamp.load(std::memory_order_acquire);
-        if (g_scan_active.load(std::memory_order_acquire) &&
-            scan_skip_until > 0.0 &&
-            candidate_timestamp < scan_skip_until) {
-            {
-                std::lock_guard<std::mutex> lk(g_lc_cv_mutex);
-                g_lc_slot_states[ready_idx] = LidarSlotState::FREE;
-            }
-            g_lc_cv.notify_one();
-            continue;
-        }
-
         uint64_t map_revision = 0;
+        std::vector<planning::GridCoord> changed_cells;
+        std::vector<planning::GridCoord> newly_occupied_cells;
         {
             std::lock_guard<std::mutex> lk(g_map_mutex);
             // project the filtered lidar scan into the occupancy grid.
             mapping::update_map_from_lidar(
                 g_map,
                 lc_data,
-                body_to_world
+                body_to_world,
+                &changed_cells,
+                &newly_occupied_cells
             );
             map_revision =
                 g_map_update_revision.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -695,11 +800,26 @@ int main(){
             g_latest_map_state.timestamp = candidate_timestamp;
             g_latest_map_state.revision = map_revision;
             g_latest_map_state.valid = true;
+            mapping::MapSnapshot snapshot;
+            if (mapping::build_map_snapshot(
+                    g_map,
+                    body_to_world,
+                    candidate_timestamp,
+                    map_revision,
+                    &snapshot)) {
+                std::lock_guard<std::mutex> publish_lk(g_map_publish_mutex);
+                g_latest_map_snapshot = std::move(snapshot);
+            }
         }
         if (!g_first_map_update_done.load(std::memory_order_relaxed)) {
             g_first_map_update_done.store(true, std::memory_order_release);
         }
         last_map_timestamp = candidate_timestamp;
+        enqueue_planner_delta_event(
+            map_revision,
+            candidate_timestamp,
+            std::move(changed_cells),
+            std::move(newly_occupied_cells));
 
         // wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
 
@@ -713,7 +833,6 @@ int main(){
 
     // only runs after a map update has occurred
     std::thread planner_thread([&m_pose](){
-        using Clock = std::chrono::steady_clock;
         RobotState state;
         do{
             state = g_state.load(std::memory_order_acquire);
@@ -721,25 +840,54 @@ int main(){
         } while (state != RobotState::AUTONOMY_ENGAGED);
 
         wasm_log_line("Planner initialized");
+        g_planner_initialized.store(true, std::memory_order_release);
+        set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "planner_initialized");
         uint64_t last_planned_revision = 0;
         uint64_t last_goal_revision = planning::bridge::latest_goal_revision();
         planning::GridCoord last_start_cell{};
         bool have_last_start_cell = false;
-        auto last_plan_time = Clock::time_point::min();
+        uint64_t observed_wake_revision = 0;
+        std::vector<MapDeltaEvent> pending_delta_events;
+        std::vector<planning::GridCoord> merged_newly_occupied_cells;
+        bool delta_overflowed = false;
 
         while(true){
+            // wait until a new map arrives, otherwise the previous plan is the best path
+            {
+                std::unique_lock<std::mutex> lk(g_planner_wake_mutex);
+                g_planner_wake_cv.wait(lk, [&]{
+                    return g_planner_wake_revision != observed_wake_revision ||
+                           !g_planner_delta_queue.empty();
+                });
+                observed_wake_revision = g_planner_wake_revision;
+                pending_delta_events.clear();
+                while (!g_planner_delta_queue.empty()) {
+                    pending_delta_events.push_back(std::move(g_planner_delta_queue.front()));
+                    g_planner_delta_queue.pop_front();
+                }
+                delta_overflowed = g_planner_delta_overflowed;
+                g_planner_delta_overflowed = false;
+            }
+
             mapping::MapSnapshot snapshot;
+            planning::bridge::PlanningOverlay current_overlay;
             {
                 std::lock_guard<std::mutex> lk(g_map_publish_mutex);
                 snapshot = g_latest_map_snapshot;
             }
+            {
+                std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
+                current_overlay = g_latest_plan_overlay;
+            }
             if (!snapshot.valid()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(kPlannerPollMs));
+                wasm_log_line("snapshot invalid");
                 continue;
             }
 
+
             sensors::PoseLog pose_snapshot{};
             if (read_latest_pose_snapshot(m_pose, &pose_snapshot)) {
+                wasm_log_line("reading pose snapshot");
                 snapshot.pose = pose_log_to_se2(pose_snapshot);
                 snapshot.timestamp = std::max(snapshot.timestamp, pose_snapshot.timestamp);
             }
@@ -752,38 +900,103 @@ int main(){
                 (!have_last_start_cell || !(start_cell == last_start_cell));
             const bool map_changed = snapshot.map_revision != last_planned_revision;
             const bool goal_changed = goal_revision != last_goal_revision;
-            const auto now = Clock::now();
-            const double elapsed_since_plan = (last_plan_time == Clock::time_point::min())
-                ? std::numeric_limits<double>::infinity()
-                : std::chrono::duration<double>(now - last_plan_time).count();
+            merged_newly_occupied_cells.clear();
+            if (!pending_delta_events.empty()) {
+                size_t total_newly_occupied = 0;
+                for (const MapDeltaEvent& event : pending_delta_events) {
+                    total_newly_occupied += event.newly_occupied_cells.size();
+                }
+                merged_newly_occupied_cells.reserve(total_newly_occupied);
+                for (const MapDeltaEvent& event : pending_delta_events) {
+                    merged_newly_occupied_cells.insert(
+                        merged_newly_occupied_cells.end(),
+                        event.newly_occupied_cells.begin(),
+                        event.newly_occupied_cells.end());
+                }
+            } else {
+                merged_newly_occupied_cells.clear();
+            }
+            const bool have_active_overlay_path =
+                current_overlay.source_map_revision > 0 &&
+                !current_overlay.path_grid.empty();
+            const bool new_occupancy_hits_path =
+                !goal_changed &&
+                !start_cell_changed &&
+                map_changed &&
+                !delta_overflowed &&
+                have_active_overlay_path &&
+                planning::bridge::does_new_occupancy_intersect_overlay_path(
+                    snapshot,
+                    current_overlay,
+                    merged_newly_occupied_cells);
+            std::ostringstream trigger_log;
+            trigger_log << "[planner][trigger] wake_revision=" << observed_wake_revision
+                        << " map_revision=" << snapshot.map_revision
+                        << " last_planned_revision=" << last_planned_revision
+                        << " goal_revision=" << goal_revision
+                        << " last_goal_revision=" << last_goal_revision
+                        << " have_start_cell=" << (have_start_cell ? 1 : 0)
+                        << " start_cell=(" << start_cell.x << "," << start_cell.y << ")"
+                        << " have_last_start_cell=" << (have_last_start_cell ? 1 : 0)
+                        << " last_start_cell=(" << last_start_cell.x << "," << last_start_cell.y << ")"
+                        << " map_changed=" << (map_changed ? 1 : 0)
+                        << " goal_changed=" << (goal_changed ? 1 : 0)
+                        << " start_cell_changed=" << (start_cell_changed ? 1 : 0)
+                        << " have_active_overlay_path=" << (have_active_overlay_path ? 1 : 0)
+                        << " delta_events=" << pending_delta_events.size()
+                        << " delta_overflowed=" << (delta_overflowed ? 1 : 0)
+                        << " new_occupancy_hits_path=" << (new_occupancy_hits_path ? 1 : 0)
+                        << " newly_occupied_count=" << merged_newly_occupied_cells.size()
+                        << " snapshot_timestamp=" << snapshot.timestamp
+                        << " pose_timestamp=" << pose_snapshot.timestamp;
+            wasm_log_line(trigger_log.str());
+            // Skip case 1: nothing has changed and no valid plan exists yet — wait for
+            // the first real trigger (goal set, map update, or robot moves a cell).
             if (!goal_changed &&
                 !last_planned_revision &&
                 !map_changed &&
                 !start_cell_changed) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(kPlannerPollMs));
+                wasm_log_line("case 1: no changes and no valid plan");
                 continue;
             }
+            // Skip case 2: a valid plan already exists and nothing relevant has changed —
+            // the current path is still good, no replan needed.
             if (!goal_changed &&
                 last_planned_revision > 0 &&
                 !map_changed &&
                 !start_cell_changed) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(kPlannerPollMs));
+                wasm_log_line("case 2: valid plan and path is good");
                 continue;
             }
-            if (!goal_changed &&
-                elapsed_since_plan < kPlannerMinIntervalSec) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(kPlannerPollMs));
+            if (map_changed &&
+                !goal_changed &&
+                !start_cell_changed &&
+                have_active_overlay_path &&
+                !delta_overflowed &&
+                !new_occupancy_hits_path) {
+                wasm_log_line("case 3: map delta misses inflated path corridor");
+                last_planned_revision = snapshot.map_revision;
                 continue;
             }
+            // No case-3 rate-limiter: D* Lite only re-expands cells near changed
+            // obstacles, so replanning on every new scan is cheap.
 
+            wasm_log_line("redrawing planning overlay");
+            if (goal_changed) {
+                set_autonomy_substate(autonomy::AutonomySubstate::GOAL_SELECTION, "goal_changed");
+            } else {
+                set_autonomy_substate(autonomy::AutonomySubstate::FRONTIER_DETECTION, "planner_wake");
+                set_autonomy_substate(autonomy::AutonomySubstate::GOAL_SELECTION, "auto_frontier_goal");
+            }
+            set_autonomy_substate(autonomy::AutonomySubstate::PLANNING_GOAL, "update_plan_overlay");
             planning::bridge::PlanningOverlay overlay =
                 planning::bridge::update_plan_overlay(
                     snapshot,
                     kRenderWidth,
                     kRenderHeight);
+            const bool published_path = !overlay.path_grid.empty();
             last_planned_revision = snapshot.map_revision;
             last_goal_revision = goal_revision;
-            last_plan_time = now;
             if (have_start_cell) {
                 last_start_cell = start_cell;
                 have_last_start_cell = true;
@@ -791,6 +1004,20 @@ int main(){
             {
                 std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
                 g_latest_plan_overlay = std::move(overlay);
+            }
+            if (!published_path) {
+                set_autonomy_substate(autonomy::AutonomySubstate::NO_PATH_AVAILABLE, "planner_produced_no_path");
+                if (!goal_changed &&
+                    g_planner_initialized.load(std::memory_order_acquire) &&
+                    !g_scan_requested.load(std::memory_order_acquire) &&
+                    !g_scan_active.load(std::memory_order_acquire)) {
+                    set_autonomy_substate(autonomy::AutonomySubstate::SCAN_REQUESTED, "planner_requested_scan");
+                    g_scan_requested.store(true, std::memory_order_release);
+                } else {
+                    set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "planner_produced_no_path_wait");
+                }
+            } else {
+                set_autonomy_substate(autonomy::AutonomySubstate::FOLLOWING_PATH, "planner_published_path");
             }
         }
 
@@ -809,26 +1036,7 @@ int main(){
         while (true) {
             mapping::MapSnapshot snapshot;
             planning::bridge::PlanningOverlay overlay;
-            const uint64_t latest_map_revision =
-                g_map_update_revision.load(std::memory_order_acquire);
-            if (latest_map_revision != last_rendered_map_revision) {
-                bool built_snapshot = false;
-                {
-                    std::lock_guard<std::mutex> lk(g_map_mutex);
-                    if (g_latest_map_state.valid) {
-                        built_snapshot = mapping::build_map_snapshot(
-                            g_map,
-                            g_latest_map_state.body_to_world,
-                            g_latest_map_state.timestamp,
-                            g_latest_map_state.revision,
-                            &snapshot);
-                    }
-                }
-                if (built_snapshot) {
-                    std::lock_guard<std::mutex> lk(g_map_publish_mutex);
-                    g_latest_map_snapshot = snapshot;
-                }
-            } else {
+            {
                 std::lock_guard<std::mutex> lk(g_map_publish_mutex);
                 snapshot = g_latest_map_snapshot;
             }
@@ -907,6 +1115,7 @@ int main(){
         uint64_t planned_path_revision = 0;
         core::PoseSE2d wheel_pose{};
         double last_wheel_pose_log_timestamp = -1.0;
+        double last_goal_check_log_timestamp = -1.0;
         bool goal_reached_logged = false;
 
         while(true){
@@ -979,6 +1188,7 @@ int main(){
                 goal_reached_logged = false;
                 if (!planned_path_world.empty()) {
                     path_follower.set_path(planned_path_world);
+                    set_autonomy_substate(autonomy::AutonomySubstate::FOLLOWING_PATH, "control_loaded_path");
                     if (kEnableVerboseAutonomyLogs) {
                         std::ostringstream path_log;
                         path_log << "[autonomy][path] updated revision="
@@ -989,6 +1199,7 @@ int main(){
                 } else {
                     path_follower.clear_path();
                     motors.stop();
+                    set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "path_revision_cleared");
                 }
             }
 
@@ -1006,13 +1217,46 @@ int main(){
                 static_cast<double>(std::max(1, odom.sample_period_ms)) * 1e-3);
             const controls::PathFollowerStatus status =
                 path_follower.update(fused_pose, dt_seconds, kPathFollowHoldMs);
+            if (!planned_path_world.empty() &&
+                (last_goal_check_log_timestamp < 0.0 ||
+                 (odom.timestamp - last_goal_check_log_timestamp) >=
+                     kGoalCheckLogIntervalSec)) {
+                const core::Vector3d& goal = planned_path_world.back();
+                const double goal_dist = std::hypot(
+                    goal.x - fused_pose.x,
+                    goal.y - fused_pose.y);
+                double goal_heading_error = 0.0;
+                if (planned_path_world.size() >= 2) {
+                    const core::Vector3d& prev = planned_path_world[planned_path_world.size() - 2];
+                    const double goal_heading = std::atan2(goal.y - prev.y, goal.x - prev.x);
+                    goal_heading_error = core::normalize_angle(goal_heading - fused_pose.yaw);
+                }
+                std::ostringstream goal_log;
+                goal_log << "[autonomy][goal-check] pose=("
+                         << fused_pose.x << "," << fused_pose.y << "," << fused_pose.yaw
+                         << ") goal=(" << goal.x << "," << goal.y
+                         << ") goal_dist=" << goal_dist
+                         << " goal_heading_error=" << goal_heading_error
+                         << " dist_tol=0.05 heading_gate=ignored"
+                         << " target_index=" << status.target_index
+                         << " status_dist_error=" << status.distance_error_m
+                         << " status_heading_error=" << status.heading_error_rad;
+                wasm_log_line(goal_log.str());
+                last_goal_check_log_timestamp = odom.timestamp;
+            }
             if (status.goal_reached) {
                 if (!goal_reached_logged) {
                     goal_reached_logged = true;
                     wasm_log_line("[autonomy][path] goal reached");
                 }
                 path_follower.clear_path();
+                planning::bridge::invalidate_current_plan();
+                {
+                    std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
+                    g_latest_plan_overlay = planning::bridge::PlanningOverlay{};
+                }
                 motors.stop();
+                set_autonomy_substate(autonomy::AutonomySubstate::SCAN_REQUESTED, "goal_reached");
                 g_scan_requested.store(true, std::memory_order_release);
                 continue;
             }

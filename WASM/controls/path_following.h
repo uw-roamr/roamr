@@ -30,8 +30,9 @@ struct PathFollowerConfig {
 
   double lookahead_m = 0.14;
   double waypoint_reached_m = 0.08;
-  double goal_tolerance_m = 0.05;
+  double goal_tolerance_m = 0.1;
   double goal_heading_tolerance_rad = 0.22;
+  double start_heading_align_tolerance_rad = 0.18;
 
   double max_linear_speed_mps = kMaxLinearSpeedMps;
   double max_angular_speed_rad_s = kMaxAngularSpeedRadPerSec;
@@ -65,12 +66,14 @@ class PathFollower {
   void set_path(const std::vector<core::Vector3d>& path_world) {
     path_ = path_world;
     target_index_ = 0;
+    require_start_heading_alignment_ = path_.size() >= 2;
     reset_controller_state();
   }
 
   void clear_path() {
     path_.clear();
     target_index_ = 0;
+    require_start_heading_alignment_ = false;
     reset_controller_state();
   }
 
@@ -87,15 +90,13 @@ class PathFollower {
     }
 
     const double dt = std::max(1e-3, dt_seconds);
-    advance_waypoint_if_reached(pose);
 
     const core::Vector3d& goal = path_.back();
     const double goal_dist = euclidean_distance(pose.x, pose.y, goal.x, goal.y);
     const double goal_heading_error =
         path_.size() < 2 ? 0.0 : normalize_angle(final_path_heading() - pose.yaw);
 
-    if (goal_dist <= cfg_.goal_tolerance_m &&
-        std::abs(goal_heading_error) <= cfg_.goal_heading_tolerance_rad) {
+    if (goal_dist <= cfg_.goal_tolerance_m) {
       reset_controller_state();
       status.goal_reached = true;
       status.target_index = path_.size() - 1;
@@ -103,6 +104,38 @@ class PathFollower {
       status.heading_error_rad = goal_heading_error;
       return status;
     }
+
+    if (require_start_heading_alignment_ && path_.size() >= 2) {
+      const double start_heading = std::atan2(
+          path_[1].y - path_[0].y,
+          path_[1].x - path_[0].x);
+      const double start_heading_error = normalize_angle(start_heading - pose.yaw);
+      if (std::abs(start_heading_error) > cfg_.start_heading_align_tolerance_rad) {
+        double angular_cmd = pid_update(
+            start_heading_error,
+            dt,
+            cfg_.heading_pid,
+            &heading_integral_,
+            &prev_heading_error_,
+            &has_prev_heading_error_);
+        angular_cmd = std::clamp(
+            angular_cmd, -cfg_.max_angular_speed_rad_s, cfg_.max_angular_speed_rad_s);
+        angular_cmd = apply_slew_rate_limit(
+            angular_cmd, last_angular_cmd_, cfg_.max_angular_accel_rad_s2, dt);
+        last_linear_cmd_ = 0.0;
+        last_angular_cmd_ = angular_cmd;
+        status.command.v_mps = 0.0;
+        status.command.omega_rad_s = angular_cmd;
+        status.target_index = 0;
+        status.distance_error_m = goal_dist;
+        status.heading_error_rad = start_heading_error;
+        return status;
+      }
+      require_start_heading_alignment_ = false;
+      reset_controller_state();
+    }
+
+    advance_waypoint_if_reached(pose);
 
     const size_t lookahead_index = select_lookahead_index(pose);
     target_index_ = lookahead_index;
@@ -287,6 +320,7 @@ class PathFollower {
 
   double last_linear_cmd_ = 0.0;
   double last_angular_cmd_ = 0.0;
+  bool require_start_heading_alignment_ = false;
 };
 
 }  // namespace controls

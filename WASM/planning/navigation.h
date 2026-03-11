@@ -24,11 +24,11 @@ namespace planning{
 
     void initial_spin();
 
-    
+
     bool find_frontiers();
     void cluster_frontiers();
     // A* plan to largest cluster
 
     void explore_full_map();
-    
+
 }; // namespace controls

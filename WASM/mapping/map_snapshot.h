@@ -6,6 +6,7 @@
 
 #include "core/pose/se2.h"
 #include "mapping/map_metadata.h"
+#include "planning/planner.h"
 
 namespace mapping {
 
