@@ -118,10 +118,21 @@ namespace mapping {
     if (out_newly_occupied_cells) {
       out_newly_occupied_cells->clear();
     }
-    static thread_local std::vector<uint8_t> s_newly_occupied_mask;
+    static thread_local std::vector<uint32_t> s_newly_occupied_mask;
+    static thread_local uint32_t s_newly_occupied_stamp = 1;
     const size_t grid_cells = static_cast<size_t>(Map::kMapSizeX * Map::kMapSizeY);
-    if (out_newly_occupied_cells) {
+    if (out_newly_occupied_cells && s_newly_occupied_mask.size() != grid_cells) {
       s_newly_occupied_mask.assign(grid_cells, 0);
+      s_newly_occupied_stamp = 1;
+    } else if (out_newly_occupied_cells) {
+      ++s_newly_occupied_stamp;
+      if (s_newly_occupied_stamp == 0) {
+        std::fill(
+            s_newly_occupied_mask.begin(),
+            s_newly_occupied_mask.end(),
+            static_cast<uint32_t>(0));
+        s_newly_occupied_stamp = 1;
+      }
     }
 
     const core::Vector4d q_body_to_world = core::quat_normalize(body_to_world.quaternion);
@@ -189,7 +200,8 @@ namespace mapping {
               map_point.x,
               map_point.y,
               out_newly_occupied_cells,
-              out_newly_occupied_cells ? &s_newly_occupied_mask : nullptr);
+              out_newly_occupied_cells ? &s_newly_occupied_mask : nullptr,
+              s_newly_occupied_stamp);
           ++used_points;
         }
       } else if (keep && !in_range && r2 > 1e-9) {

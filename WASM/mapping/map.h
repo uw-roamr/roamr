@@ -49,7 +49,8 @@ namespace mapping{
             double wx,
             double wy,
             std::vector<planning::GridCoord>* newly_occupied_cells = nullptr,
-            std::vector<uint8_t>* newly_occupied_mask = nullptr);
+            std::vector<uint32_t>* newly_occupied_mask = nullptr,
+            uint32_t newly_occupied_stamp = 0);
         void integrate_free_world(
             int32_t start_x,
             int32_t start_y,
@@ -71,7 +72,8 @@ namespace mapping{
             int32_t x1,
             int32_t y1,
             std::vector<planning::GridCoord>* newly_occupied_cells,
-            std::vector<uint8_t>* newly_occupied_mask);
+            std::vector<uint32_t>* newly_occupied_mask,
+            uint32_t newly_occupied_stamp);
         void integrate_scan(
             const core::PoseSE2d& pose,
             int32_t point_count,

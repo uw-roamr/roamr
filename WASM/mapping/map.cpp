@@ -28,7 +28,8 @@ void maybe_record_cell_change(
     bool new_visited,
     bool new_confirmed,
     std::vector<planning::GridCoord>* newly_occupied_cells,
-    std::vector<uint8_t>* newly_occupied_mask) {
+    std::vector<uint32_t>* newly_occupied_mask,
+    uint32_t newly_occupied_stamp) {
   const bool old_occupied = old_visited && old_confirmed;
   const bool new_occupied = new_visited && new_confirmed;
   if (old_visited == new_visited && old_confirmed == new_confirmed) {
@@ -39,9 +40,9 @@ void maybe_record_cell_change(
   if (!old_occupied && new_occupied && newly_occupied_cells) {
     bool should_append = true;
     if (newly_occupied_mask && idx < newly_occupied_mask->size()) {
-      should_append = ((*newly_occupied_mask)[idx] == 0);
+      should_append = ((*newly_occupied_mask)[idx] != newly_occupied_stamp);
       if (should_append) {
-        (*newly_occupied_mask)[idx] = 1;
+        (*newly_occupied_mask)[idx] = newly_occupied_stamp;
       }
     }
     if (should_append) {
@@ -186,7 +187,8 @@ void Map::integrate_ray(
     int32_t x1,
     int32_t y1,
     std::vector<planning::GridCoord>* newly_occupied_cells,
-    std::vector<uint8_t>* newly_occupied_mask) {
+    std::vector<uint32_t>* newly_occupied_mask,
+    uint32_t newly_occupied_stamp) {
   int dx = (x1 > x0) ? (x1 - x0) : (x0 - x1);
   int sx = (x0 < x1) ? 1 : -1;
   int dy = (y1 > y0) ? (y0 - y1) : (y1 - y0);
@@ -216,7 +218,8 @@ void Map::integrate_ray(
           visited_[idx] != 0,
           confirmed_[idx] != 0,
           newly_occupied_cells,
-          newly_occupied_mask);
+          newly_occupied_mask,
+          newly_occupied_stamp);
       break;
     }
 
@@ -234,7 +237,8 @@ void Map::integrate_ray(
         visited_[idx] != 0,
         confirmed_[idx] != 0,
         newly_occupied_cells,
-        newly_occupied_mask);
+        newly_occupied_mask,
+        newly_occupied_stamp);
 
     const int e2 = 2 * err;
     if (e2 >= dy) {
@@ -280,7 +284,8 @@ void Map::integrate_free_ray(
         visited_[idx] != 0,
         confirmed_[idx] != 0,
         nullptr,
-        nullptr);
+        nullptr,
+        0);
     if (x == x1 && y == y1) {
       break;
     }
@@ -304,7 +309,8 @@ void Map::integrate_hit_world(
     double wx,
     double wy,
     std::vector<planning::GridCoord>* newly_occupied_cells,
-    std::vector<uint8_t>* newly_occupied_mask) {
+    std::vector<uint32_t>* newly_occupied_mask,
+    uint32_t newly_occupied_stamp) {
   const double min_range2 =
       static_cast<double>(kMinRange) * static_cast<double>(kMinRange);
   const double dx = wx - pose.x;
@@ -330,7 +336,8 @@ void Map::integrate_hit_world(
       end_x,
       end_y,
       newly_occupied_cells,
-      newly_occupied_mask);
+      newly_occupied_mask,
+      newly_occupied_stamp);
 }
 
 void Map::integrate_free_world(
