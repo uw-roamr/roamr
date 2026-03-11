@@ -48,17 +48,13 @@ namespace mapping{
             const core::PoseSE2d& pose,
             double wx,
             double wy,
-            std::vector<planning::GridCoord>* changed_cells = nullptr,
-            std::vector<uint8_t>* changed_mask = nullptr,
             std::vector<planning::GridCoord>* newly_occupied_cells = nullptr,
             std::vector<uint8_t>* newly_occupied_mask = nullptr);
         void integrate_free_world(
             int32_t start_x,
             int32_t start_y,
             double wx,
-            double wy,
-            std::vector<planning::GridCoord>* changed_cells = nullptr,
-            std::vector<uint8_t>* changed_mask = nullptr);
+            double wy);
         void draw_map(
             const core::PoseSE2d& pose,
             int32_t point_count,
@@ -74,8 +70,6 @@ namespace mapping{
             int32_t y0,
             int32_t x1,
             int32_t y1,
-            std::vector<planning::GridCoord>* changed_cells,
-            std::vector<uint8_t>* changed_mask,
             std::vector<planning::GridCoord>* newly_occupied_cells,
             std::vector<uint8_t>* newly_occupied_mask);
         void integrate_scan(
@@ -88,9 +82,7 @@ namespace mapping{
             int32_t x0,
             int32_t y0,
             int32_t x1,
-            int32_t y1,
-            std::vector<planning::GridCoord>* changed_cells,
-            std::vector<uint8_t>* changed_mask);
+            int32_t y1);
         void integrate_free_scan(const core::PoseSE2d& pose, int32_t free_point_count);
 
         // LiDAR points storage (2D projection x,y).

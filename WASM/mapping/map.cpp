@@ -27,8 +27,6 @@ void maybe_record_cell_change(
     bool old_confirmed,
     bool new_visited,
     bool new_confirmed,
-    std::vector<planning::GridCoord>* changed_cells,
-    std::vector<uint8_t>* changed_mask,
     std::vector<planning::GridCoord>* newly_occupied_cells,
     std::vector<uint8_t>* newly_occupied_mask) {
   const bool old_occupied = old_visited && old_confirmed;
@@ -38,18 +36,6 @@ void maybe_record_cell_change(
   }
 
   const size_t idx = static_cast<size_t>(x + y * width);
-  if (changed_cells) {
-    bool should_append = true;
-    if (changed_mask && idx < changed_mask->size()) {
-      should_append = ((*changed_mask)[idx] == 0);
-      if (should_append) {
-        (*changed_mask)[idx] = 1;
-      }
-    }
-    if (should_append) {
-      changed_cells->push_back(planning::GridCoord{x, y});
-    }
-  }
   if (!old_occupied && new_occupied && newly_occupied_cells) {
     bool should_append = true;
     if (newly_occupied_mask && idx < newly_occupied_mask->size()) {
@@ -199,8 +185,6 @@ void Map::integrate_ray(
     int32_t y0,
     int32_t x1,
     int32_t y1,
-    std::vector<planning::GridCoord>* changed_cells,
-    std::vector<uint8_t>* changed_mask,
     std::vector<planning::GridCoord>* newly_occupied_cells,
     std::vector<uint8_t>* newly_occupied_mask) {
   int dx = (x1 > x0) ? (x1 - x0) : (x0 - x1);
@@ -231,8 +215,6 @@ void Map::integrate_ray(
           old_confirmed,
           visited_[idx] != 0,
           confirmed_[idx] != 0,
-          changed_cells,
-          changed_mask,
           newly_occupied_cells,
           newly_occupied_mask);
       break;
@@ -251,8 +233,6 @@ void Map::integrate_ray(
         old_confirmed,
         visited_[idx] != 0,
         confirmed_[idx] != 0,
-        changed_cells,
-        changed_mask,
         newly_occupied_cells,
         newly_occupied_mask);
 
@@ -272,9 +252,7 @@ void Map::integrate_free_ray(
     int32_t x0,
     int32_t y0,
     int32_t x1,
-    int32_t y1,
-    std::vector<planning::GridCoord>* changed_cells,
-    std::vector<uint8_t>* changed_mask) {
+    int32_t y1) {
   int dx = (x1 > x0) ? (x1 - x0) : (x0 - x1);
   int sx = (x0 < x1) ? 1 : -1;
   int dy = (y1 > y0) ? (y0 - y1) : (y1 - y0);
@@ -301,8 +279,6 @@ void Map::integrate_free_ray(
         old_confirmed,
         visited_[idx] != 0,
         confirmed_[idx] != 0,
-        changed_cells,
-        changed_mask,
         nullptr,
         nullptr);
     if (x == x1 && y == y1) {
@@ -327,8 +303,6 @@ void Map::integrate_hit_world(
     const core::PoseSE2d& pose,
     double wx,
     double wy,
-    std::vector<planning::GridCoord>* changed_cells,
-    std::vector<uint8_t>* changed_mask,
     std::vector<planning::GridCoord>* newly_occupied_cells,
     std::vector<uint8_t>* newly_occupied_mask) {
   const double min_range2 =
@@ -355,8 +329,6 @@ void Map::integrate_hit_world(
       start_y,
       end_x,
       end_y,
-      changed_cells,
-      changed_mask,
       newly_occupied_cells,
       newly_occupied_mask);
 }
@@ -365,16 +337,14 @@ void Map::integrate_free_world(
     int32_t start_x,
     int32_t start_y,
     double wx,
-    double wy,
-    std::vector<planning::GridCoord>* changed_cells,
-    std::vector<uint8_t>* changed_mask) {
+    double wy) {
   int32_t end_x = 0;
   int32_t end_y = 0;
   if (!world_to_grid(wx, wy, &end_x, &end_y)) {
     return;
   }
 
-  integrate_free_ray(start_x, start_y, end_x, end_y, changed_cells, changed_mask);
+  integrate_free_ray(start_x, start_y, end_x, end_y);
 }
 
 void Map::integrate_scan(

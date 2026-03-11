@@ -111,23 +111,15 @@ namespace mapping {
   void update_map_from_lidar(Map& map,
                              const sensors::LidarCameraData& lc_data,
                              const core::PoseSE3d& body_to_world,
-                             std::vector<planning::GridCoord>* out_changed_cells,
                              std::vector<planning::GridCoord>* out_newly_occupied_cells
                             ) {
     const int total_points = static_cast<int>(lc_data.points_size / 3);
     if (total_points <= 0) return;
-    if (out_changed_cells) {
-      out_changed_cells->clear();
-    }
     if (out_newly_occupied_cells) {
       out_newly_occupied_cells->clear();
     }
-    static thread_local std::vector<uint8_t> s_changed_mask;
     static thread_local std::vector<uint8_t> s_newly_occupied_mask;
     const size_t grid_cells = static_cast<size_t>(Map::kMapSizeX * Map::kMapSizeY);
-    if (out_changed_cells) {
-      s_changed_mask.assign(grid_cells, 0);
-    }
     if (out_newly_occupied_cells) {
       s_newly_occupied_mask.assign(grid_cells, 0);
     }
@@ -196,8 +188,6 @@ namespace mapping {
               map_pose,
               map_point.x,
               map_point.y,
-              out_changed_cells,
-              out_changed_cells ? &s_changed_mask : nullptr,
               out_newly_occupied_cells,
               out_newly_occupied_cells ? &s_newly_occupied_mask : nullptr);
           ++used_points;
@@ -224,9 +214,7 @@ namespace mapping {
             start_x,
             start_y,
             bin.free_world_x,
-            bin.free_world_y,
-            out_changed_cells,
-            out_changed_cells ? &s_changed_mask : nullptr);
+            bin.free_world_y);
         ++free_points;
       }
     }
