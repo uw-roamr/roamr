@@ -83,8 +83,9 @@ inline void integrate_wheel_odometry(
   const WheelDeltaMeters delta = wheel_delta_meters_from_ticks(odom);
   const double ds = 0.5 * (delta.left + delta.right);
 
-  pose.x -= ds * std::cos(heading);
-  pose.y -= ds * std::sin(heading);
+  // In FLU, positive wheel travel should move the body forward along +x.
+  pose.x += ds * std::cos(heading);
+  pose.y += ds * std::sin(heading);
   pose.theta = heading;
 }
 } // namespace sensors

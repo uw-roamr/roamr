@@ -104,12 +104,18 @@ static constexpr size_t kPoseHistoryCapacity = 256;
 static core::RingBuffer<sensors::PoseLog, kPoseHistoryCapacity> g_pose_history;
 static std::atomic<bool> g_scan_active{false};
 static std::atomic<bool> g_scan_requested{false};
+static std::atomic<uint64_t> g_completed_scan_count{0};
+static std::atomic<bool> g_no_reachable_frontiers_terminal{false};
 static std::atomic<double> g_scan_map_skip_until_timestamp{-1.0};
 
 
 static void set_autonomy_substate(
     autonomy::AutonomySubstate next_state,
     const char* reason = nullptr) {
+    if (g_no_reachable_frontiers_terminal.load(std::memory_order_acquire) &&
+        next_state != autonomy::AutonomySubstate::IDLE) {
+        return;
+    }
     const autonomy::AutonomySubstate previous =
         g_autonomy_substate.exchange(next_state, std::memory_order_acq_rel);
     if (previous == next_state) {
@@ -124,6 +130,21 @@ static void set_autonomy_substate(
         log << " reason=" << reason;
     }
     wasm_log_line(log.str());
+}
+
+static void enter_no_reachable_frontiers_terminal_state() {
+    const bool already_terminal =
+        g_no_reachable_frontiers_terminal.exchange(true, std::memory_order_acq_rel);
+    if (!already_terminal) {
+        g_scan_requested.store(false, std::memory_order_release);
+        planning::bridge::invalidate_current_plan();
+        {
+            std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
+            g_latest_plan_overlay = planning::bridge::PlanningOverlay{};
+        }
+        wasm_log_line("NO REACHABLE FRONTIERS (MAP COMPLETE)");
+    }
+    set_autonomy_substate(autonomy::AutonomySubstate::IDLE, "no_reachable_frontiers");
 }
 
 static bool read_latest_wheel_odom_snapshot(sensors::WheelOdometryData* out) {
@@ -385,6 +406,7 @@ static constexpr bool kEnableWheelPoseLogging = true;
 static constexpr double kWheelPoseLogIntervalSec = 0.2;
 static constexpr double kGoalCheckLogIntervalSec = 0.5;
 static constexpr bool kEnableVerboseAutonomyLogs = false;
+static constexpr bool kEnablePlannerWakeLogs = false;
 static constexpr int32_t kPlannerPollMs = 50;
 static constexpr double kPlannerMinIntervalSec = 0.35;
 static constexpr int32_t kTelemetryRenderIntervalMs = 33;
@@ -599,6 +621,7 @@ int main(){
             g_scan_active.store(true, std::memory_order_release);
             scan_4x90(motors, m_pose);
             g_scan_active.store(false, std::memory_order_release);
+            g_completed_scan_count.fetch_add(1, std::memory_order_acq_rel);
             g_initial_spin_done.store(true, std::memory_order_release);
             set_autonomy_substate(autonomy::AutonomySubstate::PLANNER_INIT, "initial_spin_complete");
         }
@@ -608,11 +631,17 @@ int main(){
         set_autonomy_substate(autonomy::AutonomySubstate::PLANNER_INIT, "autonomy_engaged");
 
         while (true) {
+            if (g_no_reachable_frontiers_terminal.load(std::memory_order_acquire)) {
+                motors.stop();
+                std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
+                continue;
+            }
             if (g_scan_requested.exchange(false, std::memory_order_acq_rel)) {
                 set_autonomy_substate(autonomy::AutonomySubstate::SCANNING, "scan_requested");
                 g_scan_active.store(true, std::memory_order_release);
                 scan_4x90(motors, m_pose);
                 g_scan_active.store(false, std::memory_order_release);
+                g_completed_scan_count.fetch_add(1, std::memory_order_acq_rel);
                 if (g_planner_initialized.load(std::memory_order_acquire)) {
                     set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "scan_complete");
                 } else {
@@ -880,6 +909,10 @@ int main(){
         pending_delta_events.reserve(kPlannerDeltaQueueCapacity);
         merged_newly_occupied_cells.reserve(2048);
         bool delta_overflowed = false;
+        bool final_frontier_scan_pending = false;
+        bool final_frontier_scan_completed = false;
+        bool no_reachable_frontiers_logged = false;
+        uint64_t final_frontier_scan_target_count = 0;
 
         while(true){
             // wait until a new map arrives, otherwise the previous plan is the best path
@@ -897,6 +930,10 @@ int main(){
                 }
                 delta_overflowed = g_planner_delta_overflowed;
                 g_planner_delta_overflowed = false;
+            }
+            if (g_no_reachable_frontiers_terminal.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
             }
 
             mapping::MapSnapshot snapshot;
@@ -940,6 +977,13 @@ int main(){
                 (!have_last_start_cell || !(start_cell == last_start_cell));
             const bool map_changed = snapshot.map_revision != last_planned_revision;
             const bool goal_changed = goal_revision != last_goal_revision;
+            const uint64_t completed_scan_count =
+                g_completed_scan_count.load(std::memory_order_acquire);
+            if (final_frontier_scan_pending &&
+                completed_scan_count >= final_frontier_scan_target_count) {
+                final_frontier_scan_pending = false;
+                final_frontier_scan_completed = true;
+            }
             merged_newly_occupied_cells.clear();
             if (!pending_delta_events.empty()) {
                 size_t total_newly_occupied = 0;
@@ -969,34 +1013,38 @@ int main(){
                     snapshot,
                     current_overlay,
                     merged_newly_occupied_cells);
-            std::ostringstream trigger_log;
-            trigger_log << "[planner][trigger] wake_revision=" << observed_wake_revision
-                        << " map_revision=" << snapshot.map_revision
-                        << " last_planned_revision=" << last_planned_revision
-                        << " goal_revision=" << goal_revision
-                        << " last_goal_revision=" << last_goal_revision
-                        << " have_start_cell=" << (have_start_cell ? 1 : 0)
-                        << " start_cell=(" << start_cell.x << "," << start_cell.y << ")"
-                        << " have_last_start_cell=" << (have_last_start_cell ? 1 : 0)
-                        << " last_start_cell=(" << last_start_cell.x << "," << last_start_cell.y << ")"
-                        << " map_changed=" << (map_changed ? 1 : 0)
-                        << " goal_changed=" << (goal_changed ? 1 : 0)
-                        << " start_cell_changed=" << (start_cell_changed ? 1 : 0)
-                        << " have_active_overlay_path=" << (have_active_overlay_path ? 1 : 0)
-                        << " delta_events=" << pending_delta_events.size()
-                        << " delta_overflowed=" << (delta_overflowed ? 1 : 0)
-                        << " new_occupancy_hits_path=" << (new_occupancy_hits_path ? 1 : 0)
-                        << " newly_occupied_count=" << merged_newly_occupied_cells.size()
-                        << " snapshot_timestamp=" << snapshot.timestamp
-                        << " pose_timestamp=" << pose_snapshot.timestamp;
-            wasm_log_line(trigger_log.str());
+            if (kEnablePlannerWakeLogs) {
+                std::ostringstream trigger_log;
+                trigger_log << "[planner][trigger] wake_revision=" << observed_wake_revision
+                            << " map_revision=" << snapshot.map_revision
+                            << " last_planned_revision=" << last_planned_revision
+                            << " goal_revision=" << goal_revision
+                            << " last_goal_revision=" << last_goal_revision
+                            << " have_start_cell=" << (have_start_cell ? 1 : 0)
+                            << " start_cell=(" << start_cell.x << "," << start_cell.y << ")"
+                            << " have_last_start_cell=" << (have_last_start_cell ? 1 : 0)
+                            << " last_start_cell=(" << last_start_cell.x << "," << last_start_cell.y << ")"
+                            << " map_changed=" << (map_changed ? 1 : 0)
+                            << " goal_changed=" << (goal_changed ? 1 : 0)
+                            << " start_cell_changed=" << (start_cell_changed ? 1 : 0)
+                            << " have_active_overlay_path=" << (have_active_overlay_path ? 1 : 0)
+                            << " delta_events=" << pending_delta_events.size()
+                            << " delta_overflowed=" << (delta_overflowed ? 1 : 0)
+                            << " new_occupancy_hits_path=" << (new_occupancy_hits_path ? 1 : 0)
+                            << " newly_occupied_count=" << merged_newly_occupied_cells.size()
+                            << " snapshot_timestamp=" << snapshot.timestamp
+                            << " pose_timestamp=" << pose_snapshot.timestamp;
+                wasm_log_line(trigger_log.str());
+            }
             // Skip case 1: nothing has changed and no valid plan exists yet — wait for
             // the first real trigger (goal set, map update, or robot moves a cell).
             if (!goal_changed &&
                 !last_planned_revision &&
                 !map_changed &&
                 !start_cell_changed) {
-                wasm_log_line("case 1: no changes and no valid plan");
+                if (kEnablePlannerWakeLogs) {
+                    wasm_log_line("case 1: no changes and no valid plan");
+                }
                 continue;
             }
             // Skip case 2: a valid plan already exists and nothing relevant has changed —
@@ -1005,7 +1053,9 @@ int main(){
                 last_planned_revision > 0 &&
                 !map_changed &&
                 !start_cell_changed) {
-                wasm_log_line("case 2: valid plan and path is good");
+                if (kEnablePlannerWakeLogs) {
+                    wasm_log_line("case 2: valid plan and path is good");
+                }
                 continue;
             }
             if (map_changed &&
@@ -1014,14 +1064,18 @@ int main(){
                 have_active_overlay_path &&
                 !delta_overflowed &&
                 !new_occupancy_hits_path) {
-                wasm_log_line("case 3: map delta misses inflated path corridor");
+                if (kEnablePlannerWakeLogs) {
+                    wasm_log_line("case 3: map delta misses inflated path corridor");
+                }
                 last_planned_revision = snapshot.map_revision;
                 continue;
             }
             // No case-3 rate-limiter: D* Lite only re-expands cells near changed
             // obstacles, so replanning on every new scan is cheap.
 
-            wasm_log_line("redrawing planning overlay");
+            if (kEnablePlannerWakeLogs) {
+                wasm_log_line("redrawing planning overlay");
+            }
             if (goal_changed) {
                 set_autonomy_substate(autonomy::AutonomySubstate::GOAL_SELECTION, "goal_changed");
             } else {
@@ -1046,15 +1100,34 @@ int main(){
                 std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
                 g_latest_plan_overlay = std::move(overlay);
             }
+            if (goal_changed || published_path || have_frontier_candidates) {
+                final_frontier_scan_pending = false;
+                final_frontier_scan_completed = false;
+                no_reachable_frontiers_logged = false;
+                final_frontier_scan_target_count = 0;
+            }
             if (!published_path) {
                 set_autonomy_substate(autonomy::AutonomySubstate::NO_PATH_AVAILABLE, "planner_produced_no_path");
                 if (!goal_changed &&
                     !have_frontier_candidates &&
-                    g_planner_initialized.load(std::memory_order_acquire) &&
-                    !g_scan_requested.load(std::memory_order_acquire) &&
-                    !g_scan_active.load(std::memory_order_acquire)) {
-                    set_autonomy_substate(autonomy::AutonomySubstate::SCAN_REQUESTED, "planner_requested_scan");
+                    final_frontier_scan_completed) {
+                    if (!no_reachable_frontiers_logged) {
+                        enter_no_reachable_frontiers_terminal_state();
+                        no_reachable_frontiers_logged = true;
+                    }
+                } else if (!goal_changed &&
+                           !have_frontier_candidates &&
+                           !final_frontier_scan_pending &&
+                           g_planner_initialized.load(std::memory_order_acquire) &&
+                           !g_scan_requested.load(std::memory_order_acquire) &&
+                           !g_scan_active.load(std::memory_order_acquire)) {
+                    set_autonomy_substate(
+                        autonomy::AutonomySubstate::SCAN_REQUESTED,
+                        "planner_requested_final_scan");
                     g_scan_requested.store(true, std::memory_order_release);
+                    final_frontier_scan_pending = true;
+                    final_frontier_scan_target_count = completed_scan_count + 1;
+                    no_reachable_frontiers_logged = false;
                 } else {
                     set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "planner_produced_no_path_wait");
                 }
@@ -1224,17 +1297,28 @@ int main(){
             if (state != RobotState::AUTONOMY_ENGAGED) {
                 continue;
             }
+            if (g_no_reachable_frontiers_terminal.load(std::memory_order_acquire)) {
+                path_follower.clear_path();
+                planned_path_world.clear();
+                motors.stop();
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                continue;
+            }
             if (g_scan_active.load(std::memory_order_acquire)) {
                 continue;
             }
 
+            const controls::Pose2D fused_pose{
+                pose_copy.translation.x,
+                pose_copy.translation.y,
+                core::quat_to_euler_yaw(pose_copy.quaternion)};
             const uint64_t latest_path_revision =
                 planning::bridge::copy_latest_plan_world(&planned_path_world);
             if (latest_path_revision != planned_path_revision) {
                 planned_path_revision = latest_path_revision;
                 goal_reached_logged = false;
                 if (!planned_path_world.empty()) {
-                    path_follower.set_path(planned_path_world);
+                    path_follower.set_path(planned_path_world, &fused_pose);
                     set_autonomy_substate(autonomy::AutonomySubstate::FOLLOWING_PATH, "control_loaded_path");
                     if (kEnableVerboseAutonomyLogs) {
                         std::ostringstream path_log;
@@ -1255,10 +1339,6 @@ int main(){
                 continue;
             }
 
-            const controls::Pose2D fused_pose{
-                pose_copy.translation.x,
-                pose_copy.translation.y,
-                core::quat_to_euler_yaw(pose_copy.quaternion)};
             const double dt_seconds = std::max(
                 1e-3,
                 static_cast<double>(std::max(1, odom.sample_period_ms)) * 1e-3);

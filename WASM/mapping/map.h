@@ -20,11 +20,11 @@ namespace mapping{
         static constexpr float kGridResolution = 0.02f; // meters
         static constexpr int32_t kMapSizeX = 400;
         static constexpr int32_t kMapSizeY = 400;
-        static constexpr int16_t kMinCellScore = -16;
-        static constexpr int16_t kMaxCellScore = 16;
-        static constexpr int16_t kHitIncrement = 4;
+        static constexpr int16_t kMinCellScore = -32;
+        static constexpr int16_t kMaxCellScore = 32;
+        static constexpr int16_t kHitIncrement = 8;
         static constexpr int16_t kFreeDecrement = 1;
-        static constexpr int16_t kOccupiedThreshold = 4;
+        static constexpr int16_t kOccupiedThreshold = 8;
         static constexpr int16_t kClearThreshold = 0;
         static constexpr float kMinRange = 0.1f; // meters
 
