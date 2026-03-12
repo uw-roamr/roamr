@@ -362,10 +362,10 @@ class BluetoothManager: NSObject, ObservableObject {
         }
         resolvePendingTeleopTrace(frameArrivalAt: baseTimestamp, odomSeq: Int(seq), sumDl: sumDl, sumDr: sumDr)
 
-        if let first = samples.first {
-            // print("[BLE ODOM RX] frame seq=\(seq) n=\(sampleCount) dt_ms=\(latestOdomSamplePeriodMs) first=(\(first.dlTicks),\(first.drTicks)) queued=\(queuedCount)")
-        } else {
+        if samples.isEmpty {
             // print("[BLE ODOM RX] frame seq=\(seq) n=0 queued=\(queuedCount)")
+        } else {
+            // print("[BLE ODOM RX] frame seq=\(seq) n=\(sampleCount) dt_ms=\(latestOdomSamplePeriodMs) queued=\(queuedCount)")
         }
 
         lastMessage = "Odom seq=\(seq) n=\(sampleCount)"

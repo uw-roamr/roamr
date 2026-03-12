@@ -62,13 +62,11 @@ struct WasmView: View {
 
 	func runWasm() {
 		DispatchQueue.global(qos: .userInitiated).async {
-			IMUManager.shared.start()
-			AVManager.shared.start()
+			wasmManager.startConfiguredHostSensors()
 
 			wasmManager.runWasmFile(named: "slam_main")
 
-			AVManager.shared.stop()
-			IMUManager.shared.stop()
+			wasmManager.stopConfiguredHostSensors()
 		}
 	}
 }

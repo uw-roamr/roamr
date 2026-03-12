@@ -150,19 +150,16 @@ struct WasmHubView: View {
         guard let file = selectedFile else { return }
 
         DispatchQueue.global(qos: .userInitiated).async {
-            IMUManager.shared.start()
-            AVManager.shared.start()
+            wasmManager.startConfiguredHostSensors()
 
             wasmManager.runWasmFile(at: file.fileURL)
 
-            AVManager.shared.stop()
-            IMUManager.shared.stop()
+            wasmManager.stopConfiguredHostSensors()
         }
     }
 
     private func stopWasm() {
         WasmManager.shared.stop()
-        AVManager.shared.stop()
-        IMUManager.shared.stop()
+        WasmManager.shared.stopConfiguredHostSensors()
     }
 }

@@ -14,6 +14,7 @@
 #include "autonomy/autonomy.h"
 #include "controls/motors.h"
 #include "core/math_utils.h"
+#include "core/recorder.h"
 #include "core/ring_buffer.h"
 #include "controls/path_following.h"
 #include "core/telemetry.h"
@@ -396,9 +397,55 @@ enum class PoseSource{
     wheel_odom,
     fused_IMU_wheel_odom
 };
-// IMU preintegration drifts over time, so the shared autonomy/map pose should
-// not treat it as a drop-in orientation estimate.
-static constexpr PoseSource pose_source = PoseSource::fused_IMU_wheel_odom;
+
+struct RuntimeSensorConfig {
+    bool imu_enabled = true;
+    bool wheel_odometry_enabled = false;
+    bool lidar_points_enabled = true;
+    bool point_colors_enabled = true;
+    bool camera_image_enabled = false;
+};
+
+static RuntimeSensorConfig g_sensor_config{};
+
+static bool env_flag_enabled(const char* name, bool default_value) {
+    const char* value = std::getenv(name);
+    if (!value || value[0] == '\0') {
+        return default_value;
+    }
+    if (value[0] == '0' || value[0] == 'f' || value[0] == 'F' ||
+        value[0] == 'n' || value[0] == 'N') {
+        return false;
+    }
+    return true;
+}
+
+static RuntimeSensorConfig load_sensor_config_from_env() {
+    RuntimeSensorConfig config;
+    config.imu_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_IMU", true);
+    config.wheel_odometry_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_WHEEL_ODOMETRY", true);
+    config.lidar_points_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_LIDAR_POINTS", true);
+    config.point_colors_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_POINT_COLORS", true);
+    config.camera_image_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_CAMERA_IMAGE", true);
+    return config;
+}
+
+static void log_sensor_config(const RuntimeSensorConfig& config) {
+    std::ostringstream log;
+    log << "[config] sensors imu=" << (config.imu_enabled ? 1 : 0)
+        << " wheel=" << (config.wheel_odometry_enabled ? 1 : 0)
+        << " lidar_points=" << (config.lidar_points_enabled ? 1 : 0)
+        << " point_colors=" << (config.point_colors_enabled ? 1 : 0)
+        << " camera_image=" << (config.camera_image_enabled ? 1 : 0);
+    wasm_log_line(log.str());
+}
+
+static constexpr PoseSource pose_source = PoseSource::IMU;
 static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
 static constexpr int32_t kPathFollowHoldMs = 120;
@@ -448,9 +495,7 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
     constexpr int kTurnHoldMs = 150;
     constexpr int kPollSleepMs = 5;
     constexpr int kSegmentSettleMs = 100;
-    constexpr double kScanWarmupSec = 5.0;
-    constexpr int kScanWarmupSleepMs = 1000;
-
+   
     sensors::WheelOdometryData odom{};
     while (!read_scan_odom_sample(&odom)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kPollSleepMs));
@@ -570,12 +615,16 @@ int main(){
     std::mutex m_lc;
     std::mutex m_pose;
 
+    g_sensor_config = load_sensor_config_from_env();
+    log_sensor_config(g_sensor_config);
+
     controls::MotorController motors;
     motors.set_odom_reader(read_latest_wheel_odom_snapshot);
     motors.stop(); // ensure motors start from a safe state
 
     init_camera(&g_cam_config);
     log_config(g_cam_config);
+    core::recorder::initialize_from_env(g_cam_config);
     planning::bridge::set_goal_change_callback(notify_planner_wake);
 
     if (kEnablePlannerDemoGoal) {
@@ -588,7 +637,6 @@ int main(){
 
     std::thread autonomy_thread([&motors, &m_pose](){
         constexpr int kAutonomyFSMSleepMs = 100;
-        constexpr double kLidarWarmupSec = 2.0;
 
         // the main high level thread
         while(!g_imu_ready.load(std::memory_order_acquire) ||
@@ -601,15 +649,6 @@ int main(){
                 std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
             }
         }
-        {
-            std::ostringstream warmup_log;
-            warmup_log << "[autonomy][init] lidar warmup for "
-                       << kLidarWarmupSec
-                       << "s";
-            wasm_log_line(warmup_log.str());
-        }
-        std::this_thread::sleep_for(std::chrono::duration<double>(kLidarWarmupSec));
-        wasm_log_line("[autonomy][init] lidar warmup complete");
         wasm_log_line("SENSOR_INIT -> AUTONOMY_INIT");
         g_state.store(RobotState::AUTONOMY_INIT, std::memory_order_release);
         while(!g_first_map_update_done.load(std::memory_order_acquire)){
@@ -679,6 +718,7 @@ int main(){
                     g_imu_preintegrator.update_bias();
                 }
                 imu_copy = g_imu_calib.curr_slot();
+                core::recorder::enqueue_imu(imu_copy);
                 if (pose_source == PoseSource::IMU || pose_source == PoseSource::fused_IMU_wheel_odom){
                     // only update the rotation since the accelerometer drifts too much
                     sensors::PoseLog pose_copy{};
@@ -690,6 +730,11 @@ int main(){
                             g_pose.timestamp = pose_copy.timestamp;
                         }
                         pose_copy = g_pose;
+                    }
+                    if (pose_source == PoseSource::IMU) {
+                        core::recorder::enqueue_pose(
+                            pose_copy,
+                            core::recorder::PoseDataSource::kIMU);
                     }
                     rerun_log_pose(&pose_copy);
                 }
@@ -739,6 +784,9 @@ int main(){
             }
 
             if (g_lc_buffers[write_idx].points_size > 0) {
+                core::recorder::enqueue_lidar_frame(
+                    g_lc_buffers[write_idx],
+                    g_lc_pose_buffers[write_idx]);
                 if (g_lc_buffers[write_idx].timestamp > 0.0 &&
                     (last_lidar_log_timestamp < 0.0 ||
                      (g_lc_buffers[write_idx].timestamp - last_lidar_log_timestamp) >=
@@ -1281,6 +1329,15 @@ int main(){
                 }
                 pose_copy = g_pose;
                 record_pose_history_locked(pose_copy);
+                if (pose_source == PoseSource::wheel_odom) {
+                    core::recorder::enqueue_pose(
+                        pose_copy,
+                        core::recorder::PoseDataSource::kWheelOdometry);
+                } else if (pose_source == PoseSource::fused_IMU_wheel_odom) {
+                    core::recorder::enqueue_pose(
+                        pose_copy,
+                        core::recorder::PoseDataSource::kFusedImuWheelOdometry);
+                }
             } else {
                 std::lock_guard<std::mutex> lk(m_pose);
                 pose_copy = g_pose;
@@ -1401,7 +1458,7 @@ int main(){
     imu_thread.join();
     lidar_camera_thread.join();
     mapping_thread.join();
-    planner_thread.join();
+    // planner_thread.join();
     telemetry_thread.join();
-    control_thread.join();
+    // control_thread.join();
 }

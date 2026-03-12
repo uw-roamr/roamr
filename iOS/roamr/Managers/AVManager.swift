@@ -84,7 +84,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     private let rgbDownsampleFactor: Int = 2
     private let depthPixelSubsampleStride: Int = 2
     private let includePointColorsForWasm: Bool = true
-    private let includeImageInWasmPayload: Bool = false
+    private let includeImageInWasmPayload: Bool = true
 
     @Published var isActive = false
     @Published var depthMapImage: UIImage?
@@ -443,8 +443,10 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let needsPreviewVideo = shouldUpdatePreview && localPreviewMode == .video
         let needsPreviewDepth = shouldUpdatePreview && localPreviewMode == .depth
         let needsPreviewPoint = shouldUpdatePreview && localPreviewMode == .point
-        let needsPointColors = includePointColorsForWasm
-        let needsImagePayload = includeImageInWasmPayload
+        let sensorConfig = WasmManager.shared.effectiveSensorConfig()
+        let needsPointCloud = sensorConfig.lidarPointsEnabled
+        let needsPointColors = needsPointCloud && includePointColorsForWasm && sensorConfig.pointColorsEnabled
+        let needsImagePayload = includeImageInWasmPayload && sensorConfig.cameraImageEnabled
         let needsUIImage = needsPreviewVideo || isStreaming
         let needsRGBFrame = needsImagePayload || needsUIImage
 
@@ -466,13 +468,18 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             rgbFrame = nil
         }
 
-        let pointCloudData = depthDataToPointCloud(
-            depthMap: depthData.depthMap,
-            confidenceMap: depthData.confidenceMap,
-            frame: frame,
-            colorSource: nil,
-            colorPixelBuffer: needsPointColors ? frame.capturedImage : nil
-        )
+        let pointCloudData: PointCloudExportData?
+        if needsPointCloud {
+            pointCloudData = depthDataToPointCloud(
+                depthMap: depthData.depthMap,
+                confidenceMap: depthData.confidenceMap,
+                frame: frame,
+                colorSource: nil,
+                colorPixelBuffer: needsPointColors ? frame.capturedImage : nil
+            )
+        } else {
+            pointCloudData = nil
+        }
 
         if let image = rgbFrame?.uiImage {
             streamFrame(image: image)
@@ -1039,8 +1046,7 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
     let imageByteCount = imageMaxCount * MemoryLayout<UInt8>.size
     let imageSizeOffset = imageOffset + imageByteCount
 
-    let imageSizeBytes = MemoryLayout<Int32>.size
-    let pointsFrameIdOffset = imageSizeOffset + imageSizeBytes
+    let pointsFrameIdOffset = imageSizeOffset + MemoryLayout<Int32>.size
     let imageFrameIdOffset = pointsFrameIdOffset + MemoryLayout<Int32>.size
     let totalBytes = imageFrameIdOffset + MemoryLayout<Int32>.size
 
