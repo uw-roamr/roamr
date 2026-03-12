@@ -34,15 +34,18 @@ If recording is enabled, the current recorder writes a simple session layout:
 
 ```text
 session-<timestamp>/
+  imu.csv
   pose.csv
   images/
-    frame-000001-<timestamp>.ppm
-  depth/
-    frame-000001-<timestamp>.pgm
+    frame-000001-<timestamp>-<width>x<height>x3.rgb
+  points/
+    frame-000001-<timestamp>.ply
 ```
 
-`pose.csv` stores timestamped predicted poses. Camera images are written as PPM,
-and depth is written as 16-bit PGM using per-point range in millimeters.
+`imu.csv` stores timestamped accelerometer and gyroscope samples. `pose.csv`
+stores timestamped predicted poses. Camera images are written as raw RGB with
+dimensions encoded in the filename, and point clouds are written as binary PLY
+files with per-point RGB colors.
 
 ## Host Boundary
 

@@ -13,15 +13,41 @@ typealias CFunction = @convention(c) (wasm_exec_env_t?, UnsafeMutableRawPointer?
 private let wasmTextLogMaxBytes = 255
 private let wasmTextLogPayloadSize = MemoryLayout<UInt32>.size + wasmTextLogMaxBytes + 1
 
+struct WasmSensorConfig: Equatable {
+    var imuEnabled: Bool
+    var wheelOdometryEnabled: Bool
+    var lidarPointsEnabled: Bool
+    var pointColorsEnabled: Bool
+    var cameraImageEnabled: Bool
+
+    static let `default` = WasmSensorConfig(
+        imuEnabled: true,
+        wheelOdometryEnabled: true,
+        lidarPointsEnabled: true,
+        pointColorsEnabled: true,
+        cameraImageEnabled: true
+    )
+}
+
 final class WasmManager: ObservableObject {
     static let shared = WasmManager()
     private static let maxWasmThreads: UInt32 = 8
     private static let maxLogLines = 200
+    private static let sensorImuEnabledDefaultsKey = "com.roamr.wasm.sensor.imuEnabled"
+    private static let sensorWheelOdometryEnabledDefaultsKey = "com.roamr.wasm.sensor.wheelOdometryEnabled"
+    private static let sensorLidarPointsEnabledDefaultsKey = "com.roamr.wasm.sensor.lidarPointsEnabled"
+    private static let sensorPointColorsEnabledDefaultsKey = "com.roamr.wasm.sensor.pointColorsEnabled"
+    private static let sensorCameraImageEnabledDefaultsKey = "com.roamr.wasm.sensor.cameraImageEnabled"
     private static let recordingEnabledDefaultsKey = "com.roamr.wasm.recordingEnabled"
     private static let recordingPathDefaultsKey = "com.roamr.wasm.recordingPath"
     private static let recordingFolderBookmarkDefaultsKey = "com.roamr.wasm.recordingFolderBookmark"
     private static let recordingGuestDirectory = "/data"
     private static let defaultRecordingPath = "WasmRecordings"
+    private static let sensorImuEnabledEnvKey = "ROAMR_SENSOR_ENABLE_IMU"
+    private static let sensorWheelOdometryEnabledEnvKey = "ROAMR_SENSOR_ENABLE_WHEEL_ODOMETRY"
+    private static let sensorLidarPointsEnabledEnvKey = "ROAMR_SENSOR_ENABLE_LIDAR_POINTS"
+    private static let sensorPointColorsEnabledEnvKey = "ROAMR_SENSOR_ENABLE_POINT_COLORS"
+    private static let sensorCameraImageEnabledEnvKey = "ROAMR_SENSOR_ENABLE_CAMERA_IMAGE"
     private static let recordingEnabledEnvKey = "ROAMR_RECORDING_ENABLED"
     private static let recordingDirectoryEnvKey = "ROAMR_RECORDING_DIR"
 
@@ -39,17 +65,66 @@ final class WasmManager: ObservableObject {
     @Published var latestMapJPEGData: Data?
     @Published var latestMapTimestamp: Double = 0
     @Published var latestMapFrameCount: Int = 0
+    @Published private(set) var sensorConfig: WasmSensorConfig
     @Published private(set) var recordingEnabled: Bool
     @Published private(set) var recordingPath: String
     @Published private(set) var selectedRecordingFolderPath: String?
 
     private init() {
+        self.sensorConfig = WasmSensorConfig(
+            imuEnabled: UserDefaults.standard.object(forKey: Self.sensorImuEnabledDefaultsKey) as? Bool ?? WasmSensorConfig.default.imuEnabled,
+            wheelOdometryEnabled: UserDefaults.standard.object(forKey: Self.sensorWheelOdometryEnabledDefaultsKey) as? Bool ?? WasmSensorConfig.default.wheelOdometryEnabled,
+            lidarPointsEnabled: UserDefaults.standard.object(forKey: Self.sensorLidarPointsEnabledDefaultsKey) as? Bool ?? WasmSensorConfig.default.lidarPointsEnabled,
+            pointColorsEnabled: UserDefaults.standard.object(forKey: Self.sensorPointColorsEnabledDefaultsKey) as? Bool ?? WasmSensorConfig.default.pointColorsEnabled,
+            cameraImageEnabled: UserDefaults.standard.object(forKey: Self.sensorCameraImageEnabledDefaultsKey) as? Bool ?? WasmSensorConfig.default.cameraImageEnabled
+        )
         self.recordingEnabled =
             UserDefaults.standard.object(forKey: Self.recordingEnabledDefaultsKey) as? Bool ?? false
         let storedRecordingPath =
             UserDefaults.standard.string(forKey: Self.recordingPathDefaultsKey) ?? Self.defaultRecordingPath
         self.recordingPath = Self.normalizeRecordingPath(storedRecordingPath)
         self.selectedRecordingFolderPath = Self.resolveStoredRecordingFolderURL()?.path
+    }
+
+    func effectiveSensorConfig() -> WasmSensorConfig {
+        var config = sensorConfig
+        if config.pointColorsEnabled {
+            config.lidarPointsEnabled = true
+        }
+        // The current slam_main runtime still relies on these streams.
+        config.imuEnabled = true
+        config.wheelOdometryEnabled = true
+        config.lidarPointsEnabled = true
+        return config
+    }
+
+    func setSensorConfig(_ updatedConfig: WasmSensorConfig) {
+        UserDefaults.standard.set(updatedConfig.imuEnabled, forKey: Self.sensorImuEnabledDefaultsKey)
+        UserDefaults.standard.set(updatedConfig.wheelOdometryEnabled, forKey: Self.sensorWheelOdometryEnabledDefaultsKey)
+        UserDefaults.standard.set(updatedConfig.lidarPointsEnabled, forKey: Self.sensorLidarPointsEnabledDefaultsKey)
+        UserDefaults.standard.set(updatedConfig.pointColorsEnabled, forKey: Self.sensorPointColorsEnabledDefaultsKey)
+        UserDefaults.standard.set(updatedConfig.cameraImageEnabled, forKey: Self.sensorCameraImageEnabledDefaultsKey)
+        DispatchQueue.main.async {
+            self.sensorConfig = updatedConfig
+        }
+    }
+
+    func startConfiguredHostSensors() {
+        let config = effectiveSensorConfig()
+        appendLogLine(
+            "[host][sensors] imu=\(config.imuEnabled ? 1 : 0) wheel=\(config.wheelOdometryEnabled ? 1 : 0) points=\(config.lidarPointsEnabled ? 1 : 0) point_colors=\(config.pointColorsEnabled ? 1 : 0) rgb=\(config.cameraImageEnabled ? 1 : 0)"
+        )
+        if config.imuEnabled {
+            IMUManager.shared.start()
+        }
+        if config.lidarPointsEnabled || config.cameraImageEnabled {
+            AVManager.shared.start()
+        }
+    }
+
+    func stopConfiguredHostSensors() {
+        AVManager.shared.stop()
+        IMUManager.shared.stop()
     }
 
     func setRecordingEnabled(_ enabled: Bool) {
@@ -381,7 +456,13 @@ final class WasmManager: ObservableObject {
     }
 
     private func prepareWASIRuntimeOptions() -> WASIRuntimeOptions {
+        let sensorConfig = effectiveSensorConfig()
         var env = [
+            "\(Self.sensorImuEnabledEnvKey)=\(sensorConfig.imuEnabled ? 1 : 0)",
+            "\(Self.sensorWheelOdometryEnabledEnvKey)=\(sensorConfig.wheelOdometryEnabled ? 1 : 0)",
+            "\(Self.sensorLidarPointsEnabledEnvKey)=\(sensorConfig.lidarPointsEnabled ? 1 : 0)",
+            "\(Self.sensorPointColorsEnabledEnvKey)=\(sensorConfig.pointColorsEnabled ? 1 : 0)",
+            "\(Self.sensorCameraImageEnabledEnvKey)=\(sensorConfig.cameraImageEnabled ? 1 : 0)",
             "\(Self.recordingEnabledEnvKey)=0",
             "\(Self.recordingDirectoryEnvKey)=\(Self.recordingGuestDirectory)"
         ]
@@ -396,7 +477,7 @@ final class WasmManager: ObservableObject {
 
         do {
             let directoryURL = try ensureRecordingsDirectory()
-            env[0] = "\(Self.recordingEnabledEnvKey)=1"
+            env[5] = "\(Self.recordingEnabledEnvKey)=1"
             return WASIRuntimeOptions(
                 env: env,
                 preopenedHostDirectories: [directoryURL.path],

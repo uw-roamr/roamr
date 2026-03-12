@@ -377,6 +377,53 @@ enum class PoseSource{
     fused_IMU_wheel_odom
 };
 
+struct RuntimeSensorConfig {
+    bool imu_enabled = true;
+    bool wheel_odometry_enabled = false;
+    bool lidar_points_enabled = true;
+    bool point_colors_enabled = true;
+    bool camera_image_enabled = false;
+};
+
+static RuntimeSensorConfig g_sensor_config{};
+
+static bool env_flag_enabled(const char* name, bool default_value) {
+    const char* value = std::getenv(name);
+    if (!value || value[0] == '\0') {
+        return default_value;
+    }
+    if (value[0] == '0' || value[0] == 'f' || value[0] == 'F' ||
+        value[0] == 'n' || value[0] == 'N') {
+        return false;
+    }
+    return true;
+}
+
+static RuntimeSensorConfig load_sensor_config_from_env() {
+    RuntimeSensorConfig config;
+    config.imu_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_IMU", true);
+    config.wheel_odometry_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_WHEEL_ODOMETRY", true);
+    config.lidar_points_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_LIDAR_POINTS", true);
+    config.point_colors_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_POINT_COLORS", true);
+    config.camera_image_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_CAMERA_IMAGE", true);
+    return config;
+}
+
+static void log_sensor_config(const RuntimeSensorConfig& config) {
+    std::ostringstream log;
+    log << "[config] sensors imu=" << (config.imu_enabled ? 1 : 0)
+        << " wheel=" << (config.wheel_odometry_enabled ? 1 : 0)
+        << " lidar_points=" << (config.lidar_points_enabled ? 1 : 0)
+        << " point_colors=" << (config.point_colors_enabled ? 1 : 0)
+        << " camera_image=" << (config.camera_image_enabled ? 1 : 0);
+    wasm_log_line(log.str());
+}
+
 static constexpr PoseSource pose_source = PoseSource::IMU;
 static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
@@ -545,6 +592,9 @@ int main(){
     std::mutex m_imu;
     std::mutex m_lc;
     std::mutex m_pose;
+
+    g_sensor_config = load_sensor_config_from_env();
+    log_sensor_config(g_sensor_config);
 
     controls::MotorController motors;
     motors.set_odom_reader(read_latest_wheel_odom_snapshot);
@@ -1328,7 +1378,7 @@ int main(){
     imu_thread.join();
     lidar_camera_thread.join();
     mapping_thread.join();
-    planner_thread.join();
+    // planner_thread.join();
     telemetry_thread.join();
-    control_thread.join();
+    // control_thread.join();
 }

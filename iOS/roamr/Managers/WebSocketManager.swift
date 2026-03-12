@@ -698,8 +698,7 @@ class WebSocketManager: ObservableObject {
         let localFile = localWasmFile(for: targetId)
 
         DispatchQueue.global(qos: .userInitiated).async {
-            IMUManager.shared.start()
-            AVManager.shared.start()
+            WasmManager.shared.startConfiguredHostSensors()
 
             if targetId == Self.defaultBundledWasmId {
                 WasmManager.shared.runWasmFile(named: targetName)
@@ -709,24 +708,21 @@ class WebSocketManager: ObservableObject {
                 WebSocketManager.shared.publishWasmConsoleLine("[web][wasm] selected file is no longer available")
             }
 
-            AVManager.shared.stop()
-            IMUManager.shared.stop()
+            WasmManager.shared.stopConfiguredHostSensors()
             WebSocketManager.shared.publishWasmControlState()
         }
     }
 
     private func stopSelectedWasm() {
         WasmManager.shared.stop()
-        AVManager.shared.stop()
-        IMUManager.shared.stop()
+        WasmManager.shared.stopConfiguredHostSensors()
         publishWasmControlState()
     }
 
     private func triggerEmergencyStop() {
         publishWasmConsoleLine("[web][estop] emergency stop triggered")
         WasmManager.shared.stop()
-        AVManager.shared.stop()
-        IMUManager.shared.stop()
+        WasmManager.shared.stopConfiguredHostSensors()
         bluetoothManager?.emergencyStop()
         publishWasmControlState()
     }

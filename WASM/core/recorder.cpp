@@ -27,6 +27,7 @@ constexpr size_t kMaxPendingWrites = 128;
 constexpr size_t kBufferedFlushThreshold = 50;
 
 enum class TargetFile : uint8_t {
+  kImuCsv,
   kPoseCsv,
   kStandaloneFile,
 };
@@ -66,6 +67,23 @@ const char* pose_source_label(PoseDataSource source) {
   }
 }
 
+std::vector<uint8_t> serialize_imu_csv_line(
+    const sensors::IMUData& data,
+    uint64_t sequence) {
+  std::ostringstream line;
+  line << sequence << ','
+       << std::setprecision(17) << data.timestamp << ','
+       << static_cast<uint32_t>(data.frame_id) << ','
+       << data.acc_x << ','
+       << data.acc_y << ','
+       << data.acc_z << ','
+       << data.gyro_x << ','
+       << data.gyro_y << ','
+       << data.gyro_z << '\n';
+  const std::string text = line.str();
+  return std::vector<uint8_t>(text.begin(), text.end());
+}
+
 std::vector<uint8_t> serialize_pose_csv_line(
     const sensors::PoseLog& pose,
     PoseDataSource source,
@@ -85,7 +103,7 @@ std::vector<uint8_t> serialize_pose_csv_line(
   return std::vector<uint8_t>(text.begin(), text.end());
 }
 
-std::vector<uint8_t> serialize_ppm_image(
+std::vector<uint8_t> serialize_raw_rgb_image(
     const uint8_t* image,
     size_t image_size,
     int width,
@@ -96,18 +114,21 @@ std::vector<uint8_t> serialize_ppm_image(
   }
 
   const size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height);
-  std::vector<uint8_t> rgb(pixel_count * 3, 0);
+  const size_t rgb_size = pixel_count * 3;
+  std::vector<uint8_t> rgb(rgb_size, 0);
 
-  if (channels == 3 && image_size >= rgb.size()) {
-    std::memcpy(rgb.data(), image, rgb.size());
+  if (channels == 3 && image_size >= rgb_size) {
+    std::memcpy(rgb.data(), image, rgb_size);
   } else if (channels == 1 && image_size >= pixel_count) {
     for (size_t i = 0; i < pixel_count; ++i) {
       const uint8_t value = image[i];
-      rgb[i * 3 + 0] = value;
-      rgb[i * 3 + 1] = value;
-      rgb[i * 3 + 2] = value;
+      const size_t dst = i * 3;
+      rgb[dst + 0] = value;
+      rgb[dst + 1] = value;
+      rgb[dst + 2] = value;
     }
-  } else if (channels >= 4 && image_size >= pixel_count * static_cast<size_t>(channels)) {
+  } else if (channels >= 4 &&
+             image_size >= pixel_count * static_cast<size_t>(channels)) {
     for (size_t i = 0; i < pixel_count; ++i) {
       const size_t src = i * static_cast<size_t>(channels);
       const size_t dst = i * 3;
@@ -119,60 +140,52 @@ std::vector<uint8_t> serialize_ppm_image(
     return {};
   }
 
-  std::ostringstream header;
-  header << "P6\n" << width << ' ' << height << "\n255\n";
-  const std::string header_text = header.str();
-
-  std::vector<uint8_t> output;
-  output.reserve(header_text.size() + rgb.size());
-  output.insert(output.end(), header_text.begin(), header_text.end());
-  output.insert(output.end(), rgb.begin(), rgb.end());
-  return output;
+  return rgb;
 }
 
-std::vector<uint8_t> serialize_depth_pgm(
-    const sensors::LidarCameraData& data,
-    const sensors::CameraConfig& camera_config) {
+std::vector<uint8_t> serialize_points_ply(
+    const sensors::LidarCameraData& data) {
   const size_t point_count = data.points_size / 3;
   if (point_count == 0) {
     return {};
   }
 
-  int width = camera_config.image_width;
-  int height = camera_config.image_height;
-  if (width <= 0 || height <= 0 ||
-      static_cast<size_t>(width) * static_cast<size_t>(height) != point_count) {
-    width = static_cast<int>(point_count);
-    height = 1;
-  }
+  const bool has_colors = data.colors_size >= point_count * 3;
 
   std::ostringstream header;
-  header << "P5\n" << width << ' ' << height << "\n65535\n";
+  header << "ply\n"
+         << "format binary_little_endian 1.0\n"
+         << "element vertex " << point_count << "\n"
+         << "property float x\n"
+         << "property float y\n"
+         << "property float z\n"
+         << "property uchar red\n"
+         << "property uchar green\n"
+         << "property uchar blue\n"
+         << "end_header\n";
   const std::string header_text = header.str();
 
+  constexpr size_t kBytesPerVertex = sizeof(float) * 3 + sizeof(uint8_t) * 3;
   std::vector<uint8_t> output;
-  output.reserve(header_text.size() + point_count * 2);
+  output.reserve(header_text.size() + point_count * kBytesPerVertex);
   output.insert(output.end(), header_text.begin(), header_text.end());
 
   for (size_t i = 0; i < point_count; ++i) {
-    const size_t base = i * 3;
-    const float x = data.points[base + 0];
-    const float y = data.points[base + 1];
-    const float z = data.points[base + 2];
-    uint16_t depth_mm = 0;
-    if (std::isfinite(x) && std::isfinite(y) && std::isfinite(z)) {
-      const double range_m = std::sqrt(
-          static_cast<double>(x) * static_cast<double>(x) +
-          static_cast<double>(y) * static_cast<double>(y) +
-          static_cast<double>(z) * static_cast<double>(z));
-      if (range_m > 0.0) {
-        const double range_mm = range_m * 1000.0;
-        depth_mm = static_cast<uint16_t>(
-            range_mm >= 65535.0 ? 65535.0 : range_mm);
-      }
-    }
-    output.push_back(static_cast<uint8_t>((depth_mm >> 8) & 0xFF));
-    output.push_back(static_cast<uint8_t>(depth_mm & 0xFF));
+    const size_t point_offset = i * 3;
+    const float xyz[3] = {
+        data.points[point_offset + 0],
+        data.points[point_offset + 1],
+        data.points[point_offset + 2],
+    };
+    const uint8_t rgb[3] = {
+        has_colors ? data.colors[point_offset + 0] : static_cast<uint8_t>(255),
+        has_colors ? data.colors[point_offset + 1] : static_cast<uint8_t>(255),
+        has_colors ? data.colors[point_offset + 2] : static_cast<uint8_t>(255),
+    };
+
+    const uint8_t* xyz_bytes = reinterpret_cast<const uint8_t*>(xyz);
+    output.insert(output.end(), xyz_bytes, xyz_bytes + sizeof(xyz));
+    output.insert(output.end(), rgb, rgb + sizeof(rgb));
   }
 
   return output;
@@ -215,9 +228,16 @@ class SessionRecorder {
       return;
     }
     image_dir_ = session_dir_ + "/images";
-    depth_dir_ = session_dir_ + "/depth";
+    points_dir_ = session_dir_ + "/points";
     if (!create_directory_if_needed(image_dir_) ||
-        !create_directory_if_needed(depth_dir_)) {
+        !create_directory_if_needed(points_dir_)) {
+      return;
+    }
+
+    imu_path_ = session_dir_ + "/imu.csv";
+    imu_file_ = std::fopen(imu_path_.c_str(), "wb");
+    if (!imu_file_) {
+      log_open_error("imu", imu_path_);
       return;
     }
 
@@ -225,6 +245,17 @@ class SessionRecorder {
     pose_file_ = std::fopen(pose_path_.c_str(), "wb");
     if (!pose_file_) {
       log_open_error("pose", pose_path_);
+      close_file(&imu_file_);
+      return;
+    }
+
+    static constexpr char kImuHeader[] =
+        "sequence,timestamp,frame_id,acc_x,acc_y,acc_z,gyro_x,gyro_y,gyro_z\n";
+    if (std::fwrite(kImuHeader, 1, sizeof(kImuHeader) - 1, imu_file_) !=
+        sizeof(kImuHeader) - 1) {
+      log_open_error("imu_header", imu_path_);
+      close_file(&pose_file_);
+      close_file(&imu_file_);
       return;
     }
 
@@ -234,6 +265,7 @@ class SessionRecorder {
         sizeof(kPoseHeader) - 1) {
       log_open_error("pose_header", pose_path_);
       close_file(&pose_file_);
+      close_file(&imu_file_);
       return;
     }
 
@@ -243,9 +275,10 @@ class SessionRecorder {
 
     std::ostringstream log;
     log << "[recorder] enabled session_dir=" << session_dir_
+        << " imu=" << imu_path_
         << " pose=" << pose_path_
         << " images=" << image_dir_
-        << " depth=" << depth_dir_;
+        << " points=" << points_dir_;
     wasm_log_line(log.str());
   }
 
@@ -255,7 +288,14 @@ class SessionRecorder {
   }
 
   void enqueue_imu(const sensors::IMUData& data) {
-    (void)data;
+    if (!is_enabled()) {
+      return;
+    }
+    WriteRequest request;
+    request.target = TargetFile::kImuCsv;
+    request.bytes = serialize_imu_csv_line(
+        data, next_imu_sequence_.fetch_add(1));
+    enqueue_request(std::move(request));
   }
 
   void enqueue_pose(const sensors::PoseLog& pose, PoseDataSource source) {
@@ -280,7 +320,7 @@ class SessionRecorder {
     const std::string frame_stem = make_frame_stem(sequence, data.timestamp);
 
     if (data.image_size > 0) {
-      std::vector<uint8_t> image_bytes = serialize_ppm_image(
+      std::vector<uint8_t> image_bytes = serialize_raw_rgb_image(
           data.image.data(),
           data.image_size,
           camera_config_.image_width,
@@ -289,19 +329,24 @@ class SessionRecorder {
       if (!image_bytes.empty()) {
         WriteRequest image_request;
         image_request.target = TargetFile::kStandaloneFile;
-        image_request.path = image_dir_ + "/" + frame_stem + ".ppm";
+        std::ostringstream image_name;
+        image_name << image_dir_ << "/" << frame_stem
+                   << "-" << camera_config_.image_width
+                   << "x" << camera_config_.image_height
+                   << "x3.rgb";
+        image_request.path = image_name.str();
         image_request.bytes = std::move(image_bytes);
         enqueue_request(std::move(image_request));
       }
     }
 
-    std::vector<uint8_t> depth_bytes = serialize_depth_pgm(data, camera_config_);
-    if (!depth_bytes.empty()) {
-      WriteRequest depth_request;
-      depth_request.target = TargetFile::kStandaloneFile;
-      depth_request.path = depth_dir_ + "/" + frame_stem + ".pgm";
-      depth_request.bytes = std::move(depth_bytes);
-      enqueue_request(std::move(depth_request));
+    std::vector<uint8_t> point_bytes = serialize_points_ply(data);
+    if (!point_bytes.empty()) {
+      WriteRequest point_request;
+      point_request.target = TargetFile::kStandaloneFile;
+      point_request.path = points_dir_ + "/" + frame_stem + ".ply";
+      point_request.bytes = std::move(point_bytes);
+      enqueue_request(std::move(point_request));
     }
 
     (void)pose;
@@ -342,6 +387,8 @@ class SessionRecorder {
 
   size_t* target_flush_counter(TargetFile target) {
     switch (target) {
+      case TargetFile::kImuCsv:
+        return &imu_since_flush_;
       case TargetFile::kPoseCsv:
         return &pose_since_flush_;
       case TargetFile::kStandaloneFile:
@@ -366,7 +413,9 @@ class SessionRecorder {
 
       std::FILE* file = nullptr;
       bool close_after_write = false;
-      if (request.target == TargetFile::kPoseCsv) {
+      if (request.target == TargetFile::kImuCsv) {
+        file = imu_file_;
+      } else if (request.target == TargetFile::kPoseCsv) {
         file = pose_file_;
       } else if (!request.path.empty()) {
         file = std::fopen(request.path.c_str(), "wb");
@@ -413,17 +462,21 @@ class SessionRecorder {
   std::deque<WriteRequest> queue_;
   std::thread writer_thread_;
 
+  std::FILE* imu_file_ = nullptr;
   std::FILE* pose_file_ = nullptr;
+  std::string imu_path_;
   std::string pose_path_;
   std::string session_dir_;
   std::string image_dir_;
-  std::string depth_dir_;
+  std::string points_dir_;
   sensors::CameraConfig camera_config_{};
   bool initialized_ = false;
   bool enabled_ = false;
   bool drop_warning_emitted_ = false;
   size_t dropped_request_count_ = 0;
+  size_t imu_since_flush_ = 0;
   size_t pose_since_flush_ = 0;
+  std::atomic<uint64_t> next_imu_sequence_{1};
   std::atomic<uint64_t> next_pose_sequence_{1};
   std::atomic<uint64_t> next_lidar_camera_sequence_{1};
 };
