@@ -68,6 +68,10 @@ class WebSocketManager: ObservableObject {
         self.selectedWasmTargetId = Self.defaultBundledWasmId
     }
 
+    func hasConnectedWebSocketClients() -> Bool {
+        connectedClients > 0
+    }
+
     func startServer() {
         do {
             let parameters = NWParameters.tcp

@@ -497,10 +497,9 @@ static constexpr PoseSource pose_source = PoseSource::fused_IMU_wheel_odom;
 static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
 static constexpr int32_t kPathFollowHoldMs = 120;
-static constexpr bool kEnableWheelPoseLogging = true;
-static constexpr double kWheelPoseLogIntervalSec = 0.2;
 static constexpr double kGoalCheckLogIntervalSec = 0.5;
 static constexpr double kRerunPoseLogIntervalSec = 0.2;
+static constexpr bool kEnableRerunPoseTelemetry = false;
 static constexpr bool kEnableVerboseAutonomyLogs = false;
 static constexpr bool kEnablePlannerWakeLogs = false;
 static constexpr int32_t kPlannerPollMs = 50;
@@ -524,7 +523,7 @@ struct OuterLoopTurnPidConfig {
 static constexpr OuterLoopTurnPidConfig kScan4x90TurnPidCfg{
     8.0,
     0.25,
-    1.0,
+    0.5,
     0.5 * core::pi,
     0.2,
     0.6,
@@ -544,7 +543,7 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
     constexpr double kQuarterTurnRad = 0.5 * core::pi;
     constexpr int kTurnHoldMs = 150;
     constexpr int kPollSleepMs = 5;
-    constexpr int kSegmentSettleMs = 100;
+    constexpr int kSegmentSettleMs = 500;
    
     sensors::WheelOdometryData odom{};
     while (!read_scan_odom_sample(&odom)) {
@@ -744,7 +743,6 @@ int main(){
     std::thread imu_thread([&m_imu, &m_pose](){
         using Clock = std::chrono::steady_clock;
         const auto target_interval = std::chrono::microseconds(sensors::IMUIntervalMicrosecond);
-        double g_last_logged_imu_timestamp = -1.0;
         double g_last_calib_timestamp = -1.0;
         double last_rerun_pose_log_timestamp = -1.0;
 
@@ -787,7 +785,8 @@ int main(){
                             pose_copy,
                             core::recorder::PoseDataSource::kIMU);
                     }
-                    if (pose_copy.timestamp > 0.0 &&
+                    if (kEnableRerunPoseTelemetry &&
+                        pose_copy.timestamp > 0.0 &&
                         (last_rerun_pose_log_timestamp < 0.0 ||
                          (pose_copy.timestamp - last_rerun_pose_log_timestamp) >=
                              kRerunPoseLogIntervalSec)) {
@@ -1048,9 +1047,10 @@ int main(){
         merged_newly_occupied_cells.reserve(2048);
         bool delta_overflowed = false;
         bool final_frontier_scan_pending = false;
-        bool final_frontier_scan_completed = false;
         bool no_reachable_frontiers_logged = false;
         uint64_t final_frontier_scan_target_count = 0;
+        uint64_t frontier_exhaustion_scan_baseline_count =
+            g_completed_scan_count.load(std::memory_order_acquire);
 
         while(true){
             // wait until a new map arrives, otherwise the previous plan is the best path
@@ -1120,7 +1120,6 @@ int main(){
             if (final_frontier_scan_pending &&
                 completed_scan_count >= final_frontier_scan_target_count) {
                 final_frontier_scan_pending = false;
-                final_frontier_scan_completed = true;
             }
             merged_newly_occupied_cells.clear();
             if (!pending_delta_events.empty()) {
@@ -1228,6 +1227,11 @@ int main(){
                     kRenderHeight);
             const bool published_path = !overlay.path_grid.empty();
             const bool have_frontier_candidates = !overlay.frontier_candidates.empty();
+            const bool manual_goal_active = planning::bridge::has_active_goal();
+            const bool no_reachable_frontiers =
+                !manual_goal_active && !have_frontier_candidates;
+            const bool frontier_confirmation_scan_complete =
+                completed_scan_count > frontier_exhaustion_scan_baseline_count;
             last_planned_revision = snapshot.map_revision;
             last_goal_revision = goal_revision;
             if (have_start_cell) {
@@ -1240,28 +1244,33 @@ int main(){
             }
             if (goal_changed || published_path || have_frontier_candidates) {
                 final_frontier_scan_pending = false;
-                final_frontier_scan_completed = false;
                 no_reachable_frontiers_logged = false;
                 final_frontier_scan_target_count = 0;
+                frontier_exhaustion_scan_baseline_count = completed_scan_count;
             }
             if (!published_path) {
                 set_autonomy_substate(autonomy::AutonomySubstate::NO_PATH_AVAILABLE, "planner_produced_no_path");
-                if (!goal_changed &&
-                    !have_frontier_candidates &&
-                    final_frontier_scan_completed) {
+                if (no_reachable_frontiers &&
+                    !final_frontier_scan_pending &&
+                    frontier_confirmation_scan_complete) {
                     if (!no_reachable_frontiers_logged) {
+                        wasm_log_line(
+                            "[autonomy][frontier] no reachable frontiers after confirmation "
+                            "4x90 scan; declaring map complete");
                         enter_no_reachable_frontiers_terminal_state();
                         no_reachable_frontiers_logged = true;
                     }
-                } else if (!goal_changed &&
-                           !have_frontier_candidates &&
+                } else if (no_reachable_frontiers &&
                            !final_frontier_scan_pending &&
                            g_planner_initialized.load(std::memory_order_acquire) &&
                            !g_scan_requested.load(std::memory_order_acquire) &&
                            !g_scan_active.load(std::memory_order_acquire)) {
+                    wasm_log_line(
+                        "[autonomy][frontier] no reachable frontiers; requesting confirmation "
+                        "4x90 scan before terminating");
                     set_autonomy_substate(
                         autonomy::AutonomySubstate::SCAN_REQUESTED,
-                        "planner_requested_final_scan");
+                        "planner_requested_frontier_confirmation_scan");
                     g_scan_requested.store(true, std::memory_order_release);
                     final_frontier_scan_pending = true;
                     final_frontier_scan_target_count = completed_scan_count + 1;
@@ -1400,7 +1409,6 @@ int main(){
         std::vector<core::Vector3d> planned_path_world;
         uint64_t planned_path_revision = 0;
         core::PoseSE2d wheel_pose{};
-        double last_wheel_pose_log_timestamp = -1.0;
         double last_goal_check_log_timestamp = -1.0;
         bool goal_reached_logged = false;
 
@@ -1459,13 +1467,6 @@ int main(){
             } else {
                 std::lock_guard<std::mutex> lk(m_pose);
                 pose_copy = g_pose;
-            }
-
-            if (kEnableWheelPoseLogging &&
-                (last_wheel_pose_log_timestamp < 0.0 ||
-                 (odom.timestamp - last_wheel_pose_log_timestamp) >= kWheelPoseLogIntervalSec)) {
-                // rerun_log_pose_wheel(&pose_copy);
-                last_wheel_pose_log_timestamp = odom.timestamp;
             }
 
             const RobotState state = g_state.load(std::memory_order_acquire);

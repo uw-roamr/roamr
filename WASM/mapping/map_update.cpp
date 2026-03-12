@@ -26,7 +26,8 @@ namespace mapping {
   // Color map-eligible 3D points in rerun for fast filter debugging.
   constexpr bool kRerunHighlightFiltered = true;
   constexpr double kMapLogIntervalSec = 0.1;
-  constexpr int kOccupancyRayBins = 1024;
+  constexpr int kOccupancyRayBins = 512;
+  constexpr int kMaxRawPointsPerScan = 12000;
 
 
   struct MapPerfWindow {
@@ -161,7 +162,10 @@ namespace mapping {
       return scan_ready;
     };
 
-    for (int point_idx = 0; point_idx < total_points; ++point_idx) {
+    const int point_stride =
+        std::max(1, (total_points + kMaxRawPointsPerScan - 1) / kMaxRawPointsPerScan);
+
+    for (int point_idx = 0; point_idx < total_points; point_idx += point_stride) {
       const int i = point_idx * 3;
       // LiDAR points are already FLU here, but they still need the fixed
       // camera-to-body mounting correction: (x, y, z) -> (x, -z, y).

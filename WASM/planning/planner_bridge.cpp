@@ -383,6 +383,11 @@ uint64_t latest_goal_revision() {
   return g_goal_revision.load(std::memory_order_acquire);
 }
 
+bool has_active_goal() {
+  std::lock_guard<std::mutex> lk(g_planner_goal_mutex);
+  return g_planner_goal.active;
+}
+
 void set_goal_change_callback(GoalChangeCallback callback) {
   std::lock_guard<std::mutex> lk(g_planner_goal_mutex);
   g_goal_change_callback = callback;

@@ -65,7 +65,7 @@ enum LidarCameraConstants {
     static let maxPointsPerScan = 100000
     static let floatsPerPoint = 3
     static let maxPointsSize = maxPointsPerScan * floatsPerPoint
-    static let pointSubsampleStride = 6
+    static let pointSubsampleStride = 8
 
     static let colorsPerPoint = 3
     static let maxColorsSize = maxPointsPerScan * colorsPerPoint
@@ -81,10 +81,13 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     // Keep compute cost bounded for WASM/Rerun telemetry.
     private let processingTargetFPS: Double = 20.0
     private let previewTargetFPS: Double = 12.0
+    private let websocketPointCloudTargetFPS: Double = 4.0
     private let rgbDownsampleFactor: Int = 2
     private let depthPixelSubsampleStride: Int = 2
-    private let includePointColorsForWasm: Bool = true
-    private let includeImageInWasmPayload: Bool = true
+    private let websocketPointCloudStride: Int = 16
+    private let websocketPointCloudMaxPoints: Int = 6000
+    private let includePointColorsForWasm: Bool = false
+    private let includeImageInWasmPayload: Bool = false
 
     @Published var isActive = false
     @Published var depthMapImage: UIImage?
@@ -111,6 +114,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     private var isProcessingFrame = false
     private var lastProcessedFrameTimestamp: TimeInterval = 0
     private var lastPreviewFrameTimestamp: TimeInterval = 0
+    private var lastWebSocketPointCloudTimestamp: TimeInterval = 0
     private var previewMode: AVPreviewMode = .none
 
     var isDataDirty = false
@@ -243,6 +247,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             self.isProcessingFrame = false
             self.lastProcessedFrameTimestamp = 0
             self.lastPreviewFrameTimestamp = 0
+            self.lastWebSocketPointCloudTimestamp = 0
             self.lock.unlock()
 
             DispatchQueue.main.async {
@@ -443,6 +448,20 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let needsPreviewVideo = shouldUpdatePreview && localPreviewMode == .video
         let needsPreviewDepth = shouldUpdatePreview && localPreviewMode == .depth
         let needsPreviewPoint = shouldUpdatePreview && localPreviewMode == .point
+        let shouldPublishWebSocketPointCloud: Bool
+        if WebSocketManager.shared.hasConnectedWebSocketClients() {
+            if lastWebSocketPointCloudTimestamp == 0 {
+                shouldPublishWebSocketPointCloud = true
+                lastWebSocketPointCloudTimestamp = frame.timestamp
+            } else if frame.timestamp - lastWebSocketPointCloudTimestamp >= (1.0 / websocketPointCloudTargetFPS) {
+                shouldPublishWebSocketPointCloud = true
+                lastWebSocketPointCloudTimestamp = frame.timestamp
+            } else {
+                shouldPublishWebSocketPointCloud = false
+            }
+        } else {
+            shouldPublishWebSocketPointCloud = false
+        }
         let sensorConfig = WasmManager.shared.effectiveSensorConfig()
         let needsPointCloud = sensorConfig.lidarPointsEnabled
         let needsPointColors = needsPointCloud && includePointColorsForWasm && sensorConfig.pointColorsEnabled
@@ -479,6 +498,21 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             )
         } else {
             pointCloudData = nil
+        }
+
+        let webSocketPointCloudData: PointCloudExportData?
+        if shouldPublishWebSocketPointCloud {
+            webSocketPointCloudData = depthDataToPointCloud(
+                depthMap: depthData.depthMap,
+                confidenceMap: depthData.confidenceMap,
+                frame: frame,
+                colorSource: nil,
+                colorPixelBuffer: frame.capturedImage,
+                pointStride: websocketPointCloudStride,
+                maxPointCount: websocketPointCloudMaxPoints
+            )
+        } else {
+            webSocketPointCloudData = nil
         }
 
         if let image = rgbFrame?.uiImage {
@@ -525,6 +559,22 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         )
         isDataDirty = true
         lock.unlock()
+
+        if let webSocketPointCloudData,
+           webSocketPointCloudData.pointCount > 0 {
+            webSocketPointCloudData.points.withUnsafeBufferPointer { pointsBuffer in
+                guard let pointsPointer = pointsBuffer.baseAddress else { return }
+                webSocketPointCloudData.colors.withUnsafeBufferPointer { colorsBuffer in
+                    WebSocketManager.shared.broadcastPointCloud(
+                        timestamp: frame.timestamp,
+                        pointsPointer: pointsPointer,
+                        pointCount: webSocketPointCloudData.pointCount,
+                        colorsPointer: colorsBuffer.baseAddress,
+                        colorsCount: webSocketPointCloudData.colors.count
+                    )
+                }
+            }
+        }
     }
 
     // MARK: - Camera / Image Conversion
@@ -672,7 +722,9 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         confidenceMap: CVPixelBuffer?,
         frame: ARFrame,
         colorSource: RGBColorSource?,
-        colorPixelBuffer: CVPixelBuffer?
+        colorPixelBuffer: CVPixelBuffer?,
+        pointStride: Int? = nil,
+        maxPointCount: Int? = nil
     ) -> PointCloudExportData? {
         guard CVPixelBufferGetPixelFormatType(depthMap) == kCVPixelFormatType_DepthFloat32 else {
             return nil
@@ -747,8 +799,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             }
         }
 
-        let pointStride = max(1, LidarCameraConstants.pointSubsampleStride)
-        let maxPointCount = LidarCameraConstants.maxPointsPerScan
+        let pointStride = max(1, pointStride ?? LidarCameraConstants.pointSubsampleStride)
+        let maxPointCount = max(1, min(maxPointCount ?? LidarCameraConstants.maxPointsPerScan, LidarCameraConstants.maxPointsPerScan))
         let estimatedPoints = min(maxPointCount, max(1, (depthWidth * depthHeight) / pointStride))
         let maxFloatCount = maxPointCount * LidarCameraConstants.floatsPerPoint
         let invFx = 1.0 as Float / fx
@@ -764,10 +816,13 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             repeating: 0,
             count: estimatedPoints * LidarCameraConstants.floatsPerPoint
         )
-        var colors = [UInt8](
-            repeating: 0,
-            count: estimatedPoints * LidarCameraConstants.colorsPerPoint
-        )
+        let wantsColors = hasRgbColorSource || hasYuvColorSource
+        var colors = wantsColors
+            ? [UInt8](
+                repeating: 0,
+                count: estimatedPoints * LidarCameraConstants.colorsPerPoint
+            )
+            : []
 
         var reachedPointLimit = false
         var pointCount = 0

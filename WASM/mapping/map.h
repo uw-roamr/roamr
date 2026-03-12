@@ -9,8 +9,8 @@
 
 namespace mapping{
 
-    constexpr int kMaxMapPoints = 20000;
-    constexpr int kMaxFreeRays  = kMaxMapPoints;
+    constexpr int kMaxMapPoints = 8000;
+    constexpr int kMaxFreeRays  = 512;
     class Map{
       public:
         static constexpr int32_t kMaxImageWidth = 512;

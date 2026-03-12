@@ -25,6 +25,7 @@ using GoalChangeCallback = void (*)();
 void set_goal_map_pixel(int32_t x, int32_t y);
 void clear_goal();
 uint64_t latest_goal_revision();
+bool has_active_goal();
 void set_goal_change_callback(GoalChangeCallback callback);
 bool is_overlay_path_valid(
     const mapping::MapSnapshot& snapshot,

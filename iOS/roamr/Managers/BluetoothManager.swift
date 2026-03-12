@@ -76,6 +76,7 @@ class BluetoothManager: NSObject, ObservableObject {
     private var teleopStopWatchdogToken = 0
     private let odomQueueLock = NSLock()
     private var pendingOdomSamples: [WheelOdometrySample] = []
+    private var dropPendingOdomSamplesOnNextWasmRead = true
     private let maxPendingOdomSamples = 12_000
     private let preferredDeviceNameSubstring = "ESP32_C6"
     private let teleopMetricTimeoutMs = 2_000
@@ -259,6 +260,27 @@ class BluetoothManager: NSObject, ObservableObject {
     func popWheelOdometrySample() -> WheelOdometrySample? {
         odomQueueLock.lock()
         defer { odomQueueLock.unlock() }
+        guard !pendingOdomSamples.isEmpty else { return nil }
+        return pendingOdomSamples.removeFirst()
+    }
+
+    func prepareWheelOdometryForNewWasmRun() {
+        odomQueueLock.lock()
+        pendingOdomSamples.removeAll(keepingCapacity: true)
+        dropPendingOdomSamplesOnNextWasmRead = true
+        odomQueueLock.unlock()
+    }
+
+    func popWheelOdometrySampleForWasm() -> WheelOdometrySample? {
+        odomQueueLock.lock()
+        defer { odomQueueLock.unlock() }
+
+        if dropPendingOdomSamplesOnNextWasmRead {
+            pendingOdomSamples.removeAll(keepingCapacity: true)
+            dropPendingOdomSamplesOnNextWasmRead = false
+            return nil
+        }
+
         guard !pendingOdomSamples.isEmpty else { return nil }
         return pendingOdomSamples.removeFirst()
     }
@@ -461,6 +483,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
         teleopStopWatchdogToken += 1
         lastTeleopLatencyText = "Teleop latency: -"
         clearWheelOdometrySamples()
+        prepareWheelOdometryForNewWasmRun()
         connectionStatus = "Connected to \(peripheral.name ?? "Unknown")"
         peripheral.delegate = self
         peripheral.discoverServices([serviceUUID])
@@ -485,6 +508,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
         teleopStopWatchdogToken += 1
         lastTeleopLatencyText = "Teleop latency: -"
         clearWheelOdometrySamples()
+        prepareWheelOdometryForNewWasmRun()
         connectionStatus = "Disconnected"
     }
 
@@ -522,7 +546,7 @@ func read_wheel_odometry_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawP
     guard let ptr = ptr else { return }
     BluetoothManager.shared.ensureWheelOdometryStreaming()
 
-    let sample = BluetoothManager.shared.popWheelOdometrySample() ??
+    let sample = BluetoothManager.shared.popWheelOdometrySampleForWasm() ??
         WheelOdometrySample(timestamp: 0.0, seq: -1, dlTicks: 0, drTicks: 0, samplePeriodMs: 0)
 
     let base = ptr.bindMemory(to: Double.self, capacity: 1)

@@ -10,7 +10,6 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct SettingsPage: View {
-	@State private var rerunURL: String = RerunWebSocketClient.shared.serverURLString
     @State private var sensorConfig: WasmSensorConfig = WasmManager.shared.sensorConfig
     @State private var recordingEnabled: Bool = WasmManager.shared.recordingEnabled
     @State private var recordingPath: String = WasmManager.shared.recordingPath
@@ -39,7 +38,6 @@ struct SettingsPage: View {
 
             ScrollView {
                 VStack(spacing: 24) {
-                    rerunSection
                     sensorSection
                     recordingSection
                     appInfoSection
@@ -52,7 +50,6 @@ struct SettingsPage: View {
         .padding(.top, safeAreaInsets.top)
         .padding(.bottom, safeAreaInsets.bottom + AppConstants.shared.tabBarHeight)
 		.onAppear {
-			rerunURL = RerunWebSocketClient.shared.serverURLString
             sensorConfig = WasmManager.shared.sensorConfig
             recordingEnabled = WasmManager.shared.recordingEnabled
             recordingPath = WasmManager.shared.recordingPath
@@ -73,35 +70,6 @@ struct SettingsPage: View {
             }
         }
     }
-
-	@ViewBuilder
-	private var rerunSection: some View {
-		VStack(alignment: .leading, spacing: 12) {
-			Text("Rerun WebSocket")
-				.font(.headline)
-			TextField("ws://host:port", text: $rerunURL)
-				.textInputAutocapitalization(.never)
-				.autocorrectionDisabled(true)
-				.keyboardType(.URL)
-				.textFieldStyle(.roundedBorder)
-			Text("Default: \(RerunWebSocketClient.defaultServerURLString)")
-				.font(.caption)
-				.foregroundColor(.secondary)
-			Button("Apply") {
-				RerunWebSocketClient.shared.updateServerURL(rerunURL)
-			}
-			.buttonStyle(.borderedProminent)
-			Button("Reset to Default") {
-				rerunURL = RerunWebSocketClient.defaultServerURLString
-				RerunWebSocketClient.shared.updateServerURL(rerunURL)
-			}
-			.buttonStyle(.bordered)
-		}
-		.padding()
-		.background(Color(.systemGray6))
-		.cornerRadius(12)
-		.padding(.horizontal)
-	}
 
     @ViewBuilder
     private var sensorSection: some View {

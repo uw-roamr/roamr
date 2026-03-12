@@ -631,7 +631,20 @@
             gap: 10px;
         }
 
+        .map-toolbar-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+
         .map-layer-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .map-export-actions {
             display: flex;
             flex-wrap: wrap;
             gap: 8px;
@@ -651,6 +664,14 @@
 
         .map-layer-toggle input {
             margin: 0;
+        }
+
+        .map-action-btn {
+            width: auto;
+            margin-bottom: 0;
+            padding: 8px 12px;
+            font-size: 13px;
+            line-height: 1.2;
         }
 
         .map-stage {
@@ -982,11 +1003,31 @@
                     <div class="map-header">
                         <div class="map-title-block">
                             <div class="map-title">WASM Map Preview</div>
-                            <div class="map-layer-toolbar">
-                                <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerBase" checked>Base</label>
-                                <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerOdometry" checked>Odometry</label>
-                                <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerPlanning" checked>Planning</label>
-                                <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerFrontiers" checked>Frontiers</label>
+                            <div class="map-toolbar-row">
+                                <div class="map-layer-toolbar">
+                                    <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerBase" checked>Base</label>
+                                    <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerOdometry" checked>Odometry</label>
+                                    <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerPlanning" checked>Planning</label>
+                                    <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerFrontiers" checked>Frontiers</label>
+                                </div>
+                                <div class="map-export-actions">
+                                    <button
+                                        id="saveMapImageBtn"
+                                        class="btn-secondary map-action-btn"
+                                        onclick="saveBaseMapImage()"
+                                        disabled
+                                    >
+                                        Save Base Image
+                                    </button>
+                                    <button
+                                        id="saveMapArrayBtn"
+                                        class="btn-secondary map-action-btn"
+                                        onclick="saveBaseMapArray()"
+                                        disabled
+                                    >
+                                        Save Base Array
+                                    </button>
+                                </div>
                             </div>
                         </div>
                         <div class="map-stats">
@@ -1162,6 +1203,8 @@
         const mapFramesEl = document.getElementById('mapFrames');
         const mapSizeEl = document.getElementById('mapSize');
         const mapTimestampEl = document.getElementById('mapTimestamp');
+        const saveMapImageBtn = document.getElementById('saveMapImageBtn');
+        const saveMapArrayBtn = document.getElementById('saveMapArrayBtn');
         const consoleLogEl = document.getElementById('consoleLog');
         const consolePlaceholderEl = document.getElementById('consolePlaceholder');
         const consoleLineCountEl = document.getElementById('consoleLineCount');
@@ -1663,6 +1706,7 @@
             mapLayerState.latestTimestampByLayer[layer] = timestamp;
 
             updateMapLayerVisibility();
+            updateMapExportButtons();
             mapPlaceholderEl.style.display = 'none';
             updateMapTransform();
 
@@ -1975,6 +2019,85 @@
             return `${timestamp.toFixed(3)} s`;
         }
 
+        function hasBaseMapLayer() {
+            const baseCanvas = mapLayerCanvasEls.base;
+            return Boolean(
+                baseCanvas &&
+                baseCanvas.dataset.loaded === '1' &&
+                baseCanvas.width > 0 &&
+                baseCanvas.height > 0
+            );
+        }
+
+        function updateMapExportButtons() {
+            const hasBaseLayer = hasBaseMapLayer();
+            saveMapImageBtn.disabled = !hasBaseLayer;
+            saveMapArrayBtn.disabled = !hasBaseLayer;
+        }
+
+        function buildMapExportBaseName() {
+            const timestamp = mapLayerState.latestTimestampByLayer.base;
+            const timestampSuffix = Number.isFinite(timestamp)
+                ? `t${timestamp.toFixed(3).replace('.', '_')}s`
+                : 'latest';
+            return `roamr-base-map-${timestampSuffix}`;
+        }
+
+        function downloadBlob(blob, filename) {
+            const objectUrl = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = objectUrl;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+        }
+
+        function saveBaseMapImage() {
+            if (!hasBaseMapLayer()) {
+                return;
+            }
+
+            const baseCanvas = mapLayerCanvasEls.base;
+            baseCanvas.toBlob((blob) => {
+                if (!blob) {
+                    addLog('Failed to export base map image');
+                    return;
+                }
+
+                const filename = `${buildMapExportBaseName()}.png`;
+                downloadBlob(blob, filename);
+                addLog(`Saved base map image: ${filename}`);
+            }, 'image/png');
+        }
+
+        function saveBaseMapArray() {
+            if (!hasBaseMapLayer()) {
+                return;
+            }
+
+            const baseCanvas = mapLayerCanvasEls.base;
+            const baseCtx = mapLayerCtxByLayer.base;
+            if (!baseCtx) {
+                return;
+            }
+
+            const imageData = baseCtx.getImageData(0, 0, baseCanvas.width, baseCanvas.height);
+            const payload = {
+                width: baseCanvas.width,
+                height: baseCanvas.height,
+                channels: 4,
+                format: 'rgba',
+                timestamp_s: mapLayerState.latestTimestampByLayer.base,
+                data: Array.from(imageData.data)
+            };
+            const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+            const filename = `${buildMapExportBaseName()}.json`;
+            downloadBlob(blob, filename);
+            addLog(`Saved base map array: ${filename}`);
+        }
+
         function resetPointCloudData() {
             pointCloudState.points = null;
             pointCloudState.colors = null;
@@ -2035,6 +2158,7 @@
                 canvas.dataset.loaded = '';
             });
             mapPlaceholderEl.style.display = 'block';
+            updateMapExportButtons();
         }
 
         function resetConsoleOutput() {
@@ -2192,6 +2316,7 @@
             const centerY = canvas.height / 2;
             const maxRadius = canvas.width / 2 - 40;
             const knobRadius = 35;
+            const maxMotorPercent = 20;
 
             let isDragging = false;
             let knobX = centerX;
@@ -2238,17 +2363,16 @@
             }
 
             function calculateMotorValues() {
-                // Normalize to -100 to 100
-                const x = ((knobX - centerX) / maxRadius) * 100;
-                const y = -((knobY - centerY) / maxRadius) * 100; // Invert Y
+                // Normalize joystick travel to the configured motor output cap.
+                const x = ((knobX - centerX) / maxRadius) * maxMotorPercent;
+                const y = -((knobY - centerY) / maxRadius) * maxMotorPercent; // Invert Y
 
                 // Differential drive
                 let left = y + x;
                 let right = y - x;
 
-                // Clamp to -100 to 100
-                left = Math.max(-100, Math.min(100, left));
-                right = Math.max(-100, Math.min(100, right));
+                left = Math.max(-maxMotorPercent, Math.min(maxMotorPercent, left));
+                right = Math.max(-maxMotorPercent, Math.min(maxMotorPercent, right));
 
                 return {
                     left: Math.round(left),

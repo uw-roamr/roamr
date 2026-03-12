@@ -269,7 +269,7 @@ class SessionRecorder {
       return;
     }
 
-    enabled_ = true;
+    enabled_.store(true, std::memory_order_release);
     writer_thread_ = std::thread([this]() { writer_loop(); });
     writer_thread_.detach();
 
@@ -283,8 +283,7 @@ class SessionRecorder {
   }
 
   bool is_enabled() const {
-    std::lock_guard<std::mutex> lk(state_mutex_);
-    return enabled_;
+    return enabled_.load(std::memory_order_acquire);
   }
 
   void enqueue_imu(const sensors::IMUData& data) {
@@ -370,7 +369,7 @@ class SessionRecorder {
 
   void enqueue_request(WriteRequest request) {
     std::lock_guard<std::mutex> lk(queue_mutex_);
-    if (!enabled_) {
+    if (!enabled_.load(std::memory_order_acquire)) {
       return;
     }
     if (queue_.size() >= kMaxPendingWrites) {
@@ -471,7 +470,7 @@ class SessionRecorder {
   std::string points_dir_;
   sensors::CameraConfig camera_config_{};
   bool initialized_ = false;
-  bool enabled_ = false;
+  std::atomic<bool> enabled_{false};
   bool drop_warning_emitted_ = false;
   size_t dropped_request_count_ = 0;
   size_t imu_since_flush_ = 0;

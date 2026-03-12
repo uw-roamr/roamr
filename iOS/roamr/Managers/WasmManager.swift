@@ -24,8 +24,8 @@ struct WasmSensorConfig: Equatable {
         imuEnabled: true,
         wheelOdometryEnabled: true,
         lidarPointsEnabled: true,
-        pointColorsEnabled: true,
-        cameraImageEnabled: true
+        pointColorsEnabled: false,
+        cameraImageEnabled: false
     )
 }
 
@@ -88,9 +88,8 @@ final class WasmManager: ObservableObject {
 
     func effectiveSensorConfig() -> WasmSensorConfig {
         var config = sensorConfig
-        if config.pointColorsEnabled {
-            config.lidarPointsEnabled = true
-        }
+        config.pointColorsEnabled = false
+        config.cameraImageEnabled = false
         // The current slam_main runtime still relies on these streams.
         config.imuEnabled = true
         config.wheelOdometryEnabled = true
@@ -114,6 +113,9 @@ final class WasmManager: ObservableObject {
         appendLogLine(
             "[host][sensors] imu=\(config.imuEnabled ? 1 : 0) wheel=\(config.wheelOdometryEnabled ? 1 : 0) points=\(config.lidarPointsEnabled ? 1 : 0) point_colors=\(config.pointColorsEnabled ? 1 : 0) rgb=\(config.cameraImageEnabled ? 1 : 0)"
         )
+        if config.wheelOdometryEnabled {
+            BluetoothManager.shared.prepareWheelOdometryForNewWasmRun()
+        }
         if config.imuEnabled {
             IMUManager.shared.start()
         }
