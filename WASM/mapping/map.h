@@ -18,8 +18,8 @@ namespace mapping{
 
         // Map parameters (mirroring the ROS node)
         static constexpr float kGridResolution = 0.02f; // meters
-        static constexpr int32_t kMapSizeX = 400;
-        static constexpr int32_t kMapSizeY = 400;
+        static constexpr int32_t kMapSizeX = 150;
+        static constexpr int32_t kMapSizeY = 150;
         static constexpr int16_t kMinCellScore = -32;
         static constexpr int16_t kMaxCellScore = 32;
         static constexpr int16_t kHitIncrement = 8;

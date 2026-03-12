@@ -95,6 +95,11 @@ static size_t g_lc_ready_size = 0;
 static std::atomic<bool> g_lc_ready{false};
 static std::mutex g_lc_cv_mutex;
 static std::condition_variable g_lc_cv;
+static constexpr size_t kLidarPreviewMaxPoints = 4000;
+static sensors::LidarCameraData g_lidar_preview_buffer{};
+static bool g_lidar_preview_ready = false;
+static std::mutex g_lidar_preview_mutex;
+static std::condition_variable g_lidar_preview_cv;
 
 // motor encoder odometry globals
 static std::atomic<bool> g_wheel_odom_ready{false};
@@ -338,6 +343,49 @@ static bool lidar_queue_has_free_slot_locked() {
     return false;
 }
 
+static void copy_lidar_preview_frame(
+    const sensors::LidarCameraData& src,
+    bool include_colors,
+    sensors::LidarCameraData* dst) {
+    if (!dst) {
+        return;
+    }
+    dst->timestamp = src.timestamp;
+    dst->points_size = 0;
+    dst->colors_size = 0;
+    dst->image_size = 0;
+    dst->points_frame_id = src.points_frame_id;
+    dst->image_frame_id = src.image_frame_id;
+
+    const size_t total_points = src.points_size / sensors::float_per_point;
+    if (total_points == 0) {
+        return;
+    }
+    const size_t point_stride =
+        std::max<size_t>(1, (total_points + kLidarPreviewMaxPoints - 1) / kLidarPreviewMaxPoints);
+    size_t preview_points = 0;
+    for (size_t point_idx = 0; point_idx < total_points; point_idx += point_stride) {
+        const size_t src_base = point_idx * sensors::float_per_point;
+        const size_t dst_base = preview_points * sensors::float_per_point;
+        dst->points[dst_base + 0] = src.points[src_base + 0];
+        dst->points[dst_base + 1] = src.points[src_base + 1];
+        dst->points[dst_base + 2] = src.points[src_base + 2];
+
+        if (include_colors &&
+            src.colors_size >= (point_idx + 1) * sensors::colors_per_point) {
+            const size_t src_color_base = point_idx * sensors::colors_per_point;
+            const size_t dst_color_base = preview_points * sensors::colors_per_point;
+            dst->colors[dst_color_base + 0] = src.colors[src_color_base + 0];
+            dst->colors[dst_color_base + 1] = src.colors[src_color_base + 1];
+            dst->colors[dst_color_base + 2] = src.colors[src_color_base + 2];
+            dst->colors_size = (preview_points + 1) * sensors::colors_per_point;
+        }
+        ++preview_points;
+    }
+    dst->points_size = preview_points * sensors::float_per_point;
+    dst->image_size = 0;
+}
+
 static int claim_lidar_free_slot_locked() {
     for (size_t idx = 0; idx < g_lc_slot_states.size(); ++idx) {
         if (g_lc_slot_states[idx] == LidarSlotState::FREE) {
@@ -402,7 +450,7 @@ struct RuntimeSensorConfig {
     bool imu_enabled = true;
     bool wheel_odometry_enabled = false;
     bool lidar_points_enabled = true;
-    bool point_colors_enabled = true;
+    bool point_colors_enabled = false;
     bool camera_image_enabled = false;
 };
 
@@ -429,9 +477,9 @@ static RuntimeSensorConfig load_sensor_config_from_env() {
     config.lidar_points_enabled =
         env_flag_enabled("ROAMR_SENSOR_ENABLE_LIDAR_POINTS", true);
     config.point_colors_enabled =
-        env_flag_enabled("ROAMR_SENSOR_ENABLE_POINT_COLORS", true);
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_POINT_COLORS", false);
     config.camera_image_enabled =
-        env_flag_enabled("ROAMR_SENSOR_ENABLE_CAMERA_IMAGE", true);
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_CAMERA_IMAGE", false);
     return config;
 }
 
@@ -445,18 +493,20 @@ static void log_sensor_config(const RuntimeSensorConfig& config) {
     wasm_log_line(log.str());
 }
 
-static constexpr PoseSource pose_source = PoseSource::IMU;
+static constexpr PoseSource pose_source = PoseSource::fused_IMU_wheel_odom;
 static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
 static constexpr int32_t kPathFollowHoldMs = 120;
 static constexpr bool kEnableWheelPoseLogging = true;
 static constexpr double kWheelPoseLogIntervalSec = 0.2;
 static constexpr double kGoalCheckLogIntervalSec = 0.5;
+static constexpr double kRerunPoseLogIntervalSec = 0.2;
 static constexpr bool kEnableVerboseAutonomyLogs = false;
 static constexpr bool kEnablePlannerWakeLogs = false;
 static constexpr int32_t kPlannerPollMs = 50;
 static constexpr double kPlannerMinIntervalSec = 0.35;
 static constexpr int32_t kTelemetryRenderIntervalMs = 33;
+static constexpr double kTelemetryPoseRenderMinIntervalSec = 0.15;
 static constexpr double kPoseTrailMinDistanceM = 0.05;
 static constexpr double kPoseTrailMinYawDeltaRad = 10.0 * core::pi / 180.0;
 static constexpr double kPoseTrailMinIntervalSec = 0.05;
@@ -696,6 +746,7 @@ int main(){
         const auto target_interval = std::chrono::microseconds(sensors::IMUIntervalMicrosecond);
         double g_last_logged_imu_timestamp = -1.0;
         double g_last_calib_timestamp = -1.0;
+        double last_rerun_pose_log_timestamp = -1.0;
 
         // initial calibration for gyro and accelerometer biases
         g_imu_calib.init_biases();
@@ -736,7 +787,13 @@ int main(){
                             pose_copy,
                             core::recorder::PoseDataSource::kIMU);
                     }
-                    rerun_log_pose(&pose_copy);
+                    if (pose_copy.timestamp > 0.0 &&
+                        (last_rerun_pose_log_timestamp < 0.0 ||
+                         (pose_copy.timestamp - last_rerun_pose_log_timestamp) >=
+                             kRerunPoseLogIntervalSec)) {
+                        rerun_log_pose(&pose_copy);
+                        last_rerun_pose_log_timestamp = pose_copy.timestamp;
+                    }
                 }
                 // wasm_log_line("imu: " + std::to_string(imu_copy.timestamp) + ", " + std::to_string(imu_copy.gyro_z));
             }
@@ -787,13 +844,6 @@ int main(){
                 core::recorder::enqueue_lidar_frame(
                     g_lc_buffers[write_idx],
                     g_lc_pose_buffers[write_idx]);
-                if (g_lc_buffers[write_idx].timestamp > 0.0 &&
-                    (last_lidar_log_timestamp < 0.0 ||
-                     (g_lc_buffers[write_idx].timestamp - last_lidar_log_timestamp) >=
-                         kLidarLogIntervalSec)) {
-                    rerun_log_lidar_frame(&g_lc_buffers[write_idx]);
-                    last_lidar_log_timestamp = g_lc_buffers[write_idx].timestamp;
-                }
 
                 // Timestamp deduplication is intentionally omitted here. Mapping only
                 // requires monotonically advancing timestamps, and deduplicating at the
@@ -809,6 +859,30 @@ int main(){
                     push_lidar_ready_slot_locked(write_idx);
                 }
                 g_lc_cv.notify_one();
+                if (g_sensor_config.lidar_points_enabled &&
+                    g_lc_buffers[write_idx].timestamp > 0.0 &&
+                    (last_lidar_log_timestamp < 0.0 ||
+                     (g_lc_buffers[write_idx].timestamp - last_lidar_log_timestamp) >=
+                         kLidarLogIntervalSec)) {
+                    bool queued_preview = false;
+                    {
+                        std::lock_guard<std::mutex> lk(g_lidar_preview_mutex);
+                        if (!g_lidar_preview_ready) {
+                            copy_lidar_preview_frame(
+                                g_lc_buffers[write_idx],
+                                g_sensor_config.point_colors_enabled,
+                                &g_lidar_preview_buffer);
+                            if (g_lidar_preview_buffer.points_size > 0) {
+                                g_lidar_preview_ready = true;
+                                queued_preview = true;
+                            }
+                        }
+                    }
+                    if (queued_preview) {
+                        g_lidar_preview_cv.notify_one();
+                    }
+                    last_lidar_log_timestamp = g_lc_buffers[write_idx].timestamp;
+                }
                 // wasm_log_line("lidar: " + std::to_string(g_lc_buffers[write_idx].timestamp) + ", " + std::to_string(g_lc_buffers[write_idx].points_size));
             } else {
                 {
@@ -817,6 +891,22 @@ int main(){
                 }
                 g_lc_cv.notify_one();
             }
+        }
+    });
+
+    std::thread lidar_preview_thread([](){
+        while (true) {
+            std::unique_lock<std::mutex> lk(g_lidar_preview_mutex);
+            g_lidar_preview_cv.wait(lk, []{
+                return g_lidar_preview_ready;
+            });
+            lk.unlock();
+
+            rerun_log_lidar_frame(&g_lidar_preview_buffer);
+
+            lk.lock();
+            g_lidar_preview_ready = false;
+            lk.unlock();
         }
     });
 
@@ -1190,28 +1280,48 @@ int main(){
 
     std::thread telemetry_thread([&m_pose](){
         mapping::PoseTrailState pose_trail;
+        mapping::MapSnapshot cached_snapshot;
+        planning::bridge::PlanningOverlay cached_overlay;
         uint64_t last_rendered_map_revision = 0;
         uint64_t last_rendered_overlay_revision = 0;
+        uint64_t cached_overlay_revision = 0;
+        double cached_snapshot_timestamp = -1.0;
         double last_rendered_pose_timestamp = -1.0;
+        double last_rendered_pose_visual_timestamp = -1.0;
         double last_pose_trail_timestamp = -1.0;
         core::PoseSE2d last_trail_pose{};
         bool have_last_trail_pose = false;
         while (true) {
-            mapping::MapSnapshot snapshot;
-            planning::bridge::PlanningOverlay overlay;
             const uint64_t latest_map_revision =
                 g_map_update_revision.load(std::memory_order_acquire);
-            publish_latest_map_snapshot_if_needed(
-                latest_map_revision,
-                &snapshot);
-            if (!snapshot.valid()) {
-                std::lock_guard<std::mutex> lk(g_map_publish_mutex);
-                snapshot = g_latest_map_snapshot;
+            if (!cached_snapshot.valid() ||
+                cached_snapshot.map_revision != latest_map_revision) {
+                mapping::MapSnapshot next_snapshot;
+                publish_latest_map_snapshot_if_needed(
+                    latest_map_revision,
+                    &next_snapshot);
+                if (!next_snapshot.valid()) {
+                    std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+                    next_snapshot = g_latest_map_snapshot;
+                }
+                if (!next_snapshot.valid()) {
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(kTelemetryRenderIntervalMs));
+                    continue;
+                }
+                cached_snapshot = std::move(next_snapshot);
+                cached_snapshot_timestamp = cached_snapshot.timestamp;
             }
-            {
-                std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
-                overlay = g_latest_plan_overlay;
+
+            const uint64_t overlay_revision = planning::bridge::latest_overlay_revision();
+            if (overlay_revision != cached_overlay_revision) {
+                std::lock_guard<std::mutex> plan_lk(g_plan_publish_mutex);
+                cached_overlay = g_latest_plan_overlay;
+                cached_overlay_revision = overlay_revision;
             }
+
+            mapping::MapSnapshot& snapshot = cached_snapshot;
+            planning::bridge::PlanningOverlay& overlay = cached_overlay;
             if (!snapshot.valid()) {
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(kTelemetryRenderIntervalMs));
@@ -1225,18 +1335,18 @@ int main(){
                 continue;
             }
             snapshot.pose = pose_log_to_se2(pose_snapshot);
-            snapshot.timestamp = std::max(snapshot.timestamp, pose_snapshot.timestamp);
+            snapshot.timestamp = std::max(cached_snapshot_timestamp, pose_snapshot.timestamp);
 
-            const uint64_t overlay_revision = planning::bridge::latest_overlay_revision();
             const bool map_changed = snapshot.map_revision != last_rendered_map_revision;
             const bool overlay_changed = overlay_revision != last_rendered_overlay_revision;
             const bool pose_changed = pose_snapshot.timestamp > last_rendered_pose_timestamp;
-            if (!map_changed && !overlay_changed && !pose_changed) {
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(kTelemetryRenderIntervalMs));
-                continue;
-            }
+            const bool pose_visual_changed =
+                pose_changed &&
+                ((last_rendered_pose_visual_timestamp < 0.0) ||
+                 ((pose_snapshot.timestamp - last_rendered_pose_visual_timestamp) >=
+                  kTelemetryPoseRenderMinIntervalSec));
 
+            bool pose_trail_changed = false;
             const bool time_gate =
                 (last_pose_trail_timestamp < 0.0) ||
                 ((pose_snapshot.timestamp - last_pose_trail_timestamp) >=
@@ -1259,17 +1369,25 @@ int main(){
                 last_trail_pose = snapshot.pose;
                 last_pose_trail_timestamp = pose_snapshot.timestamp;
                 have_last_trail_pose = true;
+                pose_trail_changed = true;
+            }
+            if (!map_changed && !overlay_changed && !pose_visual_changed && !pose_trail_changed) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(kTelemetryRenderIntervalMs));
+                continue;
             }
             mapping::visualization::render_map_frame(
                 snapshot,
                 pose_trail,
                 overlay,
+                overlay_revision,
                 kRenderWidth,
                 kRenderHeight,
                 g_map_image);
             last_rendered_map_revision = snapshot.map_revision;
             last_rendered_overlay_revision = overlay_revision;
             last_rendered_pose_timestamp = pose_snapshot.timestamp;
+            last_rendered_pose_visual_timestamp = pose_snapshot.timestamp;
             std::this_thread::sleep_for(
                 std::chrono::milliseconds(kTelemetryRenderIntervalMs));
         }
@@ -1457,6 +1575,7 @@ int main(){
 
     imu_thread.join();
     lidar_camera_thread.join();
+    lidar_preview_thread.join();
     mapping_thread.join();
     // planner_thread.join();
     telemetry_thread.join();

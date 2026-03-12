@@ -8,12 +8,13 @@
 namespace mapping {
 namespace visualization {
 
-// Render the occupancy grid into out_frame and ship it to the host via
-// rerun_log_map_frame.
+// Render the visualization layers and ship each one to the host via
+// rerun_log_map_frame. The host distinguishes frames by MapImage.layer_id.
 void render_map_frame(
     const MapSnapshot& snapshot,
     const PoseTrailState& pose_trail,
     const planning::bridge::PlanningOverlay& overlay,
+    uint64_t overlay_revision,
     int32_t width,
     int32_t height,
     MapImage& out_frame);

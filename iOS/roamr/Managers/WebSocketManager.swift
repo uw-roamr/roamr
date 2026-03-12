@@ -20,6 +20,17 @@ private enum RoamrBinaryPointCloudProtocol {
     static let hasColorsFlag: UInt8 = 1
 }
 
+private enum RoamrBinaryMapLayerProtocol {
+    static let magic: [UInt8] = [0x52, 0x52, 0x4D, 0x31]  // "RRM1"
+    static let messageTypeLayer: UInt8 = 1
+    static let timestampOffset = 8
+    static let widthOffset = 16
+    static let heightOffset = 20
+    static let channelsOffset = 24
+    static let layerIdOffset = 28
+    static let headerSize = 32
+}
+
 private struct IncomingTeleopCommand {
     let seq: Int
     let left: Int
@@ -44,6 +55,7 @@ class WebSocketManager: ObservableObject {
     private var connectionStates: [ObjectIdentifier: Bool] = [:] // Track handshake completion
     private var latestPointCloudData: Data?
     private var latestMapFrameMessage: String?
+    private var latestMapLayerPayloads: [String: Data] = [:]
     private var latestWasmStateMessage: String?
     private var recentWasmLogMessages: [String] = []
     private var selectedWasmTargetId: String
@@ -354,6 +366,11 @@ class WebSocketManager: ObservableObject {
             return
         }
 
+        broadcastPointCloudPayload(payload)
+    }
+
+    func broadcastPointCloudPayload(_ payload: Data) {
+        guard !payload.isEmpty else { return }
         latestPointCloudData = payload
         let frame = createBinaryFrame(data: payload)
 
@@ -429,12 +446,37 @@ class WebSocketManager: ObservableObject {
 
     func publishMapFrameReset() {
         latestMapFrameMessage = nil
+        latestMapLayerPayloads.removeAll()
         guard let payload = makeJSONString([
             "type": "map_frame_reset"
         ]) else {
             return
         }
         broadcastTextMessage(payload)
+    }
+
+    func publishMapLayerFrame(
+        timestamp: Double,
+        layer: String,
+        width: Int,
+        height: Int,
+        channels: Int,
+        rgbaPointer: UnsafePointer<UInt8>,
+        dataCount: Int
+    ) {
+        guard let payload = makeBinaryMapLayerPayload(
+            timestamp: timestamp,
+            layer: layer,
+            width: width,
+            height: height,
+            channels: channels,
+            rgbaPointer: rgbaPointer,
+            dataCount: dataCount
+        ) else {
+            return
+        }
+        latestMapLayerPayloads[layer] = payload
+        broadcastBinaryData(payload)
     }
 
     func publishWasmControlState() {
@@ -532,6 +574,16 @@ class WebSocketManager: ObservableObject {
 
         if let latestMapFrameMessage {
             sendTextFrame(latestMapFrameMessage, to: connection, label: "latest map frame")
+        }
+        for (_, payload) in latestMapLayerPayloads.sorted(by: {
+            mapLayerSortIndex($0.key) < mapLayerSortIndex($1.key)
+        }) {
+            let frame = createBinaryFrame(data: payload)
+            connection.send(content: frame, completion: .contentProcessed { error in
+                if let error = error {
+                    print("❌ Failed to send latest map layer: \(error)")
+                }
+            })
         }
 
         for payload in recentWasmLogMessages {
@@ -908,6 +960,141 @@ class WebSocketManager: ObservableObject {
         }
 
         return payload
+    }
+
+    private func makeBinaryMapLayerPayload(
+        timestamp: Double,
+        layer: String,
+        width: Int,
+        height: Int,
+        channels: Int,
+        rgbaPointer: UnsafePointer<UInt8>,
+        dataCount: Int
+    ) -> Data? {
+        guard !layer.isEmpty,
+              width > 0,
+              height > 0,
+              channels > 0,
+              dataCount > 0,
+              let layerId = mapLayerIdValue(for: layer) else {
+            return nil
+        }
+
+        let expectedCount = width * height * channels
+        guard dataCount >= expectedCount else {
+            return nil
+        }
+
+        let totalByteCount = RoamrBinaryMapLayerProtocol.headerSize + expectedCount
+        var payload = Data(count: totalByteCount)
+        payload.withUnsafeMutableBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else { return }
+            let rawPointer = baseAddress.assumingMemoryBound(to: UInt8.self)
+
+            RoamrBinaryMapLayerProtocol.magic.withUnsafeBytes { magicBytes in
+                if let magicBase = magicBytes.baseAddress {
+                    memcpy(rawPointer, magicBase, RoamrBinaryMapLayerProtocol.magic.count)
+                }
+            }
+
+            rawPointer[4] = RoamrBinaryMapLayerProtocol.messageTypeLayer
+            rawPointer[5] = 0
+            rawPointer[6] = 0
+            rawPointer[7] = 0
+
+            var timestampBits = timestamp.bitPattern.littleEndian
+            withUnsafeBytes(of: &timestampBits) { bytes in
+                if let src = bytes.baseAddress {
+                    memcpy(
+                        rawPointer.advanced(by: RoamrBinaryMapLayerProtocol.timestampOffset),
+                        src,
+                        MemoryLayout<UInt64>.size
+                    )
+                }
+            }
+
+            var widthLE = UInt32(width).littleEndian
+            withUnsafeBytes(of: &widthLE) { bytes in
+                if let src = bytes.baseAddress {
+                    memcpy(
+                        rawPointer.advanced(by: RoamrBinaryMapLayerProtocol.widthOffset),
+                        src,
+                        MemoryLayout<UInt32>.size
+                    )
+                }
+            }
+
+            var heightLE = UInt32(height).littleEndian
+            withUnsafeBytes(of: &heightLE) { bytes in
+                if let src = bytes.baseAddress {
+                    memcpy(
+                        rawPointer.advanced(by: RoamrBinaryMapLayerProtocol.heightOffset),
+                        src,
+                        MemoryLayout<UInt32>.size
+                    )
+                }
+            }
+
+            var channelsLE = UInt32(channels).littleEndian
+            withUnsafeBytes(of: &channelsLE) { bytes in
+                if let src = bytes.baseAddress {
+                    memcpy(
+                        rawPointer.advanced(by: RoamrBinaryMapLayerProtocol.channelsOffset),
+                        src,
+                        MemoryLayout<UInt32>.size
+                    )
+                }
+            }
+
+            var layerIdLE = UInt32(layerId).littleEndian
+            withUnsafeBytes(of: &layerIdLE) { bytes in
+                if let src = bytes.baseAddress {
+                    memcpy(
+                        rawPointer.advanced(by: RoamrBinaryMapLayerProtocol.layerIdOffset),
+                        src,
+                        MemoryLayout<UInt32>.size
+                    )
+                }
+            }
+
+            memcpy(
+                rawPointer.advanced(by: RoamrBinaryMapLayerProtocol.headerSize),
+                rgbaPointer,
+                expectedCount
+            )
+        }
+
+        return payload
+    }
+
+    private func mapLayerIdValue(for layer: String) -> UInt32? {
+        switch layer {
+        case "base":
+            return 1
+        case "odometry":
+            return 2
+        case "planning":
+            return 3
+        case "frontiers":
+            return 4
+        default:
+            return nil
+        }
+    }
+
+    private func mapLayerSortIndex(_ layer: String) -> Int {
+        switch layer {
+        case "base":
+            return 0
+        case "odometry":
+            return 1
+        case "planning":
+            return 2
+        case "frontiers":
+            return 3
+        default:
+            return Int.max
+        }
     }
 }
 

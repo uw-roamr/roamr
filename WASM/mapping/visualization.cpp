@@ -1,12 +1,12 @@
 #include "mapping/visualization.h"
-#include "mapping/costmap.h"
-#include "mapping/map.h"
-#include "core/telemetry.h"
 
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
-#include <stdint.h>
+
+#include "mapping/costmap.h"
+#include "mapping/map.h"
 
 namespace mapping {
 namespace visualization {
@@ -14,382 +14,510 @@ namespace visualization {
 namespace {
 
 constexpr int32_t kMaxPixels = Map::kMaxImageWidth * Map::kMaxImageHeight;
-constexpr int32_t kPoseLineLength = 10; // pixels for x and y axes
+constexpr int32_t kPoseLineLength = 10;
+constexpr bool kEmitCompositeMapFrame = false;
 
 static std::array<uint8_t, kMaxPixels * 4> s_image_buf{};
-static std::array<uint8_t, kMaxPixels * 4> s_base_image_buf{};
+static std::array<uint8_t, kMaxPixels * 4> s_base_layer_buf{};
+static std::array<uint8_t, kMaxPixels * 4> s_planning_layer_buf{};
+static std::array<uint8_t, kMaxPixels * 4> s_frontiers_layer_buf{};
 static int32_t s_cur_w = 0;
 static int32_t s_cur_h = 0;
-static uint64_t s_cached_map_revision = 0;
-static uint64_t s_cached_path_hash = 0;
-static int32_t s_cached_w = 0;
-static int32_t s_cached_h = 0;
-static bool s_have_cached_base = false;
+static uint64_t s_cached_static_map_revision = 0;
+static uint64_t s_cached_static_overlay_revision = 0;
+static int32_t s_cached_static_w = 0;
+static int32_t s_cached_static_h = 0;
+static bool s_have_cached_static_layers = false;
 
-inline void paint_pixel(
-    int32_t x, int32_t y,
-    uint8_t r, uint8_t g, uint8_t b, uint8_t a,
-    std::array<uint8_t, kMaxPixels>& painted)
-{
-    if (x < 0 || x >= s_cur_w || y < 0 || y >= s_cur_h) return;
-    const int32_t idx = y * s_cur_w + x;
-    if (painted[idx]) return;
-    const int32_t off = idx * 4;
+inline void clear_image(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+  const int32_t pixel_count = s_cur_w * s_cur_h;
+  for (int32_t i = 0; i < pixel_count; ++i) {
+    const int32_t off = i * 4;
     s_image_buf[off + 0] = r;
     s_image_buf[off + 1] = g;
     s_image_buf[off + 2] = b;
     s_image_buf[off + 3] = a;
-    painted[idx] = 1;
+  }
+}
+
+inline void paint_pixel(
+    int32_t x,
+    int32_t y,
+    uint8_t r,
+    uint8_t g,
+    uint8_t b,
+    uint8_t a) {
+  if (x < 0 || x >= s_cur_w || y < 0 || y >= s_cur_h) {
+    return;
+  }
+  const int32_t off = (y * s_cur_w + x) * 4;
+  s_image_buf[off + 0] = r;
+  s_image_buf[off + 1] = g;
+  s_image_buf[off + 2] = b;
+  s_image_buf[off + 3] = a;
 }
 
 void draw_line(
-    int32_t x0, int32_t y0, int32_t x1, int32_t y1,
-    uint8_t r, uint8_t g, uint8_t b, uint8_t a,
-    std::array<uint8_t, kMaxPixels>& painted)
-{
-    int dx =  (x1 > x0) ? (x1 - x0) : (x0 - x1);
-    int sx = (x0 < x1) ? 1 : -1;
-    int dy = -((y1 > y0) ? (y1 - y0) : (y0 - y1));
-    int sy = (y0 < y1) ? 1 : -1;
-    int err = dx + dy;
-    int x = x0, y = y0;
-    for (;;) {
-        paint_pixel(x, y, r, g, b, a, painted);
-        if (x == x1 && y == y1) break;
-        int e2 = 2 * err;
-        if (e2 >= dy) { err += dy; x += sx; }
-        if (e2 <= dx) { err += dx; y += sy; }
+    int32_t x0,
+    int32_t y0,
+    int32_t x1,
+    int32_t y1,
+    uint8_t r,
+    uint8_t g,
+    uint8_t b,
+    uint8_t a) {
+  int dx = (x1 > x0) ? (x1 - x0) : (x0 - x1);
+  int sx = (x0 < x1) ? 1 : -1;
+  int dy = -((y1 > y0) ? (y1 - y0) : (y0 - y1));
+  int sy = (y0 < y1) ? 1 : -1;
+  int err = dx + dy;
+  int x = x0;
+  int y = y0;
+  for (;;) {
+    paint_pixel(x, y, r, g, b, a);
+    if (x == x1 && y == y1) {
+      break;
     }
+    const int e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      x += sx;
+    }
+    if (e2 <= dx) {
+      err += dx;
+      y += sy;
+    }
+  }
 }
 
-// red forward, green left (FLU convention)
-void draw_pose_layer(
+void draw_map_pixels(
+    const MapSnapshot& snapshot,
+    float scale,
+    float off_x,
+    float off_y) {
+  for (int32_t py = 0; py < s_cur_h; ++py) {
+    for (int32_t px = 0; px < s_cur_w; ++px) {
+      const int32_t gx = static_cast<int32_t>(
+          (static_cast<float>(px) - off_x) / scale);
+      const int32_t gy = snapshot.meta.height - 1 - static_cast<int32_t>(
+          (static_cast<float>(py) - off_y) / scale);
+
+      uint8_t r = 128;
+      uint8_t g = 128;
+      uint8_t b = 128;
+      if (gx >= 0 && gx < snapshot.meta.width &&
+          gy >= 0 && gy < snapshot.meta.height) {
+        const int32_t idx = gx + gy * snapshot.meta.width;
+        const int8_t occ = snapshot.occupancy[static_cast<size_t>(idx)];
+        if (occ >= 0) {
+          r = occ >= 50 ? 255 : 0;
+          g = r;
+          b = r;
+        }
+      }
+      paint_pixel(px, py, r, g, b, 255);
+    }
+  }
+}
+
+void draw_inflation_pixels(
+    const MapSnapshot& snapshot,
+    const InflatedCostmap& costmap,
+    float scale,
+    float off_x,
+    float off_y,
+    uint8_t alpha) {
+  for (int32_t py = 0; py < s_cur_h; ++py) {
+    for (int32_t px = 0; px < s_cur_w; ++px) {
+      const int32_t gx = static_cast<int32_t>(
+          (static_cast<float>(px) - off_x) / scale);
+      const int32_t gy = snapshot.meta.height - 1 - static_cast<int32_t>(
+          (static_cast<float>(py) - off_y) / scale);
+      if (gx < 0 || gx >= snapshot.meta.width ||
+          gy < 0 || gy >= snapshot.meta.height) {
+        continue;
+      }
+      if (!costmap.is_inflated_blocked(gx, gy) || costmap.is_source_occupied(gx, gy)) {
+        continue;
+      }
+      paint_pixel(px, py, 210, 140, 140, alpha);
+    }
+  }
+}
+
+void draw_pose(
+    const MapSnapshot& snapshot,
+    float scale,
+    float off_x,
+    float off_y) {
+  const int32_t gx = static_cast<int32_t>(
+      std::floor((snapshot.pose.x - snapshot.meta.origin_x_m) / snapshot.meta.resolution_m));
+  const int32_t gy = static_cast<int32_t>(
+      std::floor((snapshot.pose.y - snapshot.meta.origin_y_m) / snapshot.meta.resolution_m));
+  if (gx < 0 || gx >= snapshot.meta.width ||
+      gy < 0 || gy >= snapshot.meta.height) {
+    return;
+  }
+
+  int32_t ppx = 0;
+  int32_t ppy = 0;
+  if (!snapshot_grid_to_pixel(
+          snapshot.meta,
+          gx,
+          gy,
+          s_cur_w,
+          s_cur_h,
+          scale,
+          off_x,
+          off_y,
+          &ppx,
+          &ppy)) {
+    return;
+  }
+
+  const double c = std::cos(snapshot.pose.theta);
+  const double s = std::sin(snapshot.pose.theta);
+  const int32_t fwd_x1 = ppx + static_cast<int32_t>(c * kPoseLineLength);
+  const int32_t fwd_y1 = ppy + static_cast<int32_t>(-s * kPoseLineLength);
+  const int32_t left_x1 = ppx + static_cast<int32_t>(-s * kPoseLineLength);
+  const int32_t left_y1 = ppy + static_cast<int32_t>(-c * kPoseLineLength);
+
+  draw_line(ppx, ppy, fwd_x1, fwd_y1, 255, 0, 0, 255);
+  draw_line(ppx, ppy, left_x1, left_y1, 0, 255, 0, 255);
+}
+
+void draw_pose_trail(
     const MapSnapshot& snapshot,
     const PoseTrailState& pose_trail,
-    float scale, float off_x, float off_y,
-    std::array<uint8_t, kMaxPixels>& painted)
-{
-    for (size_t i = 1; i < pose_trail.poses.size(); ++i) {
-        int32_t gx0 = 0;
-        int32_t gy0 = 0;
-        int32_t gx1 = 0;
-        int32_t gy1 = 0;
-        const core::PoseSE2d& a = pose_trail.poses[i - 1];
-        const core::PoseSE2d& b = pose_trail.poses[i];
-        const int32_t iax = static_cast<int32_t>(
-            std::floor((a.x - snapshot.meta.origin_x_m) / snapshot.meta.resolution_m));
-        const int32_t iay = static_cast<int32_t>(
-            std::floor((a.y - snapshot.meta.origin_y_m) / snapshot.meta.resolution_m));
-        const int32_t ibx = static_cast<int32_t>(
-            std::floor((b.x - snapshot.meta.origin_x_m) / snapshot.meta.resolution_m));
-        const int32_t iby = static_cast<int32_t>(
-            std::floor((b.y - snapshot.meta.origin_y_m) / snapshot.meta.resolution_m));
-        gx0 = iax;
-        gy0 = iay;
-        gx1 = ibx;
-        gy1 = iby;
-        int32_t px0 = 0;
-        int32_t py0 = 0;
-        int32_t px1 = 0;
-        int32_t py1 = 0;
-        if (!snapshot_grid_to_pixel(
-                snapshot.meta, gx0, gy0, s_cur_w, s_cur_h, scale, off_x, off_y, &px0, &py0) ||
-            !snapshot_grid_to_pixel(
-                snapshot.meta, gx1, gy1, s_cur_w, s_cur_h, scale, off_x, off_y, &px1, &py1)) {
-            continue;
-        }
-        draw_line(px0, py0, px1, py1, 80, 0, 128, 255, painted);
-    }
+    float scale,
+    float off_x,
+    float off_y) {
+  for (size_t i = 1; i < pose_trail.poses.size(); ++i) {
+    const core::PoseSE2d& a = pose_trail.poses[i - 1];
+    const core::PoseSE2d& b = pose_trail.poses[i];
+    const int32_t ax = static_cast<int32_t>(
+        std::floor((a.x - snapshot.meta.origin_x_m) / snapshot.meta.resolution_m));
+    const int32_t ay = static_cast<int32_t>(
+        std::floor((a.y - snapshot.meta.origin_y_m) / snapshot.meta.resolution_m));
+    const int32_t bx = static_cast<int32_t>(
+        std::floor((b.x - snapshot.meta.origin_x_m) / snapshot.meta.resolution_m));
+    const int32_t by = static_cast<int32_t>(
+        std::floor((b.y - snapshot.meta.origin_y_m) / snapshot.meta.resolution_m));
 
-    const core::PoseSE2d& pose = snapshot.pose;
-    const double wx    = pose.x;
-    const double wy    = pose.y;
-    const double theta = pose.theta;
-
-    const int32_t gx = static_cast<int32_t>(
-        std::floor((wx - snapshot.meta.origin_x_m) / snapshot.meta.resolution_m));
-    const int32_t gy = static_cast<int32_t>(
-        std::floor((wy - snapshot.meta.origin_y_m) / snapshot.meta.resolution_m));
-    if (gx < 0 || gx >= snapshot.meta.width || gy < 0 || gy >= snapshot.meta.height) return;
-
-    int32_t ppx = 0, ppy = 0;
+    int32_t px0 = 0;
+    int32_t py0 = 0;
+    int32_t px1 = 0;
+    int32_t py1 = 0;
     if (!snapshot_grid_to_pixel(
-            snapshot.meta, gx, gy, s_cur_w, s_cur_h, scale, off_x, off_y, &ppx, &ppy)) return;
-
-    const double c = std::cos(theta);
-    const double s = std::sin(theta);
-
-    const int32_t fwd_x1  = ppx + static_cast<int32_t>( c * kPoseLineLength);
-    const int32_t fwd_y1  = ppy + static_cast<int32_t>(-s * kPoseLineLength);
-    const int32_t left_x1 = ppx + static_cast<int32_t>(-s * kPoseLineLength);
-    const int32_t left_y1 = ppy + static_cast<int32_t>(-c * kPoseLineLength);
-
-    draw_line(ppx, ppy, fwd_x1,  fwd_y1,  255,   0, 0, 255, painted); // red   = forward
-    draw_line(ppx, ppy, left_x1, left_y1,   0, 255, 0, 255, painted); // green = left
+            snapshot.meta, ax, ay, s_cur_w, s_cur_h, scale, off_x, off_y, &px0, &py0) ||
+        !snapshot_grid_to_pixel(
+            snapshot.meta, bx, by, s_cur_w, s_cur_h, scale, off_x, off_y, &px1, &py1)) {
+      continue;
+    }
+    draw_line(px0, py0, px1, py1, 120, 90, 255, 255);
+  }
 }
 
-void draw_path_layer(
+void draw_path(
     const MapSnapshot& snapshot,
     const planning::bridge::PlanningOverlay& overlay,
-    float scale, float off_x, float off_y,
-    std::array<uint8_t, kMaxPixels>& painted)
-{
-    if (overlay.path_grid.empty() &&
-        !overlay.goal_enabled &&
-        overlay.frontier_candidates.empty() &&
-        overlay.selected_frontier_cluster.empty() &&
-        !overlay.selected_frontier_seed_enabled) return;
-
-    for (const planning::GridCoord& cell : overlay.frontier_candidates) {
-        int32_t ppx = 0, ppy = 0;
-        if (!snapshot_grid_to_pixel(
-                snapshot.meta,
-                cell.x,
-                cell.y,
-                s_cur_w,
-                s_cur_h,
-                scale,
-                off_x,
-                off_y,
-                &ppx,
-                &ppy)) continue;
-        paint_pixel(ppx, ppy, 0, 255, 180, 255, painted); // aqua frontier candidates
+    float scale,
+    float off_x,
+    float off_y,
+    uint8_t alpha) {
+  int32_t prev_x = 0;
+  int32_t prev_y = 0;
+  bool have_prev = false;
+  for (const planning::GridCoord& cell : overlay.path_grid) {
+    int32_t ppx = 0;
+    int32_t ppy = 0;
+    if (!snapshot_grid_to_pixel(
+            snapshot.meta,
+            cell.x,
+            cell.y,
+            s_cur_w,
+            s_cur_h,
+            scale,
+            off_x,
+            off_y,
+            &ppx,
+            &ppy)) {
+      continue;
     }
-
-    for (const planning::GridCoord& cell : overlay.selected_frontier_cluster) {
-        int32_t ppx = 0, ppy = 0;
-        if (!snapshot_grid_to_pixel(
-                snapshot.meta,
-                cell.x,
-                cell.y,
-                s_cur_w,
-                s_cur_h,
-                scale,
-                off_x,
-                off_y,
-                &ppx,
-                &ppy)) continue;
-        paint_pixel(ppx, ppy, 255, 0, 220, 255, painted); // magenta selected cluster
+    if (have_prev) {
+      draw_line(prev_x, prev_y, ppx, ppy, 0, 150, 255, alpha);
     }
-
-    int32_t prev_ppx = 0;
-    int32_t prev_ppy = 0;
-    bool have_prev_path_pixel = false;
-    for (const planning::GridCoord& cell : overlay.path_grid) {
-        int32_t ppx = 0, ppy = 0;
-        if (!snapshot_grid_to_pixel(
-                snapshot.meta,
-                cell.x,
-                cell.y,
-                s_cur_w,
-                s_cur_h,
-                scale,
-                off_x,
-                off_y,
-                &ppx,
-                &ppy)) continue;
-        if (have_prev_path_pixel) {
-            draw_line(prev_ppx, prev_ppy, ppx, ppy, 0, 150, 255, 255, painted);
-        }
-        paint_pixel(ppx, ppy, 0, 150, 255, 255, painted); // blue path
-        prev_ppx = ppx;
-        prev_ppy = ppy;
-        have_prev_path_pixel = true;
-    }
-
-    if (overlay.goal_enabled) {
-        int32_t ppx = 0, ppy = 0;
-        if (snapshot_grid_to_pixel(
-                snapshot.meta,
-                overlay.goal_cell.x,
-                overlay.goal_cell.y,
-                s_cur_w,
-                s_cur_h,
-                scale,
-                off_x,
-                off_y,
-                &ppx,
-                &ppy)) {
-            for (int32_t dy = -2; dy <= 2; ++dy) {
-                for (int32_t dx = -2; dx <= 2; ++dx) {
-                    paint_pixel(ppx + dx, ppy + dy, 255, 200, 0, 255, painted); // yellow goal
-                }
-            }
-        }
-    }
-
-    if (overlay.selected_frontier_seed_enabled) {
-        int32_t ppx = 0, ppy = 0;
-        if (snapshot_grid_to_pixel(
-                snapshot.meta,
-                overlay.selected_frontier_seed.x,
-                overlay.selected_frontier_seed.y,
-                s_cur_w,
-                s_cur_h,
-                scale,
-                off_x,
-                off_y,
-                &ppx,
-                &ppy)) {
-            for (int32_t dy = -1; dy <= 1; ++dy) {
-                for (int32_t dx = -1; dx <= 1; ++dx) {
-                    paint_pixel(ppx + dx, ppy + dy, 255, 80, 0, 255, painted); // orange seed
-                }
-            }
-        }
-    }
+    paint_pixel(ppx, ppy, 0, 150, 255, alpha);
+    prev_x = ppx;
+    prev_y = ppy;
+    have_prev = true;
+  }
 }
 
-void draw_map_layer(
-    const MapSnapshot& snapshot,
-    const InflatedCostmap* costmap,
-    float scale, float off_x, float off_y,
-    std::array<uint8_t, kMaxPixels>& painted)
-{
-    for (int32_t py = 0; py < s_cur_h; ++py) {
-        for (int32_t px = 0; px < s_cur_w; ++px) {
-            if (painted[py * s_cur_w + px]) continue;
-
-            const int32_t gx = static_cast<int32_t>(
-                (static_cast<float>(px) - off_x) / scale);
-            const int32_t gy = snapshot.meta.height - 1 - static_cast<int32_t>(
-                (static_cast<float>(py) - off_y) / scale);
-
-            uint8_t v = 128; // unknown (gray)
-            uint8_t g = 128;
-            uint8_t b = 128;
-            if (gx >= 0 && gx < snapshot.meta.width &&
-                gy >= 0 && gy < snapshot.meta.height) {
-                const int32_t cell = gx + gy * snapshot.meta.width;
-                const int8_t occ = snapshot.occupancy[static_cast<size_t>(cell)];
-                if (occ >= 0) {
-                    if (costmap &&
-                        costmap->valid() &&
-                        costmap->is_inflated_blocked(gx, gy) &&
-                        !costmap->is_source_occupied(gx, gy)) {
-                        v = 210;
-                        g = 140;
-                        b = 140;
-                    } else {
-                        v = occ >= 50 ? 255 : 0;
-                        g = v;
-                        b = v;
-                    }
-                }
-            }
-            const int32_t off = (py * s_cur_w + px) * 4;
-            s_image_buf[off + 0] = v;
-            s_image_buf[off + 1] = g;
-            s_image_buf[off + 2] = b;
-            s_image_buf[off + 3] = 255;
-        }
-    }
-}
-
-uint64_t overlay_path_hash(const planning::bridge::PlanningOverlay& overlay) {
-    uint64_t h = 1469598103934665603ull;
-    const auto mix = [&h](uint64_t v) {
-        h ^= v;
-        h *= 1099511628211ull;
-    };
-    mix(static_cast<uint64_t>(overlay.goal_enabled ? 1 : 0));
-    mix(static_cast<uint64_t>(static_cast<uint32_t>(overlay.goal_cell.x)));
-    mix(static_cast<uint64_t>(static_cast<uint32_t>(overlay.goal_cell.y)));
-    mix(static_cast<uint64_t>(overlay.path_grid.size()));
-    for (const planning::GridCoord& cell : overlay.path_grid) {
-        mix(static_cast<uint64_t>(static_cast<uint32_t>(cell.x)));
-        mix(static_cast<uint64_t>(static_cast<uint32_t>(cell.y)));
-    }
-    mix(static_cast<uint64_t>(overlay.frontier_candidates.size()));
-    for (const planning::GridCoord& cell : overlay.frontier_candidates) {
-        mix(static_cast<uint64_t>(static_cast<uint32_t>(cell.x)));
-        mix(static_cast<uint64_t>(static_cast<uint32_t>(cell.y)));
-    }
-    mix(static_cast<uint64_t>(overlay.selected_frontier_cluster.size()));
-    for (const planning::GridCoord& cell : overlay.selected_frontier_cluster) {
-        mix(static_cast<uint64_t>(static_cast<uint32_t>(cell.x)));
-        mix(static_cast<uint64_t>(static_cast<uint32_t>(cell.y)));
-    }
-    mix(static_cast<uint64_t>(overlay.selected_frontier_seed_enabled ? 1 : 0));
-    mix(static_cast<uint64_t>(static_cast<uint32_t>(overlay.selected_frontier_seed.x)));
-    mix(static_cast<uint64_t>(static_cast<uint32_t>(overlay.selected_frontier_seed.y)));
-    return h;
-}
-
-void render_base_layers(
+void draw_goal(
     const MapSnapshot& snapshot,
     const planning::bridge::PlanningOverlay& overlay,
-    float scale, float off_x, float off_y) {
-    InflatedCostmap costmap;
-    const InflatedCostmap* costmap_ptr =
-        build_inflated_costmap(
-            snapshot,
-            default_navigation_costmap_config(),
-            &costmap) ? &costmap : nullptr;
-    static std::array<uint8_t, kMaxPixels> s_painted;
-    std::fill_n(s_painted.begin(), s_cur_w * s_cur_h, static_cast<uint8_t>(0));
-    draw_path_layer(snapshot, overlay, scale, off_x, off_y, s_painted);
-    draw_map_layer(snapshot, costmap_ptr, scale, off_x, off_y, s_painted);
-    std::memcpy(
-        s_base_image_buf.data(),
-        s_image_buf.data(),
-        static_cast<size_t>(s_cur_w * s_cur_h * 4));
-    s_cached_map_revision = snapshot.map_revision;
-    s_cached_path_hash = overlay_path_hash(overlay);
-    s_cached_w = s_cur_w;
-    s_cached_h = s_cur_h;
-    s_have_cached_base = true;
+    float scale,
+    float off_x,
+    float off_y,
+    uint8_t alpha) {
+  if (!overlay.goal_enabled) {
+    return;
+  }
+  int32_t ppx = 0;
+  int32_t ppy = 0;
+  if (!snapshot_grid_to_pixel(
+          snapshot.meta,
+          overlay.goal_cell.x,
+          overlay.goal_cell.y,
+          s_cur_w,
+          s_cur_h,
+          scale,
+          off_x,
+          off_y,
+          &ppx,
+          &ppy)) {
+    return;
+  }
+  for (int32_t dy = -2; dy <= 2; ++dy) {
+    for (int32_t dx = -2; dx <= 2; ++dx) {
+      paint_pixel(ppx + dx, ppy + dy, 255, 200, 0, alpha);
+    }
+  }
 }
 
+void draw_frontiers(
+    const MapSnapshot& snapshot,
+    const planning::bridge::PlanningOverlay& overlay,
+    float scale,
+    float off_x,
+    float off_y,
+    uint8_t alpha) {
+  for (const planning::GridCoord& cell : overlay.frontier_candidates) {
+    int32_t ppx = 0;
+    int32_t ppy = 0;
+    if (!snapshot_grid_to_pixel(
+            snapshot.meta,
+            cell.x,
+            cell.y,
+            s_cur_w,
+            s_cur_h,
+            scale,
+            off_x,
+            off_y,
+            &ppx,
+            &ppy)) {
+      continue;
+    }
+    paint_pixel(ppx, ppy, 0, 255, 180, alpha);
+  }
+
+  for (const planning::GridCoord& cell : overlay.selected_frontier_cluster) {
+    int32_t ppx = 0;
+    int32_t ppy = 0;
+    if (!snapshot_grid_to_pixel(
+            snapshot.meta,
+            cell.x,
+            cell.y,
+            s_cur_w,
+            s_cur_h,
+            scale,
+            off_x,
+            off_y,
+            &ppx,
+            &ppy)) {
+      continue;
+    }
+    paint_pixel(ppx, ppy, 255, 0, 220, alpha);
+  }
+
+  if (!overlay.selected_frontier_seed_enabled) {
+    return;
+  }
+  int32_t ppx = 0;
+  int32_t ppy = 0;
+  if (!snapshot_grid_to_pixel(
+          snapshot.meta,
+          overlay.selected_frontier_seed.x,
+          overlay.selected_frontier_seed.y,
+          s_cur_w,
+          s_cur_h,
+          scale,
+          off_x,
+          off_y,
+          &ppx,
+          &ppy)) {
+    return;
+  }
+  for (int32_t dy = -1; dy <= 1; ++dy) {
+    for (int32_t dx = -1; dx <= 1; ++dx) {
+      paint_pixel(ppx + dx, ppy + dy, 255, 80, 0, alpha);
+    }
+  }
 }
+
+void cache_static_layers(
+    const MapSnapshot& snapshot,
+    const planning::bridge::PlanningOverlay& overlay,
+    const InflatedCostmap* costmap_ptr,
+    float scale,
+    float off_x,
+    float off_y,
+    uint64_t overlay_revision) {
+  clear_image(128, 128, 128, 255);
+  draw_map_pixels(snapshot, scale, off_x, off_y);
+  std::memcpy(
+      s_base_layer_buf.data(),
+      s_image_buf.data(),
+      static_cast<size_t>(s_cur_w * s_cur_h * 4));
+
+  clear_image(0, 0, 0, 0);
+  if (costmap_ptr) {
+    draw_inflation_pixels(snapshot, *costmap_ptr, scale, off_x, off_y, 160);
+  }
+  draw_path(snapshot, overlay, scale, off_x, off_y, 255);
+  draw_goal(snapshot, overlay, scale, off_x, off_y, 255);
+  std::memcpy(
+      s_planning_layer_buf.data(),
+      s_image_buf.data(),
+      static_cast<size_t>(s_cur_w * s_cur_h * 4));
+
+  clear_image(0, 0, 0, 0);
+  draw_frontiers(snapshot, overlay, scale, off_x, off_y, 255);
+  std::memcpy(
+      s_frontiers_layer_buf.data(),
+      s_image_buf.data(),
+      static_cast<size_t>(s_cur_w * s_cur_h * 4));
+
+  s_cached_static_map_revision = snapshot.map_revision;
+  s_cached_static_overlay_revision = overlay_revision;
+  s_cached_static_w = s_cur_w;
+  s_cached_static_h = s_cur_h;
+  s_have_cached_static_layers = true;
+}
+
+void emit_frame(
+    MapRenderLayerId layer_id,
+    double timestamp,
+    MapImage& out_frame) {
+  out_frame.timestamp = timestamp;
+  out_frame.width = s_cur_w;
+  out_frame.height = s_cur_h;
+  out_frame.channels = 4;
+  out_frame.data_ptr = static_cast<uint32_t>(
+      reinterpret_cast<uintptr_t>(s_image_buf.data()));
+  out_frame.data_size = static_cast<int32_t>(s_cur_w * s_cur_h * 4);
+  out_frame.layer_id = static_cast<int32_t>(layer_id);
+  rerun_log_map_frame(&out_frame);
+}
+
+void emit_cached_frame(
+    const std::array<uint8_t, kMaxPixels * 4>& buffer,
+    MapRenderLayerId layer_id,
+    double timestamp,
+    MapImage& out_frame) {
+  out_frame.timestamp = timestamp;
+  out_frame.width = s_cur_w;
+  out_frame.height = s_cur_h;
+  out_frame.channels = 4;
+  out_frame.data_ptr = static_cast<uint32_t>(
+      reinterpret_cast<uintptr_t>(buffer.data()));
+  out_frame.data_size = static_cast<int32_t>(s_cur_w * s_cur_h * 4);
+  out_frame.layer_id = static_cast<int32_t>(layer_id);
+  rerun_log_map_frame(&out_frame);
+}
+
+}  // namespace
 
 void render_map_frame(
     const MapSnapshot& snapshot,
     const PoseTrailState& pose_trail,
     const planning::bridge::PlanningOverlay& overlay,
+    uint64_t overlay_revision,
     int32_t width,
     int32_t height,
-    MapImage& out_frame)
-{
-    if (!snapshot.valid()) return;
-    // Clamp image dimensions and store in visualization state.
-    if (width  <= 0) width  = 256;
-    if (height <= 0) height = 256;
-    if (width  > Map::kMaxImageWidth)  width  = Map::kMaxImageWidth;
-    if (height > Map::kMaxImageHeight) height = Map::kMaxImageHeight;
-    s_cur_w = width;
-    s_cur_h = height;
+    MapImage& out_frame) {
+  if (!snapshot.valid()) {
+    return;
+  }
 
-    float scale = 1.0f, off_x = 0.0f, off_y = 0.0f;
-    compute_snapshot_viewport(snapshot.meta, s_cur_w, s_cur_h, &scale, &off_x, &off_y);
-    const uint64_t path_hash = overlay_path_hash(overlay);
-    if (!s_have_cached_base ||
-        s_cached_w != s_cur_w ||
-        s_cached_h != s_cur_h ||
-        s_cached_map_revision != snapshot.map_revision ||
-        s_cached_path_hash != path_hash) {
-        render_base_layers(snapshot, overlay, scale, off_x, off_y);
+  if (width <= 0) {
+    width = 256;
+  }
+  if (height <= 0) {
+    height = 256;
+  }
+  if (width > Map::kMaxImageWidth) {
+    width = Map::kMaxImageWidth;
+  }
+  if (height > Map::kMaxImageHeight) {
+    height = Map::kMaxImageHeight;
+  }
+  s_cur_w = width;
+  s_cur_h = height;
+
+  float scale = 1.0f;
+  float off_x = 0.0f;
+  float off_y = 0.0f;
+  compute_snapshot_viewport(snapshot.meta, s_cur_w, s_cur_h, &scale, &off_x, &off_y);
+
+  const bool static_layers_changed =
+      !s_have_cached_static_layers ||
+      s_cached_static_w != s_cur_w ||
+      s_cached_static_h != s_cur_h ||
+      s_cached_static_map_revision != snapshot.map_revision ||
+      s_cached_static_overlay_revision != overlay_revision;
+  if (static_layers_changed) {
+    InflatedCostmap costmap;
+    const bool have_costmap = build_inflated_costmap(
+        snapshot,
+        default_navigation_costmap_config(),
+        &costmap);
+    cache_static_layers(
+        snapshot,
+        overlay,
+        have_costmap ? &costmap : nullptr,
+        scale,
+        off_x,
+        off_y,
+        overlay_revision);
+    emit_cached_frame(s_base_layer_buf, MapRenderLayerId::Base, snapshot.timestamp, out_frame);
+    emit_cached_frame(s_planning_layer_buf, MapRenderLayerId::Planning, snapshot.timestamp, out_frame);
+    emit_cached_frame(s_frontiers_layer_buf, MapRenderLayerId::Frontiers, snapshot.timestamp, out_frame);
+  }
+
+  clear_image(0, 0, 0, 0);
+  draw_pose_trail(snapshot, pose_trail, scale, off_x, off_y);
+  draw_pose(snapshot, scale, off_x, off_y);
+  emit_frame(MapRenderLayerId::Odometry, snapshot.timestamp, out_frame);
+
+  if (!kEmitCompositeMapFrame) {
+    return;
+  }
+
+  std::memcpy(
+      s_image_buf.data(),
+      s_base_layer_buf.data(),
+      static_cast<size_t>(s_cur_w * s_cur_h * 4));
+  for (int32_t i = 0; i < s_cur_w * s_cur_h; ++i) {
+    const int32_t off = i * 4;
+    if (s_planning_layer_buf[off + 3] > 0) {
+      s_image_buf[off + 0] = s_planning_layer_buf[off + 0];
+      s_image_buf[off + 1] = s_planning_layer_buf[off + 1];
+      s_image_buf[off + 2] = s_planning_layer_buf[off + 2];
+      s_image_buf[off + 3] = 255;
     }
-
-    std::memcpy(
-        s_image_buf.data(),
-        s_base_image_buf.data(),
-        static_cast<size_t>(s_cur_w * s_cur_h * 4));
-
-    static std::array<uint8_t, kMaxPixels> s_painted;
-    std::fill_n(s_painted.begin(), s_cur_w * s_cur_h, static_cast<uint8_t>(0));
-    draw_pose_layer(snapshot, pose_trail, scale, off_x, off_y, s_painted); // Pose only
-
-    out_frame.timestamp = snapshot.timestamp;
-    out_frame.width     = s_cur_w;
-    out_frame.height    = s_cur_h;
-    out_frame.channels  = 4;
-    out_frame.data_ptr  = static_cast<uint32_t>(
-        reinterpret_cast<uintptr_t>(s_image_buf.data()));
-    out_frame.data_size = static_cast<uint32_t>(s_cur_w * s_cur_h * 4);
-
-    rerun_log_map_frame(&out_frame);
+    if (s_frontiers_layer_buf[off + 3] > 0) {
+      s_image_buf[off + 0] = s_frontiers_layer_buf[off + 0];
+      s_image_buf[off + 1] = s_frontiers_layer_buf[off + 1];
+      s_image_buf[off + 2] = s_frontiers_layer_buf[off + 2];
+      s_image_buf[off + 3] = 255;
+    }
+  }
+  draw_pose_trail(snapshot, pose_trail, scale, off_x, off_y);
+  draw_pose(snapshot, scale, off_x, off_y);
+  emit_frame(MapRenderLayerId::Composite, snapshot.timestamp, out_frame);
 }
 
-} // namespace visualization
-} // namespace mapping
+}  // namespace visualization
+}  // namespace mapping

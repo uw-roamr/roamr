@@ -31,19 +31,6 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
-				WASM/core/recorder.cpp,
-				WASM/core/telemetry.cpp,
-				WASM/mapping/map_update.cpp,
-				WASM/mapping/map.cpp,
-				WASM/mapping/visualization.cpp,
-				WASM/planning/frontier_explorer.cpp,
-				WASM/planning/frontier_simplified.cpp,
-				WASM/planning/navigation.cpp,
-				WASM/planning/planner_bridge.cpp,
-				WASM/proto/read_recording.py,
-				WASM/sensors/imu_calibration.cpp,
-				WASM/sensors/imu_preintegration.cpp,
-				WASM/slam_main.cpp,
 			);
 			target = 56206B162EBAB1C600C8E9E8 /* roamr */;
 		};
@@ -330,7 +317,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"roamr/Preview Content\"";
-				DEVELOPMENT_TEAM = 542KRJUPYH;
+				DEVELOPMENT_TEAM = J4F43645LT;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = roamr/Info.plist;
@@ -355,7 +342,7 @@
 					"-ldl",
 					"-lm",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = thchzh.capstone.roamr;
+				PRODUCT_BUNDLE_IDENTIFIER = com.xykmz.roamr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -379,7 +366,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"roamr/Preview Content\"";
-				DEVELOPMENT_TEAM = 542KRJUPYH;
+				DEVELOPMENT_TEAM = J4F43645LT;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = roamr/Info.plist;
@@ -404,7 +391,7 @@
 					"-ldl",
 					"-lm",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = thchzh.capstone.roamr;
+				PRODUCT_BUNDLE_IDENTIFIER = com.xykmz.roamr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
