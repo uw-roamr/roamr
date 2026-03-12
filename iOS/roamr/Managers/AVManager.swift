@@ -160,6 +160,30 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         session.delegate = self
     }
 
+    private func resetWasmFrameStateLocked() {
+        currentFrame = nil
+        hasNewFrame = false
+        isProcessingFrame = false
+        lastProcessedFrameTimestamp = 0
+        lastPreviewFrameTimestamp = 0
+        lastWebSocketPointCloudTimestamp = 0
+        currentImageWidth = 0
+        currentImageHeight = 0
+        currentImageChannels = 0
+        currentData = LidarCameraData(
+            timestamp: 0,
+            points: [],
+            points_size: 0,
+            colors: [],
+            colors_size: 0,
+            image: [],
+            image_size: 0,
+            points_frame_id: CoordinateFrameId.FLU.rawValue,
+            image_frame_id: CoordinateFrameId.RDF.rawValue
+        )
+        isDataDirty = false
+    }
+
     func setPreviewMode(_ mode: AVPreviewMode) {
         lock.lock()
         previewMode = mode
@@ -202,6 +226,10 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     // MARK: - Session Control
 
     func start() {
+        lock.lock()
+        resetWasmFrameStateLocked()
+        lock.unlock()
+
         guard ARWorldTrackingConfiguration.isSupported else {
             DispatchQueue.main.async {
                 self.isActive = false
@@ -242,12 +270,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             self.session.pause()
 
             self.lock.lock()
-            self.currentFrame = nil
-            self.hasNewFrame = false
-            self.isProcessingFrame = false
-            self.lastProcessedFrameTimestamp = 0
-            self.lastPreviewFrameTimestamp = 0
-            self.lastWebSocketPointCloudTimestamp = 0
+            self.resetWasmFrameStateLocked()
             self.lock.unlock()
 
             DispatchQueue.main.async {

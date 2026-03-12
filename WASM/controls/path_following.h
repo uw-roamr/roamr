@@ -26,12 +26,12 @@ struct PIDGains {
 };
 
 struct PathFollowerConfig {
-  PIDGains distance_pid{1.8, 0.0, 0.12, 0.6};
+  PIDGains distance_pid{1.5, 0.0, 0.12, 0.6};
   PIDGains heading_pid{1.5, 0.0, 0.22, 1.5};
 
-  double lookahead_m = 0.08;
-  double waypoint_reached_m = 0.08;
-  double goal_tolerance_m = 0.1;
+  double lookahead_m = 0.05;
+  double waypoint_reached_m = 0.02;
+  double goal_tolerance_m = 0.04;
   double goal_heading_tolerance_rad = 0.22;
   double start_heading_align_tolerance_rad = 0.18;
 

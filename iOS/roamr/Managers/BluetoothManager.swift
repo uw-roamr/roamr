@@ -348,7 +348,7 @@ class BluetoothManager: NSObject, ObservableObject {
         lastOdomSeq = seq
 
         let samplePeriodSeconds = Double(latestOdomSamplePeriodMs) / 1000.0
-        let baseTimestamp = ProcessInfo.processInfo.systemUptime
+        let frameArrivalTimestamp = ProcessInfo.processInfo.systemUptime
         var samples: [WheelOdometrySample] = []
         samples.reserveCapacity(sampleCount)
         var offset = 3
@@ -357,9 +357,14 @@ class BluetoothManager: NSObject, ObservableObject {
             let drRaw = UInt16(bytes[offset + 2]) | (UInt16(bytes[offset + 3]) << 8)
             let dl = Int16(bitPattern: dlRaw)
             let dr = Int16(bitPattern: drRaw)
+            let samplesFromNewest = sampleCount - 1 - idx
             samples.append(
                 WheelOdometrySample(
-                    timestamp: baseTimestamp + (Double(idx) * samplePeriodSeconds),
+                    // BLE uploads a batch of already-recorded samples oldest -> newest.
+                    // Stamp them into the recent past instead of the future so pose
+                    // interpolation stays aligned with IMU/LiDAR timestamps.
+                    timestamp: frameArrivalTimestamp -
+                        (Double(samplesFromNewest) * samplePeriodSeconds),
                     seq: Int32(seq),
                     dlTicks: Int32(dl),
                     drTicks: Int32(dr),
@@ -382,7 +387,11 @@ class BluetoothManager: NSObject, ObservableObject {
         if lastMotorCommandTimestamp > 0, sinceMotorCommandMs >= 0, sinceMotorCommandMs <= 2000 {
             lastMotorOdomText = "TX->RX: cmd(\(lastMotorLeftPercent),\(lastMotorRightPercent),\(lastMotorHoldMs)) -> ticks(\(sumDl),\(sumDr)) @\(sinceMotorCommandMs)ms"
         }
-        resolvePendingTeleopTrace(frameArrivalAt: baseTimestamp, odomSeq: Int(seq), sumDl: sumDl, sumDr: sumDr)
+        resolvePendingTeleopTrace(
+            frameArrivalAt: frameArrivalTimestamp,
+            odomSeq: Int(seq),
+            sumDl: sumDl,
+            sumDr: sumDr)
 
         if samples.isEmpty {
             // print("[BLE ODOM RX] frame seq=\(seq) n=0 queued=\(queuedCount)")

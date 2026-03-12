@@ -521,7 +521,7 @@ struct OuterLoopTurnPidConfig {
 };
 
 static constexpr OuterLoopTurnPidConfig kScan4x90TurnPidCfg{
-    8.0,
+    4.0,
     0.25,
     0.5,
     0.5 * core::pi,
@@ -1411,6 +1411,7 @@ int main(){
         core::PoseSE2d wheel_pose{};
         double last_goal_check_log_timestamp = -1.0;
         bool goal_reached_logged = false;
+        bool wheel_odom_origin_initialized = false;
 
         while(true){
             read_wheel_odometry(&odom);
@@ -1425,6 +1426,13 @@ int main(){
             {
                 std::lock_guard<std::mutex> lk(g_latest_wheel_odom_mutex);
                 g_latest_wheel_odom = odom;
+            }
+
+            if (!wheel_odom_origin_initialized) {
+                // Treat the first valid sample of each WASM run as the odometry origin
+                // so any residual startup delta does not translate the first scan.
+                wheel_odom_origin_initialized = true;
+                continue;
             }
 
             if (pose_source == PoseSource::fused_IMU_wheel_odom) {
