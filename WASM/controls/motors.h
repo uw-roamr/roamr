@@ -39,7 +39,7 @@ namespace controls{
     struct WheelCommandBandConfig {
         // Keep nonzero wheel commands in this range.
         double min_moving_percent = 10.0;
-        double max_moving_percent = 18.0;
+        double max_moving_percent = 20.0;
         // If desired wheel speed is below this threshold, command a full stop.
         double stop_speed_threshold_mps = 0.01;
         // PI correction is intentionally small; feedforward does most of the work.

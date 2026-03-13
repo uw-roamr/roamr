@@ -50,7 +50,6 @@ static std::mutex g_plan_publish_mutex;
 static planning::bridge::PlanningOverlay g_latest_plan_overlay;
 static std::mutex g_planner_wake_mutex;
 static std::condition_variable g_planner_wake_cv;
-static uint64_t g_planner_wake_revision = 0;
 static constexpr size_t kPlannerDeltaQueueCapacity = 16;
 
 struct MapDeltaEvent {
@@ -114,6 +113,15 @@ static std::atomic<uint64_t> g_completed_scan_count{0};
 static std::atomic<bool> g_no_reachable_frontiers_terminal{false};
 static std::atomic<double> g_scan_map_skip_until_timestamp{-1.0};
 
+struct MappingStats {
+    uint64_t integrated_lidar_frames = 0;
+    std::chrono::steady_clock::time_point start_time{};
+    bool started = false;
+};
+
+static std::mutex g_mapping_stats_mutex;
+static MappingStats g_mapping_stats;
+
 
 static void set_autonomy_substate(
     autonomy::AutonomySubstate next_state,
@@ -138,6 +146,46 @@ static void set_autonomy_substate(
     wasm_log_line(log.str());
 }
 
+static void reset_mapping_stats() {
+    std::lock_guard<std::mutex> lk(g_mapping_stats_mutex);
+    g_mapping_stats = MappingStats{};
+}
+
+static void record_mapping_frame() {
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lk(g_mapping_stats_mutex);
+    if (!g_mapping_stats.started) {
+        g_mapping_stats.start_time = now;
+        g_mapping_stats.started = true;
+    }
+    g_mapping_stats.integrated_lidar_frames += 2;
+}
+
+static void log_mapping_rate_summary(const char* reason) {
+    std::lock_guard<std::mutex> lk(g_mapping_stats_mutex);
+    std::ostringstream log;
+    log << "[mapping][rate]";
+    if (reason && reason[0] != '\0') {
+        log << " reason=" << reason;
+    }
+    if (!g_mapping_stats.started) {
+        log << " frames=0 total_s=0 hz=0";
+    } else {
+        const double total_mapping_seconds =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - g_mapping_stats.start_time).count();
+        const double hz =
+            (total_mapping_seconds > 1e-6)
+                ? (static_cast<double>(g_mapping_stats.integrated_lidar_frames) /
+                   total_mapping_seconds)
+                : 0.0;
+        log << " frames=" << g_mapping_stats.integrated_lidar_frames
+            << " total_s=" << total_mapping_seconds
+            << " hz=" << hz;
+    }
+    wasm_log_line(log.str());
+}
+
 static void enter_no_reachable_frontiers_terminal_state() {
     const bool already_terminal =
         g_no_reachable_frontiers_terminal.exchange(true, std::memory_order_acq_rel);
@@ -148,6 +196,7 @@ static void enter_no_reachable_frontiers_terminal_state() {
             std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
             g_latest_plan_overlay = planning::bridge::PlanningOverlay{};
         }
+        log_mapping_rate_summary("no_reachable_frontiers");
         wasm_log_line("NO REACHABLE FRONTIERS (MAP COMPLETE)");
     }
     set_autonomy_substate(autonomy::AutonomySubstate::IDLE, "no_reachable_frontiers");
@@ -186,10 +235,6 @@ static bool pose_log_valid(const sensors::PoseLog& pose) {
 }
 
 static void notify_planner_wake() {
-    {
-        std::lock_guard<std::mutex> lk(g_planner_wake_mutex);
-        ++g_planner_wake_revision;
-    }
     g_planner_wake_cv.notify_one();
 }
 
@@ -208,9 +253,23 @@ static void enqueue_planner_delta_event(
         event.timestamp = timestamp;
         event.newly_occupied_cells = std::move(newly_occupied_cells);
         g_planner_delta_queue.push_back(std::move(event));
-        ++g_planner_wake_revision;
     }
     g_planner_wake_cv.notify_one();
+}
+
+static void drain_planner_delta_events_locked(
+    std::vector<MapDeltaEvent>* out_events,
+    bool* out_delta_overflowed) {
+    if (!out_events || !out_delta_overflowed) {
+        return;
+    }
+    out_events->clear();
+    while (!g_planner_delta_queue.empty()) {
+        out_events->push_back(std::move(g_planner_delta_queue.front()));
+        g_planner_delta_queue.pop_front();
+    }
+    *out_delta_overflowed = g_planner_delta_overflowed;
+    g_planner_delta_overflowed = false;
 }
 
 static bool publish_latest_map_snapshot_if_needed(
@@ -932,6 +991,7 @@ int main(){
         mapping::initialize_map(g_map);
         g_latest_map_state = LatestMapState{};
       }
+      reset_mapping_stats();
       wasm_log_line("Map initialized");
 
       while(true){
@@ -1009,6 +1069,7 @@ int main(){
         if (!g_first_map_update_done.load(std::memory_order_relaxed)) {
             g_first_map_update_done.store(true, std::memory_order_release);
         }
+        record_mapping_frame();
         last_map_timestamp = candidate_timestamp;
         enqueue_planner_delta_event(
             map_revision,
@@ -1040,7 +1101,6 @@ int main(){
         uint64_t last_goal_revision = planning::bridge::latest_goal_revision();
         planning::GridCoord last_start_cell{};
         bool have_last_start_cell = false;
-        uint64_t observed_wake_revision = 0;
         std::vector<MapDeltaEvent> pending_delta_events;
         std::vector<planning::GridCoord> merged_newly_occupied_cells;
         pending_delta_events.reserve(kPlannerDeltaQueueCapacity);
@@ -1053,21 +1113,15 @@ int main(){
             g_completed_scan_count.load(std::memory_order_acquire);
 
         while(true){
-            // wait until a new map arrives, otherwise the previous plan is the best path
+            // Wake on planner notifications, but also poll periodically so a missed
+            // notify cannot stall replanning.
             {
                 std::unique_lock<std::mutex> lk(g_planner_wake_mutex);
-                g_planner_wake_cv.wait(lk, [&]{
-                    return g_planner_wake_revision != observed_wake_revision ||
-                           !g_planner_delta_queue.empty();
-                });
-                observed_wake_revision = g_planner_wake_revision;
-                pending_delta_events.clear();
-                while (!g_planner_delta_queue.empty()) {
-                    pending_delta_events.push_back(std::move(g_planner_delta_queue.front()));
-                    g_planner_delta_queue.pop_front();
-                }
-                delta_overflowed = g_planner_delta_overflowed;
-                g_planner_delta_overflowed = false;
+                g_planner_wake_cv.wait_for(
+                    lk,
+                    std::chrono::milliseconds(kPlannerPollMs),
+                    []{ return !g_planner_delta_queue.empty(); });
+                drain_planner_delta_events_locked(&pending_delta_events, &delta_overflowed);
             }
             if (g_no_reachable_frontiers_terminal.load(std::memory_order_acquire)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1152,8 +1206,7 @@ int main(){
                     merged_newly_occupied_cells);
             if (kEnablePlannerWakeLogs) {
                 std::ostringstream trigger_log;
-                trigger_log << "[planner][trigger] wake_revision=" << observed_wake_revision
-                            << " map_revision=" << snapshot.map_revision
+                trigger_log << "[planner][trigger] map_revision=" << snapshot.map_revision
                             << " last_planned_revision=" << last_planned_revision
                             << " goal_revision=" << goal_revision
                             << " last_goal_revision=" << last_goal_revision
