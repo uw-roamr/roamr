@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <vector>
 
 #include "controls/motors.h"
@@ -25,12 +26,12 @@ struct PIDGains {
 };
 
 struct PathFollowerConfig {
-  PIDGains distance_pid{1.8, 0.0, 0.12, 0.6};
-  PIDGains heading_pid{3.6, 0.0, 0.22, 1.5};
+  PIDGains distance_pid{1.5, 0.0, 0.12, 0.6};
+  PIDGains heading_pid{1.5, 0.0, 0.22, 1.5};
 
-  double lookahead_m = 0.14;
-  double waypoint_reached_m = 0.08;
-  double goal_tolerance_m = 0.1;
+  double lookahead_m = 0.05;
+  double waypoint_reached_m = 0.02;
+  double goal_tolerance_m = 0.04;
   double goal_heading_tolerance_rad = 0.22;
   double start_heading_align_tolerance_rad = 0.18;
 
@@ -63,10 +64,18 @@ class PathFollower {
 
   const PathFollowerConfig& config() const { return cfg_; }
 
-  void set_path(const std::vector<core::Vector3d>& path_world) {
+  void set_path(
+      const std::vector<core::Vector3d>& path_world,
+      const Pose2D* current_pose = nullptr) {
     path_ = path_world;
     target_index_ = 0;
     require_start_heading_alignment_ = path_.size() >= 2;
+    if (current_pose && path_.size() >= 2) {
+      // When a replan arrives mid-motion, anchor to the closest segment and
+      // continue toward its forward endpoint instead of driving back to path_[0].
+      target_index_ = select_anchor_index(*current_pose);
+      require_start_heading_alignment_ = false;
+    }
     reset_controller_state();
   }
 
@@ -296,6 +305,47 @@ class PathFollower {
       ++idx;
     }
     return idx;
+  }
+
+  size_t select_anchor_index(const Pose2D& pose) const {
+    if (path_.size() < 2) {
+      return 0;
+    }
+
+    size_t best_segment_index = 0;
+    double best_dist_sq = std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i + 1 < path_.size(); ++i) {
+      const double dist_sq =
+          point_to_segment_distance_sq(pose, path_[i], path_[i + 1]);
+      if (dist_sq < best_dist_sq) {
+        best_dist_sq = dist_sq;
+        best_segment_index = i;
+      }
+    }
+    return std::min(best_segment_index + 1, path_.size() - 1);
+  }
+
+  static double point_to_segment_distance_sq(
+      const Pose2D& pose,
+      const core::Vector3d& a,
+      const core::Vector3d& b) {
+    const double abx = b.x - a.x;
+    const double aby = b.y - a.y;
+    const double apx = pose.x - a.x;
+    const double apy = pose.y - a.y;
+    const double ab_len_sq = (abx * abx) + (aby * aby);
+    if (ab_len_sq <= 1e-9) {
+      const double dx = pose.x - a.x;
+      const double dy = pose.y - a.y;
+      return (dx * dx) + (dy * dy);
+    }
+
+    const double t = std::clamp(((apx * abx) + (apy * aby)) / ab_len_sq, 0.0, 1.0);
+    const double nearest_x = a.x + (t * abx);
+    const double nearest_y = a.y + (t * aby);
+    const double dx = pose.x - nearest_x;
+    const double dy = pose.y - nearest_y;
+    return (dx * dx) + (dy * dy);
   }
 
   double final_path_heading() const {

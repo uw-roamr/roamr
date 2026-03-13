@@ -26,7 +26,8 @@ namespace mapping {
   // Color map-eligible 3D points in rerun for fast filter debugging.
   constexpr bool kRerunHighlightFiltered = true;
   constexpr double kMapLogIntervalSec = 0.1;
-  constexpr int kOccupancyRayBins = 1024;
+  constexpr int kOccupancyRayBins = 512;
+  constexpr int kMaxRawPointsPerScan = 12000;
 
 
   struct MapPerfWindow {
@@ -118,10 +119,21 @@ namespace mapping {
     if (out_newly_occupied_cells) {
       out_newly_occupied_cells->clear();
     }
-    static thread_local std::vector<uint8_t> s_newly_occupied_mask;
+    static thread_local std::vector<uint32_t> s_newly_occupied_mask;
+    static thread_local uint32_t s_newly_occupied_stamp = 1;
     const size_t grid_cells = static_cast<size_t>(Map::kMapSizeX * Map::kMapSizeY);
-    if (out_newly_occupied_cells) {
+    if (out_newly_occupied_cells && s_newly_occupied_mask.size() != grid_cells) {
       s_newly_occupied_mask.assign(grid_cells, 0);
+      s_newly_occupied_stamp = 1;
+    } else if (out_newly_occupied_cells) {
+      ++s_newly_occupied_stamp;
+      if (s_newly_occupied_stamp == 0) {
+        std::fill(
+            s_newly_occupied_mask.begin(),
+            s_newly_occupied_mask.end(),
+            static_cast<uint32_t>(0));
+        s_newly_occupied_stamp = 1;
+      }
     }
 
     const core::Vector4d q_body_to_world = core::quat_normalize(body_to_world.quaternion);
@@ -150,7 +162,10 @@ namespace mapping {
       return scan_ready;
     };
 
-    for (int point_idx = 0; point_idx < total_points; ++point_idx) {
+    const int point_stride =
+        std::max(1, (total_points + kMaxRawPointsPerScan - 1) / kMaxRawPointsPerScan);
+
+    for (int point_idx = 0; point_idx < total_points; point_idx += point_stride) {
       const int i = point_idx * 3;
       // LiDAR points are already FLU here, but they still need the fixed
       // camera-to-body mounting correction: (x, y, z) -> (x, -z, y).
@@ -189,7 +204,8 @@ namespace mapping {
               map_point.x,
               map_point.y,
               out_newly_occupied_cells,
-              out_newly_occupied_cells ? &s_newly_occupied_mask : nullptr);
+              out_newly_occupied_cells ? &s_newly_occupied_mask : nullptr,
+              s_newly_occupied_stamp);
           ++used_points;
         }
       } else if (keep && !in_range && r2 > 1e-9) {

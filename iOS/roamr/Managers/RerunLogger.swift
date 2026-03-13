@@ -46,7 +46,31 @@ private enum WasmMapLayout {
     static let channelsOffset = heightOffset + MemoryLayout<Int32>.size
     static let dataPtrOffset = channelsOffset + MemoryLayout<Int32>.size
     static let dataSizeOffset = dataPtrOffset + MemoryLayout<UInt32>.size
-    static let totalByteCount = dataSizeOffset + MemoryLayout<Int32>.size
+    static let layerIdOffset = dataSizeOffset + MemoryLayout<Int32>.size
+    static let totalByteCount = layerIdOffset + MemoryLayout<Int32>.size
+}
+
+private enum WasmMapLayerId: Int32 {
+    case composite = 0
+    case base = 1
+    case odometry = 2
+    case planning = 3
+    case frontiers = 4
+
+    var websocketLayerName: String {
+        switch self {
+        case .composite:
+            return "composite"
+        case .base:
+            return "base"
+        case .odometry:
+            return "odometry"
+        case .planning:
+            return "planning"
+        case .frontiers:
+            return "frontiers"
+        }
+    }
 }
 
 private enum WasmImuLayout {
@@ -75,6 +99,7 @@ private struct WasmMapFrameView {
     let channels: Int
     let dataPointer: UnsafeMutablePointer<UInt8>
     let dataCount: Int
+    let layerId: WasmMapLayerId
 }
 
 private struct WasmImuView {
@@ -88,6 +113,94 @@ private struct WasmPoseView {
     let timestamp: Double
     let translation: SIMD3<Double>
     let quaternion: SIMD4<Double>
+}
+
+private enum SharedBinaryPointCloudProtocol {
+    static let magic: [UInt8] = [0x52, 0x52, 0x42, 0x31]  // "RRB1"
+    static let messageTypePoints: UInt8 = 1
+    static let flagsOffset = 5
+    static let timestampOffset = 8
+    static let pointCountOffset = 16
+    static let headerSize = 20
+    static let hasColorsFlag: UInt8 = 1
+}
+
+private func makeSharedBinaryPointCloudPayload(
+    timestamp: Double,
+    pointsPointer: UnsafePointer<Float32>,
+    pointCount: Int,
+    colorsPointer: UnsafePointer<UInt8>?,
+    colorsCount: Int
+) -> Data? {
+    guard pointCount > 0 else { return nil }
+
+    let packedPointCount = pointCount * LidarCameraConstants.floatsPerPoint
+    let pointsByteCount = packedPointCount * MemoryLayout<Float32>.size
+    let hasColors = colorsPointer != nil && colorsCount >= packedPointCount
+    let colorsByteCount = hasColors ? packedPointCount : 0
+    let totalByteCount = SharedBinaryPointCloudProtocol.headerSize + pointsByteCount + colorsByteCount
+
+    var payload = Data(count: totalByteCount)
+    payload.withUnsafeMutableBytes { rawBuffer in
+        guard let baseAddress = rawBuffer.baseAddress else { return }
+        let rawPointer = baseAddress.assumingMemoryBound(to: UInt8.self)
+
+        SharedBinaryPointCloudProtocol.magic.withUnsafeBytes { magicBytes in
+            if let magicBase = magicBytes.baseAddress {
+                memcpy(rawPointer, magicBase, SharedBinaryPointCloudProtocol.magic.count)
+            }
+        }
+
+        rawPointer[4] = SharedBinaryPointCloudProtocol.messageTypePoints
+        rawPointer[SharedBinaryPointCloudProtocol.flagsOffset] = hasColors
+            ? SharedBinaryPointCloudProtocol.hasColorsFlag
+            : 0
+
+        var reserved: UInt16 = 0
+        withUnsafeBytes(of: &reserved) { bytes in
+            if let src = bytes.baseAddress {
+                memcpy(rawPointer.advanced(by: 6), src, MemoryLayout<UInt16>.size)
+            }
+        }
+
+        var timestampBits = timestamp.bitPattern.littleEndian
+        withUnsafeBytes(of: &timestampBits) { bytes in
+            if let src = bytes.baseAddress {
+                memcpy(
+                    rawPointer.advanced(by: SharedBinaryPointCloudProtocol.timestampOffset),
+                    src,
+                    MemoryLayout<UInt64>.size
+                )
+            }
+        }
+
+        var pointCountLE = UInt32(pointCount).littleEndian
+        withUnsafeBytes(of: &pointCountLE) { bytes in
+            if let src = bytes.baseAddress {
+                memcpy(
+                    rawPointer.advanced(by: SharedBinaryPointCloudProtocol.pointCountOffset),
+                    src,
+                    MemoryLayout<UInt32>.size
+                )
+            }
+        }
+
+        memcpy(
+            rawPointer.advanced(by: SharedBinaryPointCloudProtocol.headerSize),
+            pointsPointer,
+            pointsByteCount
+        )
+
+        if hasColors, let colorsPointer {
+            memcpy(
+                rawPointer.advanced(by: SharedBinaryPointCloudProtocol.headerSize + pointsByteCount),
+                colorsPointer,
+                colorsByteCount
+            )
+        }
+    }
+
+    return payload
 }
 
 private final class RGBJpegEncoder {
@@ -148,6 +261,57 @@ private final class RGBJpegEncoder {
     }
 }
 
+private final class RGBAImageEncoder {
+    func encode(
+        rgbaPointer: UnsafeMutablePointer<UInt8>,
+        byteCount: Int,
+        width: Int,
+        height: Int
+    ) -> Data? {
+        guard width > 0, height > 0 else { return nil }
+        let expectedCount = width * height * 4
+        guard byteCount >= expectedCount else { return nil }
+
+        let rgbaRawPointer = UnsafeMutableRawPointer(rgbaPointer)
+        let rgbaData = Data(bytesNoCopy: rgbaRawPointer, count: expectedCount, deallocator: .none)
+        guard let provider = CGDataProvider(data: rgbaData as CFData) else { return nil }
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue)
+        guard let cgImage = CGImage(
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo,
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        ) else {
+            return nil
+        }
+
+        let outputData = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            outputData as CFMutableData,
+            UTType.png.identifier as CFString,
+            1,
+            nil
+        ) else {
+            return nil
+        }
+
+        CGImageDestinationAddImage(destination, cgImage, nil)
+        guard CGImageDestinationFinalize(destination) else {
+            return nil
+        }
+        return outputData as Data
+    }
+}
+
 private final class WasmRerunTelemetryBridge {
     static let shared = WasmRerunTelemetryBridge()
 
@@ -169,24 +333,11 @@ private final class WasmRerunTelemetryBridge {
     private init() {}
 
     func handleWasmFrame(execEnv: wasm_exec_env_t?, payloadPointer: UnsafeMutableRawPointer?) {
-        processingLock.lock()
-        defer { processingLock.unlock() }
-
-        let frameStartSec = CFAbsoluteTimeGetCurrent()
-        guard let frame = decodeFrame(execEnv: execEnv, payloadPointer: payloadPointer) else {
-            return
-        }
-        let decodedSec = CFAbsoluteTimeGetCurrent()
-        logPointCloud(frame)
-        let pointEmittedSec = CFAbsoluteTimeGetCurrent()
-        logCameraImage(frame)
-        let frameDoneSec = CFAbsoluteTimeGetCurrent()
-
-        recordPerf(
-            decodeMs: (decodedSec - frameStartSec) * 1000.0,
-            pointEmitMs: (pointEmittedSec - decodedSec) * 1000.0,
-            frameTotalMs: (frameDoneSec - frameStartSec) * 1000.0
-        )
+        // Point-cloud preview now comes directly from AVManager so the WASM lidar bridge
+        // stays off the hot path for scan ingestion.
+        _ = execEnv
+        _ = payloadPointer
+        return
     }
 
     private func decodeFrame(
@@ -293,22 +444,21 @@ private final class WasmRerunTelemetryBridge {
         let pointCount = packedPointCount / LidarCameraConstants.floatsPerPoint
         let requiredColorCount = pointCount * LidarCameraConstants.colorsPerPoint
         let hasUsableColors = frame.colorsCount >= requiredColorCount
-
-        RerunWebSocketClient.shared.logPointsFromWasm(
+        let colorsPointer: UnsafePointer<UInt8>? = hasUsableColors
+            ? UnsafePointer(frame.colorsPointer)
+            : nil
+        let colorsCount = hasUsableColors ? requiredColorCount : 0
+        guard let payload = makeSharedBinaryPointCloudPayload(
             timestamp: frame.timestamp,
             pointsPointer: UnsafePointer(frame.pointsPointer),
             pointCount: pointCount,
-            colorsPointer: hasUsableColors ? UnsafePointer(frame.colorsPointer) : nil,
-            colorsCount: hasUsableColors ? requiredColorCount : 0
-        )
+            colorsPointer: colorsPointer,
+            colorsCount: colorsCount
+        ) else {
+            return
+        }
 
-        WebSocketManager.shared.broadcastPointCloud(
-            timestamp: frame.timestamp,
-            pointsPointer: UnsafePointer(frame.pointsPointer),
-            pointCount: pointCount,
-            colorsPointer: hasUsableColors ? UnsafePointer(frame.colorsPointer) : nil,
-            colorsCount: hasUsableColors ? requiredColorCount : 0
-        )
+        WebSocketManager.shared.broadcastPointCloudPayload(payload)
     }
 
     private func logCameraImage(_ frame: WasmLidarFrameView) {
@@ -328,10 +478,6 @@ private final class WasmRerunTelemetryBridge {
             return
         }
 
-        RerunWebSocketClient.shared.logVideoFrame(
-            timestamp: frame.timestamp,
-            jpegData: jpegData
-        )
     }
 
     private func currentCameraDimensions() -> (width: Int, height: Int) {
@@ -448,8 +594,13 @@ private final class WasmRerunMapBridge {
             .withMemoryRebound(to: UInt32.self, capacity: 1) { $0.pointee }
         let dataSize = basePointer.advanced(by: WasmMapLayout.dataSizeOffset)
             .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+        let layerIdValue = basePointer.advanced(by: WasmMapLayout.layerIdOffset)
+            .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
 
         guard width > 0, height > 0, channels > 0, dataPtr > 0, dataSize > 0 else {
+            return nil
+        }
+        guard let layerId = WasmMapLayerId(rawValue: layerIdValue) else {
             return nil
         }
 
@@ -467,48 +618,62 @@ private final class WasmRerunMapBridge {
             height: Int(height),
             channels: Int(channels),
             dataPointer: dataPointer,
-            dataCount: Int(dataSize)
+            dataCount: Int(dataSize),
+            layerId: layerId
         )
     }
 
     private func logMapImage(_ frame: WasmMapFrameView) {
-        let pixelCount = frame.width * frame.height
-        guard pixelCount > 0, frame.channels >= 3 else { return }
+        switch frame.layerId {
+        case .composite:
+            let pixelCount = frame.width * frame.height
+            guard pixelCount > 0, frame.channels >= 3 else { return }
 
-        let expectedCount = pixelCount * frame.channels
-        guard frame.dataCount >= expectedCount else { return }
+            let expectedCount = pixelCount * frame.channels
+            guard frame.dataCount >= expectedCount else { return }
 
-        let rgbCount = pixelCount * 3
-        if rgbScratch.count != rgbCount {
-            rgbScratch = [UInt8](repeating: 0, count: rgbCount)
-        }
+            let rgbCount = pixelCount * 3
+            if rgbScratch.count != rgbCount {
+                rgbScratch = [UInt8](repeating: 0, count: rgbCount)
+            }
 
-        var srcIndex = 0
-        var dstIndex = 0
-        while dstIndex < rgbCount {
-            rgbScratch[dstIndex] = frame.dataPointer[srcIndex]
-            rgbScratch[dstIndex + 1] = frame.dataPointer[srcIndex + 1]
-            rgbScratch[dstIndex + 2] = frame.dataPointer[srcIndex + 2]
-            dstIndex += 3
-            srcIndex += frame.channels
-        }
+            var srcIndex = 0
+            var dstIndex = 0
+            while dstIndex < rgbCount {
+                rgbScratch[dstIndex] = frame.dataPointer[srcIndex]
+                rgbScratch[dstIndex + 1] = frame.dataPointer[srcIndex + 1]
+                rgbScratch[dstIndex + 2] = frame.dataPointer[srcIndex + 2]
+                dstIndex += 3
+                srcIndex += frame.channels
+            }
 
-        let jpegData: Data? = rgbScratch.withUnsafeMutableBufferPointer { buffer -> Data? in
-            guard let base = buffer.baseAddress else { return nil }
-            return jpegEncoder.encode(
-                rgbPointer: base,
-                byteCount: buffer.count,
+            let jpegData: Data? = rgbScratch.withUnsafeMutableBufferPointer { buffer -> Data? in
+                guard let base = buffer.baseAddress else { return nil }
+                return jpegEncoder.encode(
+                    rgbPointer: base,
+                    byteCount: buffer.count,
+                    width: frame.width,
+                    height: frame.height
+                )
+            }
+            guard let jpegData else {
+                return
+            }
+
+            WasmManager.shared.updateMapPreview(jpegData: jpegData, timestamp: frame.timestamp)
+            WebSocketManager.shared.publishMapFrame(timestamp: frame.timestamp, jpegData: jpegData)
+        case .base, .odometry, .planning, .frontiers:
+            guard frame.channels >= 4 else { return }
+            WebSocketManager.shared.publishMapLayerFrame(
+                timestamp: frame.timestamp,
+                layer: frame.layerId.websocketLayerName,
                 width: frame.width,
-                height: frame.height
+                height: frame.height,
+                channels: frame.channels,
+                rgbaPointer: UnsafePointer(frame.dataPointer),
+                dataCount: frame.dataCount
             )
         }
-        guard let jpegData else {
-            return
-        }
-
-        WasmManager.shared.updateMapPreview(jpegData: jpegData, timestamp: frame.timestamp)
-        WebSocketManager.shared.publishMapFrame(timestamp: frame.timestamp, jpegData: jpegData)
-        RerunWebSocketClient.shared.logMapFrame(timestamp: frame.timestamp, jpegData: jpegData)
     }
 }
 
@@ -650,6 +815,11 @@ final class RerunWebSocketClient {
             )
         }
         enqueue(.points(timestamp: timestamp, points: fallbackPoints, colors: fallbackColors))
+    }
+
+    func logBinaryPointCloud(_ payload: Data) {
+        guard !payload.isEmpty else { return }
+        enqueueBinaryPointCloud(payload)
     }
 
     func logPose(timestamp: Double, quaternion: [Double]) {
@@ -1057,120 +1227,16 @@ func rerun_log_map_frame_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawP
 }
 
 func rerun_log_imu_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
-    guard let exec_env = exec_env, let ptr = ptr else { return }
-
-    let basePointer = ptr.assumingMemoryBound(to: UInt8.self)
-    guard let moduleInstance = wasm_runtime_get_module_inst(exec_env) else {
-        return
-    }
-    var nativeStart: UnsafeMutablePointer<UInt8>?
-    var nativeEnd: UnsafeMutablePointer<UInt8>?
-    guard wasm_runtime_get_native_addr_range(moduleInstance, basePointer, &nativeStart, &nativeEnd) else {
-        return
-    }
-
-    if let nativeEnd = nativeEnd {
-        let baseAddress = UInt(bitPattern: basePointer)
-        let endAddress = UInt(bitPattern: nativeEnd)
-        if baseAddress + UInt(WasmImuLayout.totalByteCount) > endAddress {
-            return
-        }
-    }
-
-    let timestamp = basePointer.withMemoryRebound(to: Double.self, capacity: 1) { $0.pointee }
-    let accPtr = basePointer.advanced(by: WasmImuLayout.accelOffset)
-    let gyroPtr = basePointer.advanced(by: WasmImuLayout.gyroOffset)
-    let accel = accPtr.withMemoryRebound(to: Double.self, capacity: WasmImuLayout.accelCount) {
-        SIMD3<Double>($0[0], $0[1], $0[2])
-    }
-    let gyro = gyroPtr.withMemoryRebound(to: Double.self, capacity: WasmImuLayout.gyroCount) {
-        SIMD3<Double>($0[0], $0[1], $0[2])
-    }
-    let frameId = basePointer.advanced(by: WasmImuLayout.frameIdOffset)
-        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
-
-    RerunWebSocketClient.shared.logImu(
-        timestamp: timestamp,
-        accel: [accel.x, accel.y, accel.z],
-        gyro: [gyro.x, gyro.y, gyro.z],
-        frameId: frameId
-    )
+    _ = exec_env
+    _ = ptr
 }
 
 func rerun_log_pose_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
-    guard let exec_env = exec_env, let ptr = ptr else { return }
-
-    let basePointer = ptr.assumingMemoryBound(to: UInt8.self)
-    guard let moduleInstance = wasm_runtime_get_module_inst(exec_env) else {
-        return
-    }
-    var nativeStart: UnsafeMutablePointer<UInt8>?
-    var nativeEnd: UnsafeMutablePointer<UInt8>?
-    guard wasm_runtime_get_native_addr_range(moduleInstance, basePointer, &nativeStart, &nativeEnd) else {
-        return
-    }
-
-    if let nativeEnd = nativeEnd {
-        let baseAddress = UInt(bitPattern: basePointer)
-        let endAddress = UInt(bitPattern: nativeEnd)
-        if baseAddress + UInt(WasmPoseLayout.totalByteCount) > endAddress {
-            return
-        }
-    }
-
-    let timestamp = basePointer.withMemoryRebound(to: Double.self, capacity: 1) { $0.pointee }
-    let translationPtr = basePointer.advanced(by: WasmPoseLayout.translationOffset)
-    let quatPtr = basePointer.advanced(by: WasmPoseLayout.quaternionOffset)
-    let translation = translationPtr.withMemoryRebound(to: Double.self, capacity: WasmPoseLayout.translationCount) {
-        SIMD3<Double>($0[0], $0[1], $0[2])
-    }
-    let quaternion = quatPtr.withMemoryRebound(to: Double.self, capacity: WasmPoseLayout.quaternionCount) {
-        SIMD4<Double>($0[0], $0[1], $0[2], $0[3])
-    }
-
-    RerunWebSocketClient.shared.logPose(
-        timestamp: timestamp,
-        translation: [translation.x, translation.y, translation.z],
-        quaternion: [quaternion.x, quaternion.y, quaternion.z, quaternion.w],
-        source: "imu"
-    )
+    _ = exec_env
+    _ = ptr
 }
 
 func rerun_log_pose_wheel_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
-    guard let exec_env = exec_env, let ptr = ptr else { return }
-
-    let basePointer = ptr.assumingMemoryBound(to: UInt8.self)
-    guard let moduleInstance = wasm_runtime_get_module_inst(exec_env) else {
-        return
-    }
-    var nativeStart: UnsafeMutablePointer<UInt8>?
-    var nativeEnd: UnsafeMutablePointer<UInt8>?
-    guard wasm_runtime_get_native_addr_range(moduleInstance, basePointer, &nativeStart, &nativeEnd) else {
-        return
-    }
-
-    if let nativeEnd = nativeEnd {
-        let baseAddress = UInt(bitPattern: basePointer)
-        let endAddress = UInt(bitPattern: nativeEnd)
-        if baseAddress + UInt(WasmPoseLayout.totalByteCount) > endAddress {
-            return
-        }
-    }
-
-    let timestamp = basePointer.withMemoryRebound(to: Double.self, capacity: 1) { $0.pointee }
-    let translationPtr = basePointer.advanced(by: WasmPoseLayout.translationOffset)
-    let quatPtr = basePointer.advanced(by: WasmPoseLayout.quaternionOffset)
-    let translation = translationPtr.withMemoryRebound(to: Double.self, capacity: WasmPoseLayout.translationCount) {
-        SIMD3<Double>($0[0], $0[1], $0[2])
-    }
-    let quaternion = quatPtr.withMemoryRebound(to: Double.self, capacity: WasmPoseLayout.quaternionCount) {
-        SIMD4<Double>($0[0], $0[1], $0[2], $0[3])
-    }
-
-    RerunWebSocketClient.shared.logPose(
-        timestamp: timestamp,
-        translation: [translation.x, translation.y, translation.z],
-        quaternion: [quaternion.x, quaternion.y, quaternion.z, quaternion.w],
-        source: "wheel_odometry"
-    )
+    _ = exec_env
+    _ = ptr
 }

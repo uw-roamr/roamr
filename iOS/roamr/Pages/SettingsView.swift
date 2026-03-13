@@ -7,9 +7,14 @@
 
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsPage: View {
-	@State private var rerunURL: String = RerunWebSocketClient.shared.serverURLString
+    @State private var sensorConfig: WasmSensorConfig = WasmManager.shared.sensorConfig
+    @State private var recordingEnabled: Bool = WasmManager.shared.recordingEnabled
+    @State private var recordingPath: String = WasmManager.shared.recordingPath
+    @State private var selectedRecordingFolderPath: String? = WasmManager.shared.selectedRecordingFolderPath
+    @State private var isShowingRecordingFolderPicker = false
 
     @Environment(\.safeAreaInsets) private var safeAreaInsets
     @State private var isLoading = false
@@ -31,51 +36,178 @@ struct SettingsPage: View {
                 ProfileButton(isAuthenticated: authManager.isAuthenticated)
             }
 
-			VStack(spacing: 24) {
-				Spacer()
-				rerunSection
-				appInfoSection
-
-				accountSection
-				Spacer()
-			}
-			.padding(.vertical)
+            ScrollView {
+                VStack(spacing: 24) {
+                    sensorSection
+                    recordingSection
+                    appInfoSection
+                    accountSection
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical)
+            }
         }
         .padding(.top, safeAreaInsets.top)
         .padding(.bottom, safeAreaInsets.bottom + AppConstants.shared.tabBarHeight)
 		.onAppear {
-			rerunURL = RerunWebSocketClient.shared.serverURLString
+            sensorConfig = WasmManager.shared.sensorConfig
+            recordingEnabled = WasmManager.shared.recordingEnabled
+            recordingPath = WasmManager.shared.recordingPath
+            selectedRecordingFolderPath = WasmManager.shared.selectedRecordingFolderPath
 		}
+        .fileImporter(
+            isPresented: $isShowingRecordingFolderPicker,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            do {
+                let urls = try result.get()
+                guard let url = urls.first else { return }
+                try WasmManager.shared.setRecordingFolderURL(url)
+                selectedRecordingFolderPath = WasmManager.shared.selectedRecordingFolderPath
+            } catch {
+                errorMessage = "Folder selection failed: \(error.localizedDescription)"
+            }
+        }
     }
 
-	@ViewBuilder
-	private var rerunSection: some View {
-		VStack(alignment: .leading, spacing: 12) {
-			Text("Rerun WebSocket")
-				.font(.headline)
-			TextField("ws://host:port", text: $rerunURL)
-				.textInputAutocapitalization(.never)
-				.autocorrectionDisabled(true)
-				.keyboardType(.URL)
-				.textFieldStyle(.roundedBorder)
-			Text("Default: \(RerunWebSocketClient.defaultServerURLString)")
-				.font(.caption)
-				.foregroundColor(.secondary)
-			Button("Apply") {
-				RerunWebSocketClient.shared.updateServerURL(rerunURL)
-			}
-			.buttonStyle(.borderedProminent)
-			Button("Reset to Default") {
-				rerunURL = RerunWebSocketClient.defaultServerURLString
-				RerunWebSocketClient.shared.updateServerURL(rerunURL)
-			}
-			.buttonStyle(.bordered)
-		}
-		.padding()
-		.background(Color(.systemGray6))
-		.cornerRadius(12)
-		.padding(.horizontal)
-	}
+    @ViewBuilder
+    private var sensorSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("WASM Sensor Inputs")
+                .font(.headline)
+
+            Toggle("IMU", isOn: Binding(
+                get: { sensorConfig.imuEnabled },
+                set: { newValue in
+                    sensorConfig.imuEnabled = newValue
+                    WasmManager.shared.setSensorConfig(sensorConfig)
+                }
+            ))
+
+            Toggle("Wheel odometry", isOn: Binding(
+                get: { sensorConfig.wheelOdometryEnabled },
+                set: { newValue in
+                    sensorConfig.wheelOdometryEnabled = newValue
+                    WasmManager.shared.setSensorConfig(sensorConfig)
+                }
+            ))
+
+            Toggle("LiDAR points", isOn: Binding(
+                get: { sensorConfig.lidarPointsEnabled },
+                set: { newValue in
+                    sensorConfig.lidarPointsEnabled = newValue
+                    WasmManager.shared.setSensorConfig(sensorConfig)
+                }
+            ))
+
+            Toggle("Point colors", isOn: Binding(
+                get: { sensorConfig.pointColorsEnabled },
+                set: { newValue in
+                    sensorConfig.pointColorsEnabled = newValue
+                    WasmManager.shared.setSensorConfig(sensorConfig)
+                }
+            ))
+
+            Toggle("RGB image", isOn: Binding(
+                get: { sensorConfig.cameraImageEnabled },
+                set: { newValue in
+                    sensorConfig.cameraImageEnabled = newValue
+                    WasmManager.shared.setSensorConfig(sensorConfig)
+                }
+            ))
+
+            let effectiveConfig = WasmManager.shared.effectiveSensorConfig()
+            Text("Current slam_main still requires IMU, wheel odometry, and LiDAR points. The RGB image and point-color toggles reduce payload/work today.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Text("Effective next-run config: imu=\(effectiveConfig.imuEnabled ? 1 : 0), wheel=\(effectiveConfig.wheelOdometryEnabled ? 1 : 0), points=\(effectiveConfig.lidarPointsEnabled ? 1 : 0), point_colors=\(effectiveConfig.pointColorsEnabled ? 1 : 0), rgb=\(effectiveConfig.cameraImageEnabled ? 1 : 0)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .textSelection(.enabled)
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+        .padding(.horizontal)
+    }
+
+    @ViewBuilder
+    private var recordingSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("WASM Recording")
+                .font(.headline)
+
+            Toggle("Enable sensor recording", isOn: $recordingEnabled)
+                .onChange(of: recordingEnabled) { _, isEnabled in
+                    WasmManager.shared.setRecordingEnabled(isEnabled)
+                }
+
+            TextField("Recording path", text: $recordingPath)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled(true)
+                .textFieldStyle(.roundedBorder)
+
+            HStack(spacing: 12) {
+                Button("Apply Path") {
+                    WasmManager.shared.setRecordingPath(recordingPath)
+                    recordingPath = WasmManager.shared.recordingPath
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("Reset Path") {
+                    WasmManager.shared.resetRecordingPath()
+                    recordingPath = WasmManager.shared.recordingPath
+                }
+                .buttonStyle(.bordered)
+            }
+
+            HStack(spacing: 12) {
+                Button("Choose Folder") {
+                    isShowingRecordingFolderPicker = true
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("Clear Folder") {
+                    WasmManager.shared.clearRecordingFolderSelection()
+                    selectedRecordingFolderPath = WasmManager.shared.selectedRecordingFolderPath
+                }
+                .buttonStyle(.bordered)
+                .disabled(selectedRecordingFolderPath == nil)
+            }
+
+            Text("Writes IMU, pose, RGB image, and colored point-cloud logs from inside the WASM runtime.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Text("Choose Folder lets you target Files locations such as Downloads. If no folder is selected, the text path below uses an app-local directory.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Text("Selected folder: \(selectedRecordingFolderPath ?? "None")")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .textSelection(.enabled)
+
+            Text("Guest path: \(WasmManager.shared.recordingGuestDirectoryPath())")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Text("Host path: \(WasmManager.shared.recordingsDirectoryURL()?.path ?? "Unavailable")")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .textSelection(.enabled)
+
+            Text("Applies the next time a WASM module starts.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding()
+        .background(Color(.systemGray6))
+        .cornerRadius(12)
+        .padding(.horizontal)
+    }
 
     @ViewBuilder
     private var accountSection: some View {

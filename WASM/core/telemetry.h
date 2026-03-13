@@ -13,7 +13,7 @@
 #include "sensors/lidar_camera.h"
 
 constexpr int log_interval_ms = 33;
-constexpr double kLidarLogIntervalSec = 0.1;
+constexpr double kLidarLogIntervalSec = 1.0 / 3.0;
 constexpr size_t kWasmTextLogMaxBytes = 255;
 
 struct WasmTextLog {

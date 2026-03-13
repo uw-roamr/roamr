@@ -76,6 +76,7 @@ class BluetoothManager: NSObject, ObservableObject {
     private var teleopStopWatchdogToken = 0
     private let odomQueueLock = NSLock()
     private var pendingOdomSamples: [WheelOdometrySample] = []
+    private var dropPendingOdomSamplesOnNextWasmRead = true
     private let maxPendingOdomSamples = 12_000
     private let preferredDeviceNameSubstring = "ESP32_C6"
     private let teleopMetricTimeoutMs = 2_000
@@ -263,6 +264,27 @@ class BluetoothManager: NSObject, ObservableObject {
         return pendingOdomSamples.removeFirst()
     }
 
+    func prepareWheelOdometryForNewWasmRun() {
+        odomQueueLock.lock()
+        pendingOdomSamples.removeAll(keepingCapacity: true)
+        dropPendingOdomSamplesOnNextWasmRead = true
+        odomQueueLock.unlock()
+    }
+
+    func popWheelOdometrySampleForWasm() -> WheelOdometrySample? {
+        odomQueueLock.lock()
+        defer { odomQueueLock.unlock() }
+
+        if dropPendingOdomSamplesOnNextWasmRead {
+            pendingOdomSamples.removeAll(keepingCapacity: true)
+            dropPendingOdomSamplesOnNextWasmRead = false
+            return nil
+        }
+
+        guard !pendingOdomSamples.isEmpty else { return nil }
+        return pendingOdomSamples.removeFirst()
+    }
+
     func ensureWheelOdometryStreaming() {
         DispatchQueue.main.async { [weak self] in
             self?.activateOdometryStreamingIfPossible()
@@ -326,7 +348,7 @@ class BluetoothManager: NSObject, ObservableObject {
         lastOdomSeq = seq
 
         let samplePeriodSeconds = Double(latestOdomSamplePeriodMs) / 1000.0
-        let baseTimestamp = ProcessInfo.processInfo.systemUptime
+        let frameArrivalTimestamp = ProcessInfo.processInfo.systemUptime
         var samples: [WheelOdometrySample] = []
         samples.reserveCapacity(sampleCount)
         var offset = 3
@@ -335,9 +357,14 @@ class BluetoothManager: NSObject, ObservableObject {
             let drRaw = UInt16(bytes[offset + 2]) | (UInt16(bytes[offset + 3]) << 8)
             let dl = Int16(bitPattern: dlRaw)
             let dr = Int16(bitPattern: drRaw)
+            let samplesFromNewest = sampleCount - 1 - idx
             samples.append(
                 WheelOdometrySample(
-                    timestamp: baseTimestamp + (Double(idx) * samplePeriodSeconds),
+                    // BLE uploads a batch of already-recorded samples oldest -> newest.
+                    // Stamp them into the recent past instead of the future so pose
+                    // interpolation stays aligned with IMU/LiDAR timestamps.
+                    timestamp: frameArrivalTimestamp -
+                        (Double(samplesFromNewest) * samplePeriodSeconds),
                     seq: Int32(seq),
                     dlTicks: Int32(dl),
                     drTicks: Int32(dr),
@@ -360,12 +387,16 @@ class BluetoothManager: NSObject, ObservableObject {
         if lastMotorCommandTimestamp > 0, sinceMotorCommandMs >= 0, sinceMotorCommandMs <= 2000 {
             lastMotorOdomText = "TX->RX: cmd(\(lastMotorLeftPercent),\(lastMotorRightPercent),\(lastMotorHoldMs)) -> ticks(\(sumDl),\(sumDr)) @\(sinceMotorCommandMs)ms"
         }
-        resolvePendingTeleopTrace(frameArrivalAt: baseTimestamp, odomSeq: Int(seq), sumDl: sumDl, sumDr: sumDr)
+        resolvePendingTeleopTrace(
+            frameArrivalAt: frameArrivalTimestamp,
+            odomSeq: Int(seq),
+            sumDl: sumDl,
+            sumDr: sumDr)
 
-        if let first = samples.first {
-            // print("[BLE ODOM RX] frame seq=\(seq) n=\(sampleCount) dt_ms=\(latestOdomSamplePeriodMs) first=(\(first.dlTicks),\(first.drTicks)) queued=\(queuedCount)")
-        } else {
+        if samples.isEmpty {
             // print("[BLE ODOM RX] frame seq=\(seq) n=0 queued=\(queuedCount)")
+        } else {
+            // print("[BLE ODOM RX] frame seq=\(seq) n=\(sampleCount) dt_ms=\(latestOdomSamplePeriodMs) queued=\(queuedCount)")
         }
 
         lastMessage = "Odom seq=\(seq) n=\(sampleCount)"
@@ -461,6 +492,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
         teleopStopWatchdogToken += 1
         lastTeleopLatencyText = "Teleop latency: -"
         clearWheelOdometrySamples()
+        prepareWheelOdometryForNewWasmRun()
         connectionStatus = "Connected to \(peripheral.name ?? "Unknown")"
         peripheral.delegate = self
         peripheral.discoverServices([serviceUUID])
@@ -485,6 +517,7 @@ extension BluetoothManager: CBCentralManagerDelegate {
         teleopStopWatchdogToken += 1
         lastTeleopLatencyText = "Teleop latency: -"
         clearWheelOdometrySamples()
+        prepareWheelOdometryForNewWasmRun()
         connectionStatus = "Disconnected"
     }
 
@@ -522,7 +555,7 @@ func read_wheel_odometry_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawP
     guard let ptr = ptr else { return }
     BluetoothManager.shared.ensureWheelOdometryStreaming()
 
-    let sample = BluetoothManager.shared.popWheelOdometrySample() ??
+    let sample = BluetoothManager.shared.popWheelOdometrySampleForWasm() ??
         WheelOdometrySample(timestamp: 0.0, seq: -1, dlTicks: 0, drTicks: 0, samplePeriodMs: 0)
 
     let base = ptr.bindMemory(to: Double.self, capacity: 1)

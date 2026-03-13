@@ -71,7 +71,22 @@ class IMUManager {
 
     private init() {}
 
+    private func resetCurrentDataLocked() {
+        currentData = IMUData(
+            timestamp: 0, acc_x: 0, acc_y: 0, acc_z: 0,
+            gyro_x: 0, gyro_y: 0, gyro_z: 0,
+            frame_id: CoordinateFrameId.FLU.rawValue
+        )
+    }
+
     func start() {
+        motionManager.stopAccelerometerUpdates()
+        motionManager.stopGyroUpdates()
+        motionManager.stopDeviceMotionUpdates()
+        lock.lock()
+        resetCurrentDataLocked()
+        lock.unlock()
+
         let IMUIntervalHz = 100.0 // same for accelerometer and gyro
 
         let motionUpdateInterval = 1.0 / IMUIntervalHz
@@ -111,6 +126,9 @@ class IMUManager {
         motionManager.stopAccelerometerUpdates()
         motionManager.stopGyroUpdates()
         motionManager.stopDeviceMotionUpdates()
+        lock.lock()
+        resetCurrentDataLocked()
+        lock.unlock()
     }
 }
 

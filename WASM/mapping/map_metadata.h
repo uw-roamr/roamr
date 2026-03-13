@@ -5,6 +5,14 @@
 
 namespace mapping{
 
+  enum class MapRenderLayerId : int32_t {
+    Composite = 0,
+    Base = 1,
+    Odometry = 2,
+    Planning = 3,
+    Frontiers = 4,
+  };
+
   struct MapImage {
     double timestamp;
     int32_t width;
@@ -12,6 +20,7 @@ namespace mapping{
     int32_t channels;
     uint32_t data_ptr;
     int32_t data_size;
+    int32_t layer_id;
   };
 
   struct OccupancyGridMetadata {

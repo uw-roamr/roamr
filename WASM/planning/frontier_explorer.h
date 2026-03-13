@@ -29,6 +29,7 @@ struct FrontierPlanResult {
   std::string message;
   GridCoord goal_cell{};
   GridCoord selected_seed{};
+  std::vector<GridCoord> frontier_cells;
   std::vector<GridCoord> path_grid;
   std::vector<core::Vector3d> path_world;
   std::vector<GridCoord> selected_cluster_cells;
@@ -61,3 +62,12 @@ bool is_frontier_goal_candidate(
     const FrontierExplorerConfig& cfg = {});
 
 }  // namespace planning
+
+namespace planning::simplified {
+
+FrontierPlanResult plan_to_largest_frontier(
+    const GridMap2D& map,
+    const core::Vector3d& start_world,
+    const FrontierExplorerConfig& cfg = {});
+
+}  // namespace planning::simplified

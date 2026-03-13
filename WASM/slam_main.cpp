@@ -14,6 +14,7 @@
 #include "autonomy/autonomy.h"
 #include "controls/motors.h"
 #include "core/math_utils.h"
+#include "core/recorder.h"
 #include "core/ring_buffer.h"
 #include "controls/path_following.h"
 #include "core/telemetry.h"
@@ -49,7 +50,6 @@ static std::mutex g_plan_publish_mutex;
 static planning::bridge::PlanningOverlay g_latest_plan_overlay;
 static std::mutex g_planner_wake_mutex;
 static std::condition_variable g_planner_wake_cv;
-static uint64_t g_planner_wake_revision = 0;
 static constexpr size_t kPlannerDeltaQueueCapacity = 16;
 
 struct MapDeltaEvent {
@@ -94,6 +94,11 @@ static size_t g_lc_ready_size = 0;
 static std::atomic<bool> g_lc_ready{false};
 static std::mutex g_lc_cv_mutex;
 static std::condition_variable g_lc_cv;
+static constexpr size_t kLidarPreviewMaxPoints = 4000;
+static sensors::LidarCameraData g_lidar_preview_buffer{};
+static bool g_lidar_preview_ready = false;
+static std::mutex g_lidar_preview_mutex;
+static std::condition_variable g_lidar_preview_cv;
 
 // motor encoder odometry globals
 static std::atomic<bool> g_wheel_odom_ready{false};
@@ -104,12 +109,27 @@ static constexpr size_t kPoseHistoryCapacity = 256;
 static core::RingBuffer<sensors::PoseLog, kPoseHistoryCapacity> g_pose_history;
 static std::atomic<bool> g_scan_active{false};
 static std::atomic<bool> g_scan_requested{false};
+static std::atomic<uint64_t> g_completed_scan_count{0};
+static std::atomic<bool> g_no_reachable_frontiers_terminal{false};
 static std::atomic<double> g_scan_map_skip_until_timestamp{-1.0};
+
+struct MappingStats {
+    uint64_t integrated_lidar_frames = 0;
+    std::chrono::steady_clock::time_point start_time{};
+    bool started = false;
+};
+
+static std::mutex g_mapping_stats_mutex;
+static MappingStats g_mapping_stats;
 
 
 static void set_autonomy_substate(
     autonomy::AutonomySubstate next_state,
     const char* reason = nullptr) {
+    if (g_no_reachable_frontiers_terminal.load(std::memory_order_acquire) &&
+        next_state != autonomy::AutonomySubstate::IDLE) {
+        return;
+    }
     const autonomy::AutonomySubstate previous =
         g_autonomy_substate.exchange(next_state, std::memory_order_acq_rel);
     if (previous == next_state) {
@@ -124,6 +144,62 @@ static void set_autonomy_substate(
         log << " reason=" << reason;
     }
     wasm_log_line(log.str());
+}
+
+static void reset_mapping_stats() {
+    std::lock_guard<std::mutex> lk(g_mapping_stats_mutex);
+    g_mapping_stats = MappingStats{};
+}
+
+static void record_mapping_frame() {
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lk(g_mapping_stats_mutex);
+    if (!g_mapping_stats.started) {
+        g_mapping_stats.start_time = now;
+        g_mapping_stats.started = true;
+    }
+    g_mapping_stats.integrated_lidar_frames += 2;
+}
+
+static void log_mapping_rate_summary(const char* reason) {
+    std::lock_guard<std::mutex> lk(g_mapping_stats_mutex);
+    std::ostringstream log;
+    log << "[mapping][rate]";
+    if (reason && reason[0] != '\0') {
+        log << " reason=" << reason;
+    }
+    if (!g_mapping_stats.started) {
+        log << " frames=0 total_s=0 hz=0";
+    } else {
+        const double total_mapping_seconds =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - g_mapping_stats.start_time).count();
+        const double hz =
+            (total_mapping_seconds > 1e-6)
+                ? (static_cast<double>(g_mapping_stats.integrated_lidar_frames) /
+                   total_mapping_seconds)
+                : 0.0;
+        log << " frames=" << g_mapping_stats.integrated_lidar_frames
+            << " total_s=" << total_mapping_seconds
+            << " hz=" << hz;
+    }
+    wasm_log_line(log.str());
+}
+
+static void enter_no_reachable_frontiers_terminal_state() {
+    const bool already_terminal =
+        g_no_reachable_frontiers_terminal.exchange(true, std::memory_order_acq_rel);
+    if (!already_terminal) {
+        g_scan_requested.store(false, std::memory_order_release);
+        planning::bridge::invalidate_current_plan();
+        {
+            std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
+            g_latest_plan_overlay = planning::bridge::PlanningOverlay{};
+        }
+        log_mapping_rate_summary("no_reachable_frontiers");
+        wasm_log_line("NO REACHABLE FRONTIERS (MAP COMPLETE)");
+    }
+    set_autonomy_substate(autonomy::AutonomySubstate::IDLE, "no_reachable_frontiers");
 }
 
 static bool read_latest_wheel_odom_snapshot(sensors::WheelOdometryData* out) {
@@ -159,10 +235,6 @@ static bool pose_log_valid(const sensors::PoseLog& pose) {
 }
 
 static void notify_planner_wake() {
-    {
-        std::lock_guard<std::mutex> lk(g_planner_wake_mutex);
-        ++g_planner_wake_revision;
-    }
     g_planner_wake_cv.notify_one();
 }
 
@@ -181,9 +253,65 @@ static void enqueue_planner_delta_event(
         event.timestamp = timestamp;
         event.newly_occupied_cells = std::move(newly_occupied_cells);
         g_planner_delta_queue.push_back(std::move(event));
-        ++g_planner_wake_revision;
     }
     g_planner_wake_cv.notify_one();
+}
+
+static void drain_planner_delta_events_locked(
+    std::vector<MapDeltaEvent>* out_events,
+    bool* out_delta_overflowed) {
+    if (!out_events || !out_delta_overflowed) {
+        return;
+    }
+    out_events->clear();
+    while (!g_planner_delta_queue.empty()) {
+        out_events->push_back(std::move(g_planner_delta_queue.front()));
+        g_planner_delta_queue.pop_front();
+    }
+    *out_delta_overflowed = g_planner_delta_overflowed;
+    g_planner_delta_overflowed = false;
+}
+
+static bool publish_latest_map_snapshot_if_needed(
+    uint64_t min_revision,
+    mapping::MapSnapshot* out_snapshot = nullptr) {
+    {
+        std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+        if (g_latest_map_snapshot.valid() &&
+            g_latest_map_snapshot.map_revision >= min_revision) {
+            if (out_snapshot) {
+                *out_snapshot = g_latest_map_snapshot;
+            }
+            return true;
+        }
+    }
+
+    mapping::MapSnapshot built_snapshot;
+    {
+        std::lock_guard<std::mutex> lk(g_map_mutex);
+        if (!g_latest_map_state.valid ||
+            g_latest_map_state.revision < min_revision) {
+            return false;
+        }
+        if (!mapping::build_map_snapshot(
+                g_map,
+                g_latest_map_state.body_to_world,
+                g_latest_map_state.timestamp,
+                g_latest_map_state.revision,
+                &built_snapshot)) {
+            return false;
+        }
+    }
+
+    std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+    if (!g_latest_map_snapshot.valid() ||
+        g_latest_map_snapshot.map_revision < built_snapshot.map_revision) {
+        g_latest_map_snapshot = built_snapshot;
+    }
+    if (out_snapshot) {
+        *out_snapshot = g_latest_map_snapshot;
+    }
+    return true;
 }
 
 static core::Vector4d quat_nlerp(
@@ -274,6 +402,49 @@ static bool lidar_queue_has_free_slot_locked() {
     return false;
 }
 
+static void copy_lidar_preview_frame(
+    const sensors::LidarCameraData& src,
+    bool include_colors,
+    sensors::LidarCameraData* dst) {
+    if (!dst) {
+        return;
+    }
+    dst->timestamp = src.timestamp;
+    dst->points_size = 0;
+    dst->colors_size = 0;
+    dst->image_size = 0;
+    dst->points_frame_id = src.points_frame_id;
+    dst->image_frame_id = src.image_frame_id;
+
+    const size_t total_points = src.points_size / sensors::float_per_point;
+    if (total_points == 0) {
+        return;
+    }
+    const size_t point_stride =
+        std::max<size_t>(1, (total_points + kLidarPreviewMaxPoints - 1) / kLidarPreviewMaxPoints);
+    size_t preview_points = 0;
+    for (size_t point_idx = 0; point_idx < total_points; point_idx += point_stride) {
+        const size_t src_base = point_idx * sensors::float_per_point;
+        const size_t dst_base = preview_points * sensors::float_per_point;
+        dst->points[dst_base + 0] = src.points[src_base + 0];
+        dst->points[dst_base + 1] = src.points[src_base + 1];
+        dst->points[dst_base + 2] = src.points[src_base + 2];
+
+        if (include_colors &&
+            src.colors_size >= (point_idx + 1) * sensors::colors_per_point) {
+            const size_t src_color_base = point_idx * sensors::colors_per_point;
+            const size_t dst_color_base = preview_points * sensors::colors_per_point;
+            dst->colors[dst_color_base + 0] = src.colors[src_color_base + 0];
+            dst->colors[dst_color_base + 1] = src.colors[src_color_base + 1];
+            dst->colors[dst_color_base + 2] = src.colors[src_color_base + 2];
+            dst->colors_size = (preview_points + 1) * sensors::colors_per_point;
+        }
+        ++preview_points;
+    }
+    dst->points_size = preview_points * sensors::float_per_point;
+    dst->image_size = 0;
+}
+
 static int claim_lidar_free_slot_locked() {
     for (size_t idx = 0; idx < g_lc_slot_states.size(); ++idx) {
         if (g_lc_slot_states[idx] == LidarSlotState::FREE) {
@@ -333,19 +504,67 @@ enum class PoseSource{
     wheel_odom,
     fused_IMU_wheel_odom
 };
-// IMU preintegration drifts over time, so the shared autonomy/map pose should
-// not treat it as a drop-in orientation estimate.
+
+struct RuntimeSensorConfig {
+    bool imu_enabled = true;
+    bool wheel_odometry_enabled = false;
+    bool lidar_points_enabled = true;
+    bool point_colors_enabled = false;
+    bool camera_image_enabled = false;
+};
+
+static RuntimeSensorConfig g_sensor_config{};
+
+static bool env_flag_enabled(const char* name, bool default_value) {
+    const char* value = std::getenv(name);
+    if (!value || value[0] == '\0') {
+        return default_value;
+    }
+    if (value[0] == '0' || value[0] == 'f' || value[0] == 'F' ||
+        value[0] == 'n' || value[0] == 'N') {
+        return false;
+    }
+    return true;
+}
+
+static RuntimeSensorConfig load_sensor_config_from_env() {
+    RuntimeSensorConfig config;
+    config.imu_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_IMU", true);
+    config.wheel_odometry_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_WHEEL_ODOMETRY", true);
+    config.lidar_points_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_LIDAR_POINTS", true);
+    config.point_colors_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_POINT_COLORS", false);
+    config.camera_image_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_CAMERA_IMAGE", false);
+    return config;
+}
+
+static void log_sensor_config(const RuntimeSensorConfig& config) {
+    std::ostringstream log;
+    log << "[config] sensors imu=" << (config.imu_enabled ? 1 : 0)
+        << " wheel=" << (config.wheel_odometry_enabled ? 1 : 0)
+        << " lidar_points=" << (config.lidar_points_enabled ? 1 : 0)
+        << " point_colors=" << (config.point_colors_enabled ? 1 : 0)
+        << " camera_image=" << (config.camera_image_enabled ? 1 : 0);
+    wasm_log_line(log.str());
+}
+
 static constexpr PoseSource pose_source = PoseSource::fused_IMU_wheel_odom;
 static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
 static constexpr int32_t kPathFollowHoldMs = 120;
-static constexpr bool kEnableWheelPoseLogging = true;
-static constexpr double kWheelPoseLogIntervalSec = 0.2;
 static constexpr double kGoalCheckLogIntervalSec = 0.5;
+static constexpr double kRerunPoseLogIntervalSec = 0.2;
+static constexpr bool kEnableRerunPoseTelemetry = false;
 static constexpr bool kEnableVerboseAutonomyLogs = false;
+static constexpr bool kEnablePlannerWakeLogs = false;
 static constexpr int32_t kPlannerPollMs = 50;
 static constexpr double kPlannerMinIntervalSec = 0.35;
 static constexpr int32_t kTelemetryRenderIntervalMs = 33;
+static constexpr double kTelemetryPoseRenderMinIntervalSec = 0.15;
 static constexpr double kPoseTrailMinDistanceM = 0.05;
 static constexpr double kPoseTrailMinYawDeltaRad = 10.0 * core::pi / 180.0;
 static constexpr double kPoseTrailMinIntervalSec = 0.05;
@@ -361,9 +580,9 @@ struct OuterLoopTurnPidConfig {
 };
 
 static constexpr OuterLoopTurnPidConfig kScan4x90TurnPidCfg{
-    8.0,
+    4.0,
     0.25,
-    1.0,
+    0.5,
     0.5 * core::pi,
     0.2,
     0.6,
@@ -383,10 +602,8 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
     constexpr double kQuarterTurnRad = 0.5 * core::pi;
     constexpr int kTurnHoldMs = 150;
     constexpr int kPollSleepMs = 5;
-    constexpr int kSegmentSettleMs = 100;
-    constexpr double kScanWarmupSec = 5.0;
-    constexpr int kScanWarmupSleepMs = 1000;
-
+    constexpr int kSegmentSettleMs = 500;
+   
     sensors::WheelOdometryData odom{};
     while (!read_scan_odom_sample(&odom)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kPollSleepMs));
@@ -506,12 +723,16 @@ int main(){
     std::mutex m_lc;
     std::mutex m_pose;
 
+    g_sensor_config = load_sensor_config_from_env();
+    log_sensor_config(g_sensor_config);
+
     controls::MotorController motors;
     motors.set_odom_reader(read_latest_wheel_odom_snapshot);
     motors.stop(); // ensure motors start from a safe state
 
     init_camera(&g_cam_config);
     log_config(g_cam_config);
+    core::recorder::initialize_from_env(g_cam_config);
     planning::bridge::set_goal_change_callback(notify_planner_wake);
 
     if (kEnablePlannerDemoGoal) {
@@ -524,7 +745,6 @@ int main(){
 
     std::thread autonomy_thread([&motors, &m_pose](){
         constexpr int kAutonomyFSMSleepMs = 100;
-        constexpr double kLidarWarmupSec = 2.0;
 
         // the main high level thread
         while(!g_imu_ready.load(std::memory_order_acquire) ||
@@ -537,15 +757,6 @@ int main(){
                 std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
             }
         }
-        {
-            std::ostringstream warmup_log;
-            warmup_log << "[autonomy][init] lidar warmup for "
-                       << kLidarWarmupSec
-                       << "s";
-            wasm_log_line(warmup_log.str());
-        }
-        std::this_thread::sleep_for(std::chrono::duration<double>(kLidarWarmupSec));
-        wasm_log_line("[autonomy][init] lidar warmup complete");
         wasm_log_line("SENSOR_INIT -> AUTONOMY_INIT");
         g_state.store(RobotState::AUTONOMY_INIT, std::memory_order_release);
         while(!g_first_map_update_done.load(std::memory_order_acquire)){
@@ -557,6 +768,7 @@ int main(){
             g_scan_active.store(true, std::memory_order_release);
             scan_4x90(motors, m_pose);
             g_scan_active.store(false, std::memory_order_release);
+            g_completed_scan_count.fetch_add(1, std::memory_order_acq_rel);
             g_initial_spin_done.store(true, std::memory_order_release);
             set_autonomy_substate(autonomy::AutonomySubstate::PLANNER_INIT, "initial_spin_complete");
         }
@@ -566,11 +778,17 @@ int main(){
         set_autonomy_substate(autonomy::AutonomySubstate::PLANNER_INIT, "autonomy_engaged");
 
         while (true) {
+            if (g_no_reachable_frontiers_terminal.load(std::memory_order_acquire)) {
+                motors.stop();
+                std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
+                continue;
+            }
             if (g_scan_requested.exchange(false, std::memory_order_acq_rel)) {
                 set_autonomy_substate(autonomy::AutonomySubstate::SCANNING, "scan_requested");
                 g_scan_active.store(true, std::memory_order_release);
                 scan_4x90(motors, m_pose);
                 g_scan_active.store(false, std::memory_order_release);
+                g_completed_scan_count.fetch_add(1, std::memory_order_acq_rel);
                 if (g_planner_initialized.load(std::memory_order_acquire)) {
                     set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "scan_complete");
                 } else {
@@ -584,8 +802,8 @@ int main(){
     std::thread imu_thread([&m_imu, &m_pose](){
         using Clock = std::chrono::steady_clock;
         const auto target_interval = std::chrono::microseconds(sensors::IMUIntervalMicrosecond);
-        double g_last_logged_imu_timestamp = -1.0;
         double g_last_calib_timestamp = -1.0;
+        double last_rerun_pose_log_timestamp = -1.0;
 
         // initial calibration for gyro and accelerometer biases
         g_imu_calib.init_biases();
@@ -608,6 +826,7 @@ int main(){
                     g_imu_preintegrator.update_bias();
                 }
                 imu_copy = g_imu_calib.curr_slot();
+                core::recorder::enqueue_imu(imu_copy);
                 if (pose_source == PoseSource::IMU || pose_source == PoseSource::fused_IMU_wheel_odom){
                     // only update the rotation since the accelerometer drifts too much
                     sensors::PoseLog pose_copy{};
@@ -620,7 +839,19 @@ int main(){
                         }
                         pose_copy = g_pose;
                     }
-                    rerun_log_pose(&pose_copy);
+                    if (pose_source == PoseSource::IMU) {
+                        core::recorder::enqueue_pose(
+                            pose_copy,
+                            core::recorder::PoseDataSource::kIMU);
+                    }
+                    if (kEnableRerunPoseTelemetry &&
+                        pose_copy.timestamp > 0.0 &&
+                        (last_rerun_pose_log_timestamp < 0.0 ||
+                         (pose_copy.timestamp - last_rerun_pose_log_timestamp) >=
+                             kRerunPoseLogIntervalSec)) {
+                        rerun_log_pose(&pose_copy);
+                        last_rerun_pose_log_timestamp = pose_copy.timestamp;
+                    }
                 }
                 // wasm_log_line("imu: " + std::to_string(imu_copy.timestamp) + ", " + std::to_string(imu_copy.gyro_z));
             }
@@ -668,13 +899,9 @@ int main(){
             }
 
             if (g_lc_buffers[write_idx].points_size > 0) {
-                if (g_lc_buffers[write_idx].timestamp > 0.0 &&
-                    (last_lidar_log_timestamp < 0.0 ||
-                     (g_lc_buffers[write_idx].timestamp - last_lidar_log_timestamp) >=
-                         kLidarLogIntervalSec)) {
-                    rerun_log_lidar_frame(&g_lc_buffers[write_idx]);
-                    last_lidar_log_timestamp = g_lc_buffers[write_idx].timestamp;
-                }
+                core::recorder::enqueue_lidar_frame(
+                    g_lc_buffers[write_idx],
+                    g_lc_pose_buffers[write_idx]);
 
                 // Timestamp deduplication is intentionally omitted here. Mapping only
                 // requires monotonically advancing timestamps, and deduplicating at the
@@ -690,6 +917,30 @@ int main(){
                     push_lidar_ready_slot_locked(write_idx);
                 }
                 g_lc_cv.notify_one();
+                if (g_sensor_config.lidar_points_enabled &&
+                    g_lc_buffers[write_idx].timestamp > 0.0 &&
+                    (last_lidar_log_timestamp < 0.0 ||
+                     (g_lc_buffers[write_idx].timestamp - last_lidar_log_timestamp) >=
+                         kLidarLogIntervalSec)) {
+                    bool queued_preview = false;
+                    {
+                        std::lock_guard<std::mutex> lk(g_lidar_preview_mutex);
+                        if (!g_lidar_preview_ready) {
+                            copy_lidar_preview_frame(
+                                g_lc_buffers[write_idx],
+                                g_sensor_config.point_colors_enabled,
+                                &g_lidar_preview_buffer);
+                            if (g_lidar_preview_buffer.points_size > 0) {
+                                g_lidar_preview_ready = true;
+                                queued_preview = true;
+                            }
+                        }
+                    }
+                    if (queued_preview) {
+                        g_lidar_preview_cv.notify_one();
+                    }
+                    last_lidar_log_timestamp = g_lc_buffers[write_idx].timestamp;
+                }
                 // wasm_log_line("lidar: " + std::to_string(g_lc_buffers[write_idx].timestamp) + ", " + std::to_string(g_lc_buffers[write_idx].points_size));
             } else {
                 {
@@ -701,9 +952,27 @@ int main(){
         }
     });
 
+    std::thread lidar_preview_thread([](){
+        while (true) {
+            std::unique_lock<std::mutex> lk(g_lidar_preview_mutex);
+            g_lidar_preview_cv.wait(lk, []{
+                return g_lidar_preview_ready;
+            });
+            lk.unlock();
+
+            rerun_log_lidar_frame(&g_lidar_preview_buffer);
+
+            lk.lock();
+            g_lidar_preview_ready = false;
+            lk.unlock();
+        }
+    });
+
 
     std::thread mapping_thread([&m_pose](){
       double last_map_timestamp = -1.0;
+      std::vector<planning::GridCoord> newly_occupied_cells;
+      newly_occupied_cells.reserve(2048);
 
       RobotState state;
       do{
@@ -722,6 +991,7 @@ int main(){
         mapping::initialize_map(g_map);
         g_latest_map_state = LatestMapState{};
       }
+      reset_mapping_stats();
       wasm_log_line("Map initialized");
 
       while(true){
@@ -779,7 +1049,7 @@ int main(){
             continue;
         }
         uint64_t map_revision = 0;
-        std::vector<planning::GridCoord> newly_occupied_cells;
+        newly_occupied_cells.clear();
         {
             std::lock_guard<std::mutex> lk(g_map_mutex);
             // project the filtered lidar scan into the occupancy grid.
@@ -795,20 +1065,11 @@ int main(){
             g_latest_map_state.timestamp = candidate_timestamp;
             g_latest_map_state.revision = map_revision;
             g_latest_map_state.valid = true;
-            mapping::MapSnapshot snapshot;
-            if (mapping::build_map_snapshot(
-                    g_map,
-                    body_to_world,
-                    candidate_timestamp,
-                    map_revision,
-                    &snapshot)) {
-                std::lock_guard<std::mutex> publish_lk(g_map_publish_mutex);
-                g_latest_map_snapshot = std::move(snapshot);
-            }
         }
         if (!g_first_map_update_done.load(std::memory_order_relaxed)) {
             g_first_map_update_done.store(true, std::memory_order_release);
         }
+        record_mapping_frame();
         last_map_timestamp = candidate_timestamp;
         enqueue_planner_delta_event(
             map_revision,
@@ -840,32 +1101,46 @@ int main(){
         uint64_t last_goal_revision = planning::bridge::latest_goal_revision();
         planning::GridCoord last_start_cell{};
         bool have_last_start_cell = false;
-        uint64_t observed_wake_revision = 0;
         std::vector<MapDeltaEvent> pending_delta_events;
         std::vector<planning::GridCoord> merged_newly_occupied_cells;
+        pending_delta_events.reserve(kPlannerDeltaQueueCapacity);
+        merged_newly_occupied_cells.reserve(2048);
         bool delta_overflowed = false;
+        bool final_frontier_scan_pending = false;
+        bool no_reachable_frontiers_logged = false;
+        uint64_t final_frontier_scan_target_count = 0;
+        uint64_t frontier_exhaustion_scan_baseline_count =
+            g_completed_scan_count.load(std::memory_order_acquire);
 
         while(true){
-            // wait until a new map arrives, otherwise the previous plan is the best path
+            // Wake on planner notifications, but also poll periodically so a missed
+            // notify cannot stall replanning.
             {
                 std::unique_lock<std::mutex> lk(g_planner_wake_mutex);
-                g_planner_wake_cv.wait(lk, [&]{
-                    return g_planner_wake_revision != observed_wake_revision ||
-                           !g_planner_delta_queue.empty();
-                });
-                observed_wake_revision = g_planner_wake_revision;
-                pending_delta_events.clear();
-                while (!g_planner_delta_queue.empty()) {
-                    pending_delta_events.push_back(std::move(g_planner_delta_queue.front()));
-                    g_planner_delta_queue.pop_front();
-                }
-                delta_overflowed = g_planner_delta_overflowed;
-                g_planner_delta_overflowed = false;
+                g_planner_wake_cv.wait_for(
+                    lk,
+                    std::chrono::milliseconds(kPlannerPollMs),
+                    []{ return !g_planner_delta_queue.empty(); });
+                drain_planner_delta_events_locked(&pending_delta_events, &delta_overflowed);
+            }
+            if (g_no_reachable_frontiers_terminal.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
             }
 
             mapping::MapSnapshot snapshot;
+            uint64_t required_snapshot_revision = 0;
+            if (!pending_delta_events.empty()) {
+                required_snapshot_revision = pending_delta_events.back().map_revision;
+            } else {
+                required_snapshot_revision =
+                    g_map_update_revision.load(std::memory_order_acquire);
+            }
+            publish_latest_map_snapshot_if_needed(
+                required_snapshot_revision,
+                &snapshot);
             planning::bridge::PlanningOverlay current_overlay;
-            {
+            if (!snapshot.valid()) {
                 std::lock_guard<std::mutex> lk(g_map_publish_mutex);
                 snapshot = g_latest_map_snapshot;
             }
@@ -894,6 +1169,12 @@ int main(){
                 (!have_last_start_cell || !(start_cell == last_start_cell));
             const bool map_changed = snapshot.map_revision != last_planned_revision;
             const bool goal_changed = goal_revision != last_goal_revision;
+            const uint64_t completed_scan_count =
+                g_completed_scan_count.load(std::memory_order_acquire);
+            if (final_frontier_scan_pending &&
+                completed_scan_count >= final_frontier_scan_target_count) {
+                final_frontier_scan_pending = false;
+            }
             merged_newly_occupied_cells.clear();
             if (!pending_delta_events.empty()) {
                 size_t total_newly_occupied = 0;
@@ -923,34 +1204,37 @@ int main(){
                     snapshot,
                     current_overlay,
                     merged_newly_occupied_cells);
-            std::ostringstream trigger_log;
-            trigger_log << "[planner][trigger] wake_revision=" << observed_wake_revision
-                        << " map_revision=" << snapshot.map_revision
-                        << " last_planned_revision=" << last_planned_revision
-                        << " goal_revision=" << goal_revision
-                        << " last_goal_revision=" << last_goal_revision
-                        << " have_start_cell=" << (have_start_cell ? 1 : 0)
-                        << " start_cell=(" << start_cell.x << "," << start_cell.y << ")"
-                        << " have_last_start_cell=" << (have_last_start_cell ? 1 : 0)
-                        << " last_start_cell=(" << last_start_cell.x << "," << last_start_cell.y << ")"
-                        << " map_changed=" << (map_changed ? 1 : 0)
-                        << " goal_changed=" << (goal_changed ? 1 : 0)
-                        << " start_cell_changed=" << (start_cell_changed ? 1 : 0)
-                        << " have_active_overlay_path=" << (have_active_overlay_path ? 1 : 0)
-                        << " delta_events=" << pending_delta_events.size()
-                        << " delta_overflowed=" << (delta_overflowed ? 1 : 0)
-                        << " new_occupancy_hits_path=" << (new_occupancy_hits_path ? 1 : 0)
-                        << " newly_occupied_count=" << merged_newly_occupied_cells.size()
-                        << " snapshot_timestamp=" << snapshot.timestamp
-                        << " pose_timestamp=" << pose_snapshot.timestamp;
-            wasm_log_line(trigger_log.str());
+            if (kEnablePlannerWakeLogs) {
+                std::ostringstream trigger_log;
+                trigger_log << "[planner][trigger] map_revision=" << snapshot.map_revision
+                            << " last_planned_revision=" << last_planned_revision
+                            << " goal_revision=" << goal_revision
+                            << " last_goal_revision=" << last_goal_revision
+                            << " have_start_cell=" << (have_start_cell ? 1 : 0)
+                            << " start_cell=(" << start_cell.x << "," << start_cell.y << ")"
+                            << " have_last_start_cell=" << (have_last_start_cell ? 1 : 0)
+                            << " last_start_cell=(" << last_start_cell.x << "," << last_start_cell.y << ")"
+                            << " map_changed=" << (map_changed ? 1 : 0)
+                            << " goal_changed=" << (goal_changed ? 1 : 0)
+                            << " start_cell_changed=" << (start_cell_changed ? 1 : 0)
+                            << " have_active_overlay_path=" << (have_active_overlay_path ? 1 : 0)
+                            << " delta_events=" << pending_delta_events.size()
+                            << " delta_overflowed=" << (delta_overflowed ? 1 : 0)
+                            << " new_occupancy_hits_path=" << (new_occupancy_hits_path ? 1 : 0)
+                            << " newly_occupied_count=" << merged_newly_occupied_cells.size()
+                            << " snapshot_timestamp=" << snapshot.timestamp
+                            << " pose_timestamp=" << pose_snapshot.timestamp;
+                wasm_log_line(trigger_log.str());
+            }
             // Skip case 1: nothing has changed and no valid plan exists yet — wait for
             // the first real trigger (goal set, map update, or robot moves a cell).
             if (!goal_changed &&
                 !last_planned_revision &&
                 !map_changed &&
                 !start_cell_changed) {
-                wasm_log_line("case 1: no changes and no valid plan");
+                if (kEnablePlannerWakeLogs) {
+                    wasm_log_line("case 1: no changes and no valid plan");
+                }
                 continue;
             }
             // Skip case 2: a valid plan already exists and nothing relevant has changed —
@@ -959,7 +1243,9 @@ int main(){
                 last_planned_revision > 0 &&
                 !map_changed &&
                 !start_cell_changed) {
-                wasm_log_line("case 2: valid plan and path is good");
+                if (kEnablePlannerWakeLogs) {
+                    wasm_log_line("case 2: valid plan and path is good");
+                }
                 continue;
             }
             if (map_changed &&
@@ -968,14 +1254,18 @@ int main(){
                 have_active_overlay_path &&
                 !delta_overflowed &&
                 !new_occupancy_hits_path) {
-                wasm_log_line("case 3: map delta misses inflated path corridor");
+                if (kEnablePlannerWakeLogs) {
+                    wasm_log_line("case 3: map delta misses inflated path corridor");
+                }
                 last_planned_revision = snapshot.map_revision;
                 continue;
             }
             // No case-3 rate-limiter: D* Lite only re-expands cells near changed
             // obstacles, so replanning on every new scan is cheap.
 
-            wasm_log_line("redrawing planning overlay");
+            if (kEnablePlannerWakeLogs) {
+                wasm_log_line("redrawing planning overlay");
+            }
             if (goal_changed) {
                 set_autonomy_substate(autonomy::AutonomySubstate::GOAL_SELECTION, "goal_changed");
             } else {
@@ -989,6 +1279,12 @@ int main(){
                     kRenderWidth,
                     kRenderHeight);
             const bool published_path = !overlay.path_grid.empty();
+            const bool have_frontier_candidates = !overlay.frontier_candidates.empty();
+            const bool manual_goal_active = planning::bridge::has_active_goal();
+            const bool no_reachable_frontiers =
+                !manual_goal_active && !have_frontier_candidates;
+            const bool frontier_confirmation_scan_complete =
+                completed_scan_count > frontier_exhaustion_scan_baseline_count;
             last_planned_revision = snapshot.map_revision;
             last_goal_revision = goal_revision;
             if (have_start_cell) {
@@ -999,14 +1295,39 @@ int main(){
                 std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
                 g_latest_plan_overlay = std::move(overlay);
             }
+            if (goal_changed || published_path || have_frontier_candidates) {
+                final_frontier_scan_pending = false;
+                no_reachable_frontiers_logged = false;
+                final_frontier_scan_target_count = 0;
+                frontier_exhaustion_scan_baseline_count = completed_scan_count;
+            }
             if (!published_path) {
                 set_autonomy_substate(autonomy::AutonomySubstate::NO_PATH_AVAILABLE, "planner_produced_no_path");
-                if (!goal_changed &&
-                    g_planner_initialized.load(std::memory_order_acquire) &&
-                    !g_scan_requested.load(std::memory_order_acquire) &&
-                    !g_scan_active.load(std::memory_order_acquire)) {
-                    set_autonomy_substate(autonomy::AutonomySubstate::SCAN_REQUESTED, "planner_requested_scan");
+                if (no_reachable_frontiers &&
+                    !final_frontier_scan_pending &&
+                    frontier_confirmation_scan_complete) {
+                    if (!no_reachable_frontiers_logged) {
+                        wasm_log_line(
+                            "[autonomy][frontier] no reachable frontiers after confirmation "
+                            "4x90 scan; declaring map complete");
+                        enter_no_reachable_frontiers_terminal_state();
+                        no_reachable_frontiers_logged = true;
+                    }
+                } else if (no_reachable_frontiers &&
+                           !final_frontier_scan_pending &&
+                           g_planner_initialized.load(std::memory_order_acquire) &&
+                           !g_scan_requested.load(std::memory_order_acquire) &&
+                           !g_scan_active.load(std::memory_order_acquire)) {
+                    wasm_log_line(
+                        "[autonomy][frontier] no reachable frontiers; requesting confirmation "
+                        "4x90 scan before terminating");
+                    set_autonomy_substate(
+                        autonomy::AutonomySubstate::SCAN_REQUESTED,
+                        "planner_requested_frontier_confirmation_scan");
                     g_scan_requested.store(true, std::memory_order_release);
+                    final_frontier_scan_pending = true;
+                    final_frontier_scan_target_count = completed_scan_count + 1;
+                    no_reachable_frontiers_logged = false;
                 } else {
                     set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "planner_produced_no_path_wait");
                 }
@@ -1021,23 +1342,48 @@ int main(){
 
     std::thread telemetry_thread([&m_pose](){
         mapping::PoseTrailState pose_trail;
+        mapping::MapSnapshot cached_snapshot;
+        planning::bridge::PlanningOverlay cached_overlay;
         uint64_t last_rendered_map_revision = 0;
-        uint64_t last_rendered_path_revision = 0;
+        uint64_t last_rendered_overlay_revision = 0;
+        uint64_t cached_overlay_revision = 0;
+        double cached_snapshot_timestamp = -1.0;
         double last_rendered_pose_timestamp = -1.0;
+        double last_rendered_pose_visual_timestamp = -1.0;
         double last_pose_trail_timestamp = -1.0;
         core::PoseSE2d last_trail_pose{};
         bool have_last_trail_pose = false;
         while (true) {
-            mapping::MapSnapshot snapshot;
-            planning::bridge::PlanningOverlay overlay;
-            {
-                std::lock_guard<std::mutex> lk(g_map_publish_mutex);
-                snapshot = g_latest_map_snapshot;
+            const uint64_t latest_map_revision =
+                g_map_update_revision.load(std::memory_order_acquire);
+            if (!cached_snapshot.valid() ||
+                cached_snapshot.map_revision != latest_map_revision) {
+                mapping::MapSnapshot next_snapshot;
+                publish_latest_map_snapshot_if_needed(
+                    latest_map_revision,
+                    &next_snapshot);
+                if (!next_snapshot.valid()) {
+                    std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+                    next_snapshot = g_latest_map_snapshot;
+                }
+                if (!next_snapshot.valid()) {
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(kTelemetryRenderIntervalMs));
+                    continue;
+                }
+                cached_snapshot = std::move(next_snapshot);
+                cached_snapshot_timestamp = cached_snapshot.timestamp;
             }
-            {
-                std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
-                overlay = g_latest_plan_overlay;
+
+            const uint64_t overlay_revision = planning::bridge::latest_overlay_revision();
+            if (overlay_revision != cached_overlay_revision) {
+                std::lock_guard<std::mutex> plan_lk(g_plan_publish_mutex);
+                cached_overlay = g_latest_plan_overlay;
+                cached_overlay_revision = overlay_revision;
             }
+
+            mapping::MapSnapshot& snapshot = cached_snapshot;
+            planning::bridge::PlanningOverlay& overlay = cached_overlay;
             if (!snapshot.valid()) {
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(kTelemetryRenderIntervalMs));
@@ -1051,18 +1397,18 @@ int main(){
                 continue;
             }
             snapshot.pose = pose_log_to_se2(pose_snapshot);
-            snapshot.timestamp = std::max(snapshot.timestamp, pose_snapshot.timestamp);
+            snapshot.timestamp = std::max(cached_snapshot_timestamp, pose_snapshot.timestamp);
 
-            const uint64_t path_revision = planning::bridge::copy_latest_plan_world(nullptr);
             const bool map_changed = snapshot.map_revision != last_rendered_map_revision;
-            const bool path_changed = path_revision != last_rendered_path_revision;
+            const bool overlay_changed = overlay_revision != last_rendered_overlay_revision;
             const bool pose_changed = pose_snapshot.timestamp > last_rendered_pose_timestamp;
-            if (!map_changed && !path_changed && !pose_changed) {
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(kTelemetryRenderIntervalMs));
-                continue;
-            }
+            const bool pose_visual_changed =
+                pose_changed &&
+                ((last_rendered_pose_visual_timestamp < 0.0) ||
+                 ((pose_snapshot.timestamp - last_rendered_pose_visual_timestamp) >=
+                  kTelemetryPoseRenderMinIntervalSec));
 
+            bool pose_trail_changed = false;
             const bool time_gate =
                 (last_pose_trail_timestamp < 0.0) ||
                 ((pose_snapshot.timestamp - last_pose_trail_timestamp) >=
@@ -1085,17 +1431,25 @@ int main(){
                 last_trail_pose = snapshot.pose;
                 last_pose_trail_timestamp = pose_snapshot.timestamp;
                 have_last_trail_pose = true;
+                pose_trail_changed = true;
+            }
+            if (!map_changed && !overlay_changed && !pose_visual_changed && !pose_trail_changed) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(kTelemetryRenderIntervalMs));
+                continue;
             }
             mapping::visualization::render_map_frame(
                 snapshot,
                 pose_trail,
                 overlay,
+                overlay_revision,
                 kRenderWidth,
                 kRenderHeight,
                 g_map_image);
             last_rendered_map_revision = snapshot.map_revision;
-            last_rendered_path_revision = path_revision;
+            last_rendered_overlay_revision = overlay_revision;
             last_rendered_pose_timestamp = pose_snapshot.timestamp;
+            last_rendered_pose_visual_timestamp = pose_snapshot.timestamp;
             std::this_thread::sleep_for(
                 std::chrono::milliseconds(kTelemetryRenderIntervalMs));
         }
@@ -1108,9 +1462,9 @@ int main(){
         std::vector<core::Vector3d> planned_path_world;
         uint64_t planned_path_revision = 0;
         core::PoseSE2d wheel_pose{};
-        double last_wheel_pose_log_timestamp = -1.0;
         double last_goal_check_log_timestamp = -1.0;
         bool goal_reached_logged = false;
+        bool wheel_odom_origin_initialized = false;
 
         while(true){
             read_wheel_odometry(&odom);
@@ -1125,6 +1479,13 @@ int main(){
             {
                 std::lock_guard<std::mutex> lk(g_latest_wheel_odom_mutex);
                 g_latest_wheel_odom = odom;
+            }
+
+            if (!wheel_odom_origin_initialized) {
+                // Treat the first valid sample of each WASM run as the odometry origin
+                // so any residual startup delta does not translate the first scan.
+                wheel_odom_origin_initialized = true;
+                continue;
             }
 
             if (pose_source == PoseSource::fused_IMU_wheel_odom) {
@@ -1155,33 +1516,46 @@ int main(){
                 }
                 pose_copy = g_pose;
                 record_pose_history_locked(pose_copy);
+                if (pose_source == PoseSource::wheel_odom) {
+                    core::recorder::enqueue_pose(
+                        pose_copy,
+                        core::recorder::PoseDataSource::kWheelOdometry);
+                } else if (pose_source == PoseSource::fused_IMU_wheel_odom) {
+                    core::recorder::enqueue_pose(
+                        pose_copy,
+                        core::recorder::PoseDataSource::kFusedImuWheelOdometry);
+                }
             } else {
                 std::lock_guard<std::mutex> lk(m_pose);
                 pose_copy = g_pose;
-            }
-
-            if (kEnableWheelPoseLogging &&
-                (last_wheel_pose_log_timestamp < 0.0 ||
-                 (odom.timestamp - last_wheel_pose_log_timestamp) >= kWheelPoseLogIntervalSec)) {
-                // rerun_log_pose_wheel(&pose_copy);
-                last_wheel_pose_log_timestamp = odom.timestamp;
             }
 
             const RobotState state = g_state.load(std::memory_order_acquire);
             if (state != RobotState::AUTONOMY_ENGAGED) {
                 continue;
             }
+            if (g_no_reachable_frontiers_terminal.load(std::memory_order_acquire)) {
+                path_follower.clear_path();
+                planned_path_world.clear();
+                motors.stop();
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                continue;
+            }
             if (g_scan_active.load(std::memory_order_acquire)) {
                 continue;
             }
 
+            const controls::Pose2D fused_pose{
+                pose_copy.translation.x,
+                pose_copy.translation.y,
+                core::quat_to_euler_yaw(pose_copy.quaternion)};
             const uint64_t latest_path_revision =
                 planning::bridge::copy_latest_plan_world(&planned_path_world);
             if (latest_path_revision != planned_path_revision) {
                 planned_path_revision = latest_path_revision;
                 goal_reached_logged = false;
                 if (!planned_path_world.empty()) {
-                    path_follower.set_path(planned_path_world);
+                    path_follower.set_path(planned_path_world, &fused_pose);
                     set_autonomy_substate(autonomy::AutonomySubstate::FOLLOWING_PATH, "control_loaded_path");
                     if (kEnableVerboseAutonomyLogs) {
                         std::ostringstream path_log;
@@ -1202,10 +1576,6 @@ int main(){
                 continue;
             }
 
-            const controls::Pose2D fused_pose{
-                pose_copy.translation.x,
-                pose_copy.translation.y,
-                core::quat_to_euler_yaw(pose_copy.quaternion)};
             const double dt_seconds = std::max(
                 1e-3,
                 static_cast<double>(std::max(1, odom.sample_period_ms)) * 1e-3);
@@ -1267,8 +1637,9 @@ int main(){
 
     imu_thread.join();
     lidar_camera_thread.join();
+    lidar_preview_thread.join();
     mapping_thread.join();
-    planner_thread.join();
+    // planner_thread.join();
     telemetry_thread.join();
-    control_thread.join();
+    // control_thread.join();
 }

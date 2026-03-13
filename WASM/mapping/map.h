@@ -9,8 +9,8 @@
 
 namespace mapping{
 
-    constexpr int kMaxMapPoints = 20000;
-    constexpr int kMaxFreeRays  = kMaxMapPoints;
+    constexpr int kMaxMapPoints = 8000;
+    constexpr int kMaxFreeRays  = 512;
     class Map{
       public:
         static constexpr int32_t kMaxImageWidth = 512;
@@ -18,13 +18,13 @@ namespace mapping{
 
         // Map parameters (mirroring the ROS node)
         static constexpr float kGridResolution = 0.02f; // meters
-        static constexpr int32_t kMapSizeX = 400;
-        static constexpr int32_t kMapSizeY = 400;
-        static constexpr int16_t kMinCellScore = -16;
-        static constexpr int16_t kMaxCellScore = 16;
-        static constexpr int16_t kHitIncrement = 4;
+        static constexpr int32_t kMapSizeX = 150;
+        static constexpr int32_t kMapSizeY = 150;
+        static constexpr int16_t kMinCellScore = -32;
+        static constexpr int16_t kMaxCellScore = 32;
+        static constexpr int16_t kHitIncrement = 8;
         static constexpr int16_t kFreeDecrement = 1;
-        static constexpr int16_t kOccupiedThreshold = 4;
+        static constexpr int16_t kOccupiedThreshold = 8;
         static constexpr int16_t kClearThreshold = 0;
         static constexpr float kMinRange = 0.1f; // meters
 
@@ -49,14 +49,13 @@ namespace mapping{
             double wx,
             double wy,
             std::vector<planning::GridCoord>* newly_occupied_cells = nullptr,
-            std::vector<uint8_t>* newly_occupied_mask = nullptr);
+            std::vector<uint32_t>* newly_occupied_mask = nullptr,
+            uint32_t newly_occupied_stamp = 0);
         void integrate_free_world(
             int32_t start_x,
             int32_t start_y,
             double wx,
-            double wy,
-            std::vector<planning::GridCoord>* changed_cells = nullptr,
-            std::vector<uint8_t>* changed_mask = nullptr);
+            double wy);
         void draw_map(
             const core::PoseSE2d& pose,
             int32_t point_count,
@@ -73,7 +72,8 @@ namespace mapping{
             int32_t x1,
             int32_t y1,
             std::vector<planning::GridCoord>* newly_occupied_cells,
-            std::vector<uint8_t>* newly_occupied_mask);
+            std::vector<uint32_t>* newly_occupied_mask,
+            uint32_t newly_occupied_stamp);
         void integrate_scan(
             const core::PoseSE2d& pose,
             int32_t point_count,

@@ -617,10 +617,99 @@
             cursor: grabbing;
         }
 
+        .map-header {
+            margin-bottom: 12px;
+        }
+
+        .map-title-block {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .map-title-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .map-title-row .map-stats {
+            margin-left: auto;
+            justify-content: flex-end;
+        }
+
+        .map-toolbar-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .map-layer-toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .map-export-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .map-layer-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: #eef2ff;
+            color: #334155;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .map-layer-toggle input {
+            margin: 0;
+        }
+
+        .map-action-btn {
+            width: auto;
+            margin-bottom: 0;
+            padding: 8px 10px;
+            font-size: 13px;
+            line-height: 1.2;
+        }
+
+        .map-stage {
+            position: absolute;
+            left: 0;
+            top: 0;
+            transform-origin: top left;
+            pointer-events: none;
+        }
+
         #mapPreview {
             position: absolute;
             left: 0;
             top: 0;
+            width: 100%;
+            height: 100%;
+            display: none;
+            image-rendering: crisp-edges;
+            transform-origin: top left;
+            user-select: none;
+            -webkit-user-drag: none;
+            pointer-events: none;
+        }
+
+        .map-layer-canvas {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
             display: none;
             image-rendering: crisp-edges;
             transform-origin: top left;
@@ -784,7 +873,7 @@
 <body>
     <div id="appContainer" class="container disconnected-layout">
         <div class="title-block">
-            <h1>🚀 Roamr WebSocket Client</h1>
+            <h1>Roamr WebSocket Client</h1>
         </div>
 
         <div class="top-bar">
@@ -822,7 +911,7 @@
             </div>
 
             <div id="joystickContainer" class="joystick-container">
-                <div class="joystick-title">🕹️ Teleoperation</div>
+                <div class="joystick-title">Teleoperation</div>
                 <div class="joystick-wrapper">
                     <div class="teleop-control-panel">
                         <canvas id="joystick" width="180" height="180"></canvas>
@@ -918,27 +1007,63 @@
         </div>
 
         <div class="viewer-grid">
-            <div id="mapSection" class="map-section">
-                <div class="map-header">
-                    <div class="map-title">🗺️ WASM Map Preview</div>
-                    <div class="map-stats">
-                        <span class="map-stat">Frames: <strong id="mapFrames">0</strong></span>
-                        <span class="map-stat">Size: <strong id="mapSize">0 KB</strong></span>
-                        <span class="map-stat">Time: <strong id="mapTimestamp">-</strong></span>
+                <div id="mapSection" class="map-section">
+                    <div class="map-header">
+                        <div class="map-title-block">
+                            <div class="map-title-row">
+                                <div class="map-title">WASM Map Preview</div>
+                                <div class="map-stats">
+                                    <span class="map-stat">Frames: <strong id="mapFrames">0</strong></span>
+                                    <span class="map-stat">Size: <strong id="mapSize">0 KB</strong></span>
+                                    <span class="map-stat">Time: <strong id="mapTimestamp">-</strong></span>
+                                </div>
+                            </div>
+                            <div class="map-toolbar-row">
+                                <div class="map-layer-toolbar">
+                                    <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerBase" checked>Base</label>
+                                    <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerOdometry" checked>Odometry</label>
+                                    <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerPlanning" checked>Planning</label>
+                                    <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerFrontiers" checked>Frontiers</label>
+                                </div>
+                                <div class="map-export-actions">
+                                    <button
+                                        id="saveMapImageBtn"
+                                        class="btn-secondary map-action-btn"
+                                        onclick="saveBaseMapImage()"
+                                        disabled
+                                    >
+                                        Save Image
+                                    </button>
+                                    <button
+                                        id="saveMapArrayBtn"
+                                        class="btn-secondary map-action-btn"
+                                        onclick="saveBaseMapArray()"
+                                        disabled
+                                    >
+                                        Save Array
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="mapContainer" class="map-container">
+                        <div id="mapStage" class="map-stage">
+                            <img id="mapPreview" alt="WASM Map Preview">
+                            <canvas id="mapLayerBase" class="map-layer-canvas" aria-label="WASM Base Layer"></canvas>
+                            <canvas id="mapLayerOdometry" class="map-layer-canvas" aria-label="WASM Odometry Layer"></canvas>
+                            <canvas id="mapLayerPlanning" class="map-layer-canvas" aria-label="WASM Planning Layer"></canvas>
+                            <canvas id="mapLayerFrontiers" class="map-layer-canvas" aria-label="WASM Frontiers Layer"></canvas>
+                        </div>
+                        <div class="map-placeholder" id="mapPlaceholder">
+                            <div class="map-placeholder-icon">🗺️</div>
+                            <div>Waiting for map preview...</div>
+                        </div>
                     </div>
                 </div>
-                <div id="mapContainer" class="map-container">
-                    <img id="mapPreview" alt="WASM Map Preview">
-                    <div class="map-placeholder" id="mapPlaceholder">
-                        <div class="map-placeholder-icon">🗺️</div>
-                        <div>Waiting for map preview...</div>
-                    </div>
-                </div>
-            </div>
 
             <div id="consoleSection" class="console-section">
                 <div class="console-header">
-                    <div class="console-title">🧾 WASM Console</div>
+                    <div class="console-title">WASM Console</div>
                     <div class="console-stats">
                         <span class="console-stat">Lines: <strong id="consoleLineCount">0</strong></span>
                     </div>
@@ -958,7 +1083,7 @@
         <div class="viewer-grid">
             <div id="videoSection" class="video-section">
                 <div class="video-header">
-                    <div class="video-title">📹 Live Video Stream</div>
+                    <div class="video-title">Live Video Stream</div>
                     <div class="video-stats">
                         <span class="video-stat">FPS: <strong id="videoFps">0</strong></span>
                         <span class="video-stat">Frames: <strong id="videoFrames">0</strong></span>
@@ -979,7 +1104,7 @@
 
             <div id="pointCloudSection" class="point-cloud-section">
                 <div class="point-cloud-header">
-                    <div class="point-cloud-title">🌐 WASM Point Cloud</div>
+                    <div class="point-cloud-title">WASM Point Cloud</div>
                     <div class="point-cloud-stats">
                         <span class="point-cloud-stat">FPS: <strong id="pointCloudFps">0</strong></span>
                         <span class="point-cloud-stat">Frames: <strong id="pointCloudFrames">0</strong></span>
@@ -1048,6 +1173,8 @@
         const pointCloudSection = document.getElementById('pointCloudSection');
         const mapSection = document.getElementById('mapSection');
         const consoleSection = document.getElementById('consoleSection');
+        const consoleHeaderEl = consoleSection.querySelector('.console-header');
+        const consoleContainerEl = consoleSection.querySelector('.console-container');
         const teleopRttEl = document.getElementById('teleopRtt');
         const teleopPhoneBleEl = document.getElementById('teleopPhoneBle');
         const teleopBleOdomEl = document.getElementById('teleopBleOdom');
@@ -1064,11 +1191,32 @@
         const pointCloudTimestampEl = document.getElementById('pointCloudTimestamp');
         const pointCloudCtx = pointCloudCanvas.getContext('2d');
         const mapContainerEl = document.getElementById('mapContainer');
+        const mapStageEl = document.getElementById('mapStage');
         const mapPreviewEl = document.getElementById('mapPreview');
+        const mapLayerCanvasEls = {
+            base: document.getElementById('mapLayerBase'),
+            odometry: document.getElementById('mapLayerOdometry'),
+            planning: document.getElementById('mapLayerPlanning'),
+            frontiers: document.getElementById('mapLayerFrontiers')
+        };
+        const mapLayerCtxByLayer = Object.fromEntries(
+            Object.entries(mapLayerCanvasEls).map(([key, canvas]) => [
+                key,
+                canvas.getContext('2d', { alpha: true })
+            ])
+        );
+        const mapLayerToggleEls = {
+            base: document.getElementById('toggleLayerBase'),
+            odometry: document.getElementById('toggleLayerOdometry'),
+            planning: document.getElementById('toggleLayerPlanning'),
+            frontiers: document.getElementById('toggleLayerFrontiers')
+        };
         const mapPlaceholderEl = document.getElementById('mapPlaceholder');
         const mapFramesEl = document.getElementById('mapFrames');
         const mapSizeEl = document.getElementById('mapSize');
         const mapTimestampEl = document.getElementById('mapTimestamp');
+        const saveMapImageBtn = document.getElementById('saveMapImageBtn');
+        const saveMapArrayBtn = document.getElementById('saveMapArrayBtn');
         const consoleLogEl = document.getElementById('consoleLog');
         const consolePlaceholderEl = document.getElementById('consolePlaceholder');
         const consoleLineCountEl = document.getElementById('consoleLineCount');
@@ -1077,6 +1225,15 @@
         const POINTS_BINARY_TYPE_POINTS = 1;
         const POINTS_BINARY_FLAG_COLORS = 1;
         const POINTS_BINARY_HEADER_SIZE = 20;
+        const MAP_LAYER_BINARY_MAGIC = [0x52, 0x52, 0x4D, 0x31];
+        const MAP_LAYER_BINARY_TYPE_LAYER = 1;
+        const MAP_LAYER_BINARY_HEADER_SIZE = 32;
+        const MAP_LAYER_ID_TO_NAME = {
+            1: 'base',
+            2: 'odometry',
+            3: 'planning',
+            4: 'frontiers'
+        };
         const MAX_CONSOLE_LINES = 200;
 
         // Joystick variables
@@ -1105,6 +1262,29 @@
         let mapViewerInitialized = false;
         let pointCloudDiagnosticTimer = null;
         let mapFrameCount = 0;
+        const requiredMapLayers = ['base', 'odometry', 'planning', 'frontiers'];
+        const mapLayerState = {
+            hasLayerFrames: false,
+            displayedTimestamp: null,
+            latestTimestampByLayer: {
+                base: null,
+                odometry: null,
+                planning: null,
+                frontiers: null
+            },
+            loadedByLayer: {
+                base: false,
+                odometry: false,
+                planning: false,
+                frontiers: false
+            },
+            latestSizeByLayer: {
+                base: 0,
+                odometry: 0,
+                planning: 0,
+                frontiers: 0
+            }
+        };
 
         const wasmControlState = {
             files: [],
@@ -1172,6 +1352,7 @@
                 startPointCloudDiagnosticTimer();
                 updateWasmControlUI();
                 schedulePointCloudRender();
+                syncConsoleHeightToMap();
             } else {
                 statusEl.className = 'status disconnected';
                 statusEl.innerHTML = '<span class="status-dot"></span><span>Disconnected</span>';
@@ -1187,6 +1368,7 @@
                 pointCloudSection.classList.remove('active');
                 mapSection.classList.remove('active');
                 consoleSection.classList.remove('active');
+                syncConsoleHeightToMap();
                 // Reset video
                 document.getElementById('videoStream').style.display = 'none';
                 document.getElementById('videoPlaceholder').style.display = 'block';
@@ -1268,6 +1450,10 @@
         }
 
         function handleBinaryMessage(arrayBuffer) {
+            if (isMapLayerBinaryMessage(arrayBuffer)) {
+                handleMapLayerBinaryFrame(arrayBuffer);
+                return;
+            }
             if (isPointCloudBinaryMessage(arrayBuffer)) {
                 handlePointCloudBinaryFrame(arrayBuffer);
                 return;
@@ -1283,6 +1469,16 @@
             const bytes = new Uint8Array(arrayBuffer, 0, 5);
             return POINTS_BINARY_MAGIC.every((value, index) => bytes[index] === value)
                 && bytes[4] === POINTS_BINARY_TYPE_POINTS;
+        }
+
+        function isMapLayerBinaryMessage(arrayBuffer) {
+            if (!(arrayBuffer instanceof ArrayBuffer) || arrayBuffer.byteLength < MAP_LAYER_BINARY_HEADER_SIZE) {
+                return false;
+            }
+
+            const bytes = new Uint8Array(arrayBuffer, 0, 5);
+            return MAP_LAYER_BINARY_MAGIC.every((value, index) => bytes[index] === value)
+                && bytes[4] === MAP_LAYER_BINARY_TYPE_LAYER;
         }
 
         function handleVideoFrame(arrayBuffer) {
@@ -1397,6 +1593,11 @@
                 return;
             }
 
+            if (parsed.type === 'map_layer_frame') {
+                handleMapLayerFrameMessage(parsed);
+                return;
+            }
+
             if (parsed.type === 'wasm_console_reset') {
                 resetConsoleOutput();
                 return;
@@ -1415,6 +1616,9 @@
                 return;
             }
 
+            if (mapLayerState.hasLayerFrames) {
+                return;
+            }
             mapPreviewEl.src = `data:image/jpeg;base64,${message.jpeg_b64}`;
             mapPreviewEl.style.display = 'block';
             mapPlaceholderEl.style.display = 'none';
@@ -1423,6 +1627,118 @@
             mapFramesEl.textContent = mapFrameCount.toLocaleString();
             mapSizeEl.textContent = `${((message.jpeg_b64.length * 3) / 4 / 1024).toFixed(1)} KB`;
             mapTimestampEl.textContent = formatPointCloudTimestamp(message.timestamp);
+        }
+
+        function handleMapLayerBinaryFrame(arrayBuffer) {
+            const view = new DataView(arrayBuffer);
+            const timestamp = view.getFloat64(8, true);
+            const width = view.getUint32(16, true);
+            const height = view.getUint32(20, true);
+            const channels = view.getUint32(24, true);
+            const layerId = view.getUint32(28, true);
+            const layer = MAP_LAYER_ID_TO_NAME[layerId];
+            if (!layer || !mapLayerCanvasEls[layer]) {
+                return;
+            }
+            if (width <= 0 || height <= 0 || channels <= 0) {
+                return;
+            }
+
+            const pixelByteCount = width * height * channels;
+            if ((MAP_LAYER_BINARY_HEADER_SIZE + pixelByteCount) > arrayBuffer.byteLength) {
+                return;
+            }
+
+            const latestLayerTimestamp = mapLayerState.latestTimestampByLayer[layer];
+            if (Number.isFinite(timestamp) &&
+                latestLayerTimestamp !== null &&
+                timestamp < (latestLayerTimestamp - 1e-6)) {
+                return;
+            }
+
+            applyBinaryMapLayerUpdate(
+                layer,
+                Number.isFinite(timestamp) ? timestamp : null,
+                width,
+                height,
+                channels,
+                pixelByteCount,
+                arrayBuffer
+            );
+        }
+
+        function handleMapLayerFrameMessage(message) {
+            // Legacy text-based layer transport is intentionally ignored.
+            // Current builds stream raw RGBA map layers over binary frames.
+        }
+
+        function applyBinaryMapLayerUpdate(layer, timestamp, width, height, channels, encodedSize, arrayBuffer) {
+            mapLayerState.hasLayerFrames = true;
+            const layerCanvas = mapLayerCanvasEls[layer];
+            const layerCtx = mapLayerCtxByLayer[layer];
+            if (!layerCanvas || !layerCtx) {
+                return;
+            }
+
+            if (layerCanvas.width !== width) {
+                layerCanvas.width = width;
+            }
+            if (layerCanvas.height !== height) {
+                layerCanvas.height = height;
+            }
+
+            let imageData;
+            if (channels === 4) {
+                const rgbaBytes = new Uint8ClampedArray(
+                    arrayBuffer,
+                    MAP_LAYER_BINARY_HEADER_SIZE,
+                    width * height * 4
+                );
+                imageData = new ImageData(rgbaBytes, width, height);
+            } else if (channels === 3) {
+                const rgbBytes = new Uint8Array(
+                    arrayBuffer,
+                    MAP_LAYER_BINARY_HEADER_SIZE,
+                    width * height * 3
+                );
+                const rgbaBytes = new Uint8ClampedArray(width * height * 4);
+                for (let srcIndex = 0, dstIndex = 0; srcIndex < rgbBytes.length; srcIndex += 3, dstIndex += 4) {
+                    rgbaBytes[dstIndex] = rgbBytes[srcIndex];
+                    rgbaBytes[dstIndex + 1] = rgbBytes[srcIndex + 1];
+                    rgbaBytes[dstIndex + 2] = rgbBytes[srcIndex + 2];
+                    rgbaBytes[dstIndex + 3] = 255;
+                }
+                imageData = new ImageData(rgbaBytes, width, height);
+            } else {
+                return;
+            }
+
+            layerCtx.putImageData(imageData, 0, 0);
+            layerCanvas.dataset.loaded = '1';
+            mapLayerState.loadedByLayer[layer] = true;
+            mapLayerState.latestSizeByLayer[layer] = encodedSize;
+            mapLayerState.latestTimestampByLayer[layer] = timestamp;
+
+            updateMapLayerVisibility();
+            updateMapExportButtons();
+            mapPlaceholderEl.style.display = 'none';
+            updateMapTransform();
+
+            if (timestamp !== null &&
+                (mapLayerState.displayedTimestamp === null ||
+                 timestamp > (mapLayerState.displayedTimestamp + 1e-6))) {
+                mapLayerState.displayedTimestamp = timestamp;
+                mapFrameCount += 1;
+                mapFramesEl.textContent = mapFrameCount.toLocaleString();
+                mapTimestampEl.textContent = formatPointCloudTimestamp(timestamp);
+            } else if (mapLayerState.displayedTimestamp === null && timestamp === null) {
+                mapFrameCount += 1;
+                mapFramesEl.textContent = mapFrameCount.toLocaleString();
+            }
+
+            const totalBase64Bytes = Object.values(mapLayerState.latestSizeByLayer)
+                .reduce((sum, value) => sum + value, 0);
+            mapSizeEl.textContent = `${((totalBase64Bytes * 3) / 4 / 1024).toFixed(1)} KB`;
         }
 
         function handleWasmLogMessage(message) {
@@ -1664,7 +1980,7 @@
 
             if (isFirstFrame) {
                 clearPointCloudDiagnosticTimer();
-                addLog('🌐 Point cloud stream active');
+                addLog('Point cloud stream active');
             }
 
             const now = performance.now();
@@ -1717,6 +2033,85 @@
             return `${timestamp.toFixed(3)} s`;
         }
 
+        function hasBaseMapLayer() {
+            const baseCanvas = mapLayerCanvasEls.base;
+            return Boolean(
+                baseCanvas &&
+                baseCanvas.dataset.loaded === '1' &&
+                baseCanvas.width > 0 &&
+                baseCanvas.height > 0
+            );
+        }
+
+        function updateMapExportButtons() {
+            const hasBaseLayer = hasBaseMapLayer();
+            saveMapImageBtn.disabled = !hasBaseLayer;
+            saveMapArrayBtn.disabled = !hasBaseLayer;
+        }
+
+        function buildMapExportBaseName() {
+            const timestamp = mapLayerState.latestTimestampByLayer.base;
+            const timestampSuffix = Number.isFinite(timestamp)
+                ? `t${timestamp.toFixed(3).replace('.', '_')}s`
+                : 'latest';
+            return `roamr-base-map-${timestampSuffix}`;
+        }
+
+        function downloadBlob(blob, filename) {
+            const objectUrl = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = objectUrl;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+        }
+
+        function saveBaseMapImage() {
+            if (!hasBaseMapLayer()) {
+                return;
+            }
+
+            const baseCanvas = mapLayerCanvasEls.base;
+            baseCanvas.toBlob((blob) => {
+                if (!blob) {
+                    addLog('Failed to export base map image');
+                    return;
+                }
+
+                const filename = `${buildMapExportBaseName()}.png`;
+                downloadBlob(blob, filename);
+                addLog(`Saved base map image: ${filename}`);
+            }, 'image/png');
+        }
+
+        function saveBaseMapArray() {
+            if (!hasBaseMapLayer()) {
+                return;
+            }
+
+            const baseCanvas = mapLayerCanvasEls.base;
+            const baseCtx = mapLayerCtxByLayer.base;
+            if (!baseCtx) {
+                return;
+            }
+
+            const imageData = baseCtx.getImageData(0, 0, baseCanvas.width, baseCanvas.height);
+            const payload = {
+                width: baseCanvas.width,
+                height: baseCanvas.height,
+                channels: 4,
+                format: 'rgba',
+                timestamp_s: mapLayerState.latestTimestampByLayer.base,
+                data: Array.from(imageData.data)
+            };
+            const blob = new Blob([JSON.stringify(payload)], { type: 'application/json' });
+            const filename = `${buildMapExportBaseName()}.json`;
+            downloadBlob(blob, filename);
+            addLog(`Saved base map array: ${filename}`);
+        }
+
         function resetPointCloudData() {
             pointCloudState.points = null;
             pointCloudState.colors = null;
@@ -1739,13 +2134,45 @@
 
         function resetMapPreview() {
             mapFrameCount = 0;
+            mapLayerState.hasLayerFrames = false;
+            mapLayerState.displayedTimestamp = null;
+            mapLayerState.latestTimestampByLayer = {
+                base: null,
+                odometry: null,
+                planning: null,
+                frontiers: null
+            };
+            mapLayerState.loadedByLayer = {
+                base: false,
+                odometry: false,
+                planning: false,
+                frontiers: false
+            };
+            mapLayerState.latestSizeByLayer = {
+                base: 0,
+                odometry: 0,
+                planning: 0,
+                frontiers: 0
+            };
             mapFramesEl.textContent = '0';
             mapSizeEl.textContent = '0 KB';
             mapTimestampEl.textContent = '-';
             resetMapTransform();
             mapPreviewEl.removeAttribute('src');
             mapPreviewEl.style.display = 'none';
+            mapPreviewEl.dataset.loaded = '';
+            Object.entries(mapLayerCanvasEls).forEach(([key, canvas]) => {
+                const ctx = mapLayerCtxByLayer[key];
+                if (ctx && canvas.width > 0 && canvas.height > 0) {
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                }
+                canvas.width = 0;
+                canvas.height = 0;
+                canvas.style.display = 'none';
+                canvas.dataset.loaded = '';
+            });
             mapPlaceholderEl.style.display = 'block';
+            updateMapExportButtons();
         }
 
         function resetConsoleOutput() {
@@ -1903,6 +2330,7 @@
             const centerY = canvas.height / 2;
             const maxRadius = canvas.width / 2 - 40;
             const knobRadius = 35;
+            const maxMotorPercent = 20;
 
             let isDragging = false;
             let knobX = centerX;
@@ -1949,17 +2377,16 @@
             }
 
             function calculateMotorValues() {
-                // Normalize to -100 to 100
-                const x = ((knobX - centerX) / maxRadius) * 100;
-                const y = -((knobY - centerY) / maxRadius) * 100; // Invert Y
+                // Normalize joystick travel to the configured motor output cap.
+                const x = ((knobX - centerX) / maxRadius) * maxMotorPercent;
+                const y = -((knobY - centerY) / maxRadius) * maxMotorPercent; // Invert Y
 
                 // Differential drive
                 let left = y + x;
                 let right = y - x;
 
-                // Clamp to -100 to 100
-                left = Math.max(-100, Math.min(100, left));
-                right = Math.max(-100, Math.min(100, right));
+                left = Math.max(-maxMotorPercent, Math.min(maxMotorPercent, left));
+                right = Math.max(-maxMotorPercent, Math.min(maxMotorPercent, right));
 
                 return {
                     left: Math.round(left),
@@ -2177,8 +2604,15 @@
             }
             mapViewerInitialized = true;
 
+            Object.values(mapLayerToggleEls).forEach((toggleEl) => {
+                toggleEl.addEventListener('change', () => {
+                    updateMapLayerVisibility();
+                    updateMapTransform();
+                });
+            });
+
             mapContainerEl.addEventListener('pointerdown', (event) => {
-                if (mapPreviewEl.style.display === 'none') {
+                if (!hasVisibleMapContent()) {
                     return;
                 }
                 mapViewState.dragActive = true;
@@ -2218,7 +2652,7 @@
             mapContainerEl.addEventListener('pointerleave', stopMapDragging);
 
             mapContainerEl.addEventListener('wheel', (event) => {
-                if (mapPreviewEl.style.display === 'none') {
+                if (!hasVisibleMapContent()) {
                     return;
                 }
 
@@ -2277,8 +2711,10 @@
                 return null;
             }
 
-            const naturalWidth = mapPreviewEl.naturalWidth || containerWidth;
-            const naturalHeight = mapPreviewEl.naturalHeight || containerHeight;
+            const activeRenderable = getActiveMapRenderableElement();
+            const intrinsicSize = getRenderableIntrinsicSize(activeRenderable);
+            const naturalWidth = intrinsicSize?.width || containerWidth;
+            const naturalHeight = intrinsicSize?.height || containerHeight;
             if (naturalWidth <= 0 || naturalHeight <= 0) {
                 return null;
             }
@@ -2300,15 +2736,45 @@
         function updateMapTransform() {
             const metrics = getMapRenderMetrics();
             if (!metrics) {
+                syncConsoleHeightToMap();
                 return;
             }
 
             clampMapTransform();
-            mapPreviewEl.style.left = `${metrics.fittedLeft}px`;
-            mapPreviewEl.style.top = `${metrics.fittedTop}px`;
-            mapPreviewEl.style.width = `${metrics.fittedWidth}px`;
-            mapPreviewEl.style.height = `${metrics.fittedHeight}px`;
-            mapPreviewEl.style.transform = `translate(${mapViewState.offsetX}px, ${mapViewState.offsetY}px) scale(${mapViewState.scale})`;
+            mapStageEl.style.left = `${metrics.fittedLeft}px`;
+            mapStageEl.style.top = `${metrics.fittedTop}px`;
+            mapStageEl.style.width = `${metrics.fittedWidth}px`;
+            mapStageEl.style.height = `${metrics.fittedHeight}px`;
+            mapStageEl.style.transform = `translate(${mapViewState.offsetX}px, ${mapViewState.offsetY}px) scale(${mapViewState.scale})`;
+            syncConsoleHeightToMap();
+        }
+
+        function syncConsoleHeightToMap() {
+            if (!consoleContainerEl || !consoleHeaderEl) {
+                return;
+            }
+
+            const isMapVisible = mapSection.classList.contains('active');
+            const isConsoleVisible = consoleSection.classList.contains('active');
+            if (!isMapVisible || !isConsoleVisible) {
+                consoleContainerEl.style.height = '';
+                return;
+            }
+
+            const mapRect = mapSection.getBoundingClientRect();
+            if (mapRect.height <= 0) {
+                consoleContainerEl.style.height = '';
+                return;
+            }
+
+            const consoleSectionStyle = window.getComputedStyle(consoleSection);
+            const consoleHeaderStyle = window.getComputedStyle(consoleHeaderEl);
+            const paddingY = parseFloat(consoleSectionStyle.paddingTop) + parseFloat(consoleSectionStyle.paddingBottom);
+            const headerHeight = consoleHeaderEl.getBoundingClientRect().height;
+            const headerMarginBottom = parseFloat(consoleHeaderStyle.marginBottom) || 0;
+            const targetHeight = Math.max(120, Math.round(mapRect.height - paddingY - headerHeight - headerMarginBottom));
+
+            consoleContainerEl.style.height = `${targetHeight}px`;
         }
 
         function resetMapTransform() {
@@ -2318,6 +2784,58 @@
             mapViewState.dragActive = false;
             mapContainerEl.classList.remove('dragging');
             updateMapTransform();
+        }
+
+        function hasVisibleMapContent() {
+            if (mapLayerState.hasLayerFrames) {
+                return Object.entries(mapLayerCanvasEls).some(([key, canvas]) =>
+                    mapLayerToggleEls[key].checked && canvas.dataset.loaded === '1'
+                );
+            }
+            return mapPreviewEl.style.display !== 'none';
+        }
+
+        function getActiveMapRenderableElement() {
+            if (mapLayerState.hasLayerFrames) {
+                for (const key of ['base', 'planning', 'frontiers', 'odometry']) {
+                    const canvas = mapLayerCanvasEls[key];
+                    if (canvas && canvas.dataset.loaded === '1') {
+                        return canvas;
+                    }
+                }
+            }
+            return mapPreviewEl.style.display !== 'none' ? mapPreviewEl : null;
+        }
+
+        function getRenderableIntrinsicSize(element) {
+            if (!element) {
+                return null;
+            }
+            if (element instanceof HTMLCanvasElement) {
+                if (element.width > 0 && element.height > 0) {
+                    return { width: element.width, height: element.height };
+                }
+                return null;
+            }
+            if (element instanceof HTMLImageElement) {
+                if (element.naturalWidth > 0 && element.naturalHeight > 0) {
+                    return { width: element.naturalWidth, height: element.naturalHeight };
+                }
+            }
+            return null;
+        }
+
+        function updateMapLayerVisibility() {
+            if (!mapLayerState.hasLayerFrames) {
+                return;
+            }
+            Object.entries(mapLayerCanvasEls).forEach(([key, canvas]) => {
+                canvas.style.display =
+                    mapLayerToggleEls[key].checked && canvas.dataset.loaded === '1'
+                        ? 'block'
+                        : 'none';
+            });
+            mapPreviewEl.style.display = 'none';
         }
 
         function schedulePointCloudRender() {
