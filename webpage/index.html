@@ -56,7 +56,9 @@
         .container.disconnected-layout .wasm-controls-grid,
         .container.disconnected-layout .joystick-container,
         .container.disconnected-layout .viewer-grid,
-        .container.disconnected-layout .message-tools {
+        .container.disconnected-layout .message-tools,
+        .container.disconnected-layout .demo-tabs,
+        .container.disconnected-layout .demo-panels {
             display: none;
         }
 
@@ -97,6 +99,47 @@
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 20px;
             margin-bottom: 24px;
+        }
+
+        .demo-tabs {
+            display: flex;
+            gap: 12px;
+            padding: 8px;
+            margin-bottom: 24px;
+            background: #eef2ff;
+            border-radius: 16px;
+        }
+
+        .demo-tab-btn {
+            flex: 1 1 0;
+            border: none;
+            border-radius: 12px;
+            padding: 12px 18px;
+            background: transparent;
+            color: #56607a;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .demo-tab-btn.active {
+            background: white;
+            color: #2d3748;
+            box-shadow: 0 10px 24px rgba(102, 126, 234, 0.18);
+        }
+
+        .demo-panels {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .demo-panel {
+            display: none;
+        }
+
+        .demo-panel.active {
+            display: block;
         }
 
         .wasm-control-card {
@@ -574,13 +617,6 @@
             justify-content: center;
         }
 
-        #videoStream {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-            display: none;
-        }
-
         .ml-stream {
             width: 100%;
             height: 100%;
@@ -614,6 +650,13 @@
             gap: 24px;
             margin: 30px 0;
             align-items: start;
+        }
+
+        .viewer-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            margin: 30px 0;
         }
 
         .map-container {
@@ -800,9 +843,9 @@
         .console-container {
             background: #0b1220;
             border-radius: 12px;
-            aspect-ratio: 1 / 1;
             overflow: hidden;
             display: flex;
+            width: 100%;
             box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.14);
         }
 
@@ -843,6 +886,10 @@
         @media (max-width: 700px) {
             .container {
                 padding: 24px;
+            }
+
+            .demo-tabs {
+                flex-direction: column;
             }
 
             .top-bar {
@@ -908,8 +955,8 @@
                     <input
                         type="text"
                         id="ipAddress"
-                        placeholder="10.40.224.37"
-                        value="10.40.224.37"
+                        placeholder="100.93.147.28"
+                        value="100.93.147.28"
                     >
                 </div>
 
@@ -968,219 +1015,260 @@
             </div>
         </div>
 
-        <div class="wasm-controls-grid">
-            <div class="wasm-control-card">
-                <div class="wasm-control-header">
-                    <div class="wasm-control-title">WASM Control</div>
-                    <div class="wasm-control-status">Status: <strong id="wasmRunStatus">Idle</strong></div>
-                </div>
-
-                <div class="input-group">
-                    <label for="wasmProgramSelect">Program</label>
-                    <select id="wasmProgramSelect" disabled></select>
-                </div>
-
-                <div id="wasmSelectionMeta" class="wasm-control-meta">
-                    Connect to the iPhone to load available WASM programs.
-                </div>
-
-                <div class="wasm-control-actions">
-                    <button id="wasmRefreshBtn" class="btn-secondary" onclick="refreshWasmPrograms()" disabled>
-                        Refresh
-                    </button>
-                    <button id="wasmRunBtn" class="btn-connect" onclick="runSelectedWasmRemote()" disabled>
-                        Run
-                    </button>
-                    <button id="wasmStopBtn" class="btn-disconnect" onclick="stopSelectedWasmRemote()" disabled>
-                        Stop
-                    </button>
-                </div>
-            </div>
-
-            <div class="wasm-control-card">
-                <div class="wasm-control-header">
-                    <div class="wasm-control-title">WasmHub Public Files</div>
-                </div>
-
-                <div class="input-group">
-                    <label for="hubProgramSelect">Download From Hub</label>
-                    <select id="hubProgramSelect" disabled></select>
-                </div>
-
-                <div id="hubSelectionMeta" class="wasm-control-meta">
-                    Refresh to load public WasmHub files.
-                </div>
-
-                <div class="wasm-control-actions">
-                    <button id="hubRefreshBtn" class="btn-secondary" onclick="refreshHubPrograms()" disabled>
-                        Refresh
-                    </button>
-                    <button id="hubDownloadBtn" class="btn-send" onclick="downloadSelectedHubFileRemote()" disabled>
-                        Download
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <div class="viewer-grid">
-                <div id="mapSection" class="map-section">
-                    <div class="map-header">
-                        <div class="map-title-block">
-                            <div class="map-title-row">
-                                <div class="map-title">WASM Map Preview</div>
-                                <div class="map-stats">
-                                    <span class="map-stat">Frames: <strong id="mapFrames">0</strong></span>
-                                    <span class="map-stat">Size: <strong id="mapSize">0 KB</strong></span>
-                                    <span class="map-stat">Time: <strong id="mapTimestamp">-</strong></span>
-                                </div>
-                            </div>
-                            <div class="map-toolbar-row">
-                                <div class="map-layer-toolbar">
-                                    <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerBase" checked>Base</label>
-                                    <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerOdometry" checked>Odometry</label>
-                                    <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerPlanning" checked>Planning</label>
-                                    <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerFrontiers" checked>Frontiers</label>
-                                </div>
-                                <div class="map-export-actions">
-                                    <button
-                                        id="saveMapImageBtn"
-                                        class="btn-secondary map-action-btn"
-                                        onclick="saveBaseMapImage()"
-                                        disabled
-                                    >
-                                        Save Image
-                                    </button>
-                                    <button
-                                        id="saveMapArrayBtn"
-                                        class="btn-secondary map-action-btn"
-                                        onclick="saveBaseMapArray()"
-                                        disabled
-                                    >
-                                        Save Array
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div id="mapContainer" class="map-container">
-                        <div id="mapStage" class="map-stage">
-                            <img id="mapPreview" alt="WASM Map Preview">
-                            <canvas id="mapLayerBase" class="map-layer-canvas" aria-label="WASM Base Layer"></canvas>
-                            <canvas id="mapLayerOdometry" class="map-layer-canvas" aria-label="WASM Odometry Layer"></canvas>
-                            <canvas id="mapLayerPlanning" class="map-layer-canvas" aria-label="WASM Planning Layer"></canvas>
-                            <canvas id="mapLayerFrontiers" class="map-layer-canvas" aria-label="WASM Frontiers Layer"></canvas>
-                        </div>
-                        <div class="map-placeholder" id="mapPlaceholder">
-                            <div class="map-placeholder-icon">🗺️</div>
-                            <div>Waiting for map preview...</div>
-                        </div>
-                    </div>
-                </div>
-
-            <div id="consoleSection" class="console-section">
-                <div class="console-header">
-                    <div class="console-title">WASM Console</div>
-                    <div class="console-stats">
-                        <span class="console-stat">Lines: <strong id="consoleLineCount">0</strong></span>
-                    </div>
-                </div>
-                <div class="console-container">
-                    <div class="console-log" id="consoleLog">
-                        <div class="console-placeholder" id="consolePlaceholder">
-                            <div class="console-placeholder-icon">🧾</div>
-                            <div>Waiting for WASM console output...</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-
-        <div class="viewer-grid">
-            <div id="videoSection" class="video-section">
-                <div class="video-header">
-                    <div class="video-title">Live Video Stream</div>
-                    <div class="video-stats">
-                        <span class="video-stat">FPS: <strong id="videoFps">0</strong></span>
-                        <span class="video-stat">Frames: <strong id="videoFrames">0</strong></span>
-                        <span class="video-stat"><strong id="videoSize">0 KB</strong></span>
-                    </div>
-                </div>
-                <div class="video-container">
-                    <img id="videoStream" alt="Video Stream">
-                    <div class="video-placeholder" id="videoPlaceholder">
-                        <div class="video-placeholder-icon">📹</div>
-                        <div>Waiting for video stream...</div>
-                        <div style="font-size: 12px; margin-top: 10px; color: #999;">
-                            Start video streaming from the iPhone app
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div id="mlSection" class="video-section">
-                <div class="video-header">
-                    <div class="video-title">ML Overlay Stream</div>
-                    <div class="video-stats">
-                        <span class="video-stat">Models: <strong id="mlModelCount">0</strong></span>
-                        <span class="video-stat">Boxes: <strong id="mlBoxCount">0</strong></span>
-                        <span class="video-stat">Time: <strong id="mlTimestamp">-</strong></span>
-                    </div>
-                </div>
-                <div class="video-container">
-                    <img id="mlStream" class="ml-stream" alt="ML Overlay Stream">
-                    <canvas id="mlOverlay" class="ml-overlay"></canvas>
-                    <div class="video-placeholder" id="mlPlaceholder">
-                        <div class="video-placeholder-icon">🎯</div>
-                        <div>Waiting for ML overlay stream...</div>
-                        <div style="font-size: 12px; margin-top: 10px; color: #999;">
-                            Start the camera stream and run a model-enabled WASM module
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div id="pointCloudSection" class="point-cloud-section">
-                <div class="point-cloud-header">
-                    <div class="point-cloud-title">WASM Point Cloud</div>
-                    <div class="point-cloud-stats">
-                        <span class="point-cloud-stat">FPS: <strong id="pointCloudFps">0</strong></span>
-                        <span class="point-cloud-stat">Frames: <strong id="pointCloudFrames">0</strong></span>
-                        <span class="point-cloud-stat">Points: <strong id="pointCloudPoints">0</strong></span>
-                        <span class="point-cloud-stat">Radius: <strong id="pointCloudRadius">0.00 m</strong></span>
-                        <span class="point-cloud-stat">Time: <strong id="pointCloudTimestamp">-</strong></span>
-                    </div>
-                </div>
-                <div class="point-cloud-container">
-                    <canvas id="pointCloudCanvas"></canvas>
-                    <div class="point-cloud-placeholder" id="pointCloudPlaceholder">
-                        <div class="point-cloud-placeholder-icon">✳️</div>
-                        <div id="pointCloudStatusText">Waiting for the current WASM point cloud...</div>
-                        <div id="pointCloudHelpText" class="point-cloud-help">Drag to orbit. Scroll to zoom.</div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="message-tools">
-            <div class="input-group">
-                <label for="message">Message to Send:</label>
-                <input
-                    type="text"
-                    id="message"
-                    placeholder="Type your message here..."
-                    disabled
-                    onkeypress="if(event.key === 'Enter') sendMessage()"
-                >
-            </div>
-
-            <button id="sendBtn" class="btn-send" onclick="sendMessage()" disabled>
-                Send Message
+        <div class="demo-tabs" role="tablist" aria-label="Demo Views">
+            <button
+                id="slamTabBtn"
+                class="demo-tab-btn active"
+                type="button"
+                role="tab"
+                aria-selected="true"
+                aria-controls="slamDemoPanel"
+                data-demo-tab="slam"
+            >
+                SLAM
             </button>
+            <button
+                id="mlTabBtn"
+                class="demo-tab-btn"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="mlDemoPanel"
+                data-demo-tab="ml"
+            >
+                ML
+            </button>
+        </div>
 
-            <div class="message-log">
-                <h3>Message Log</h3>
-                <div id="messageLog"></div>
+        <div class="demo-panels">
+            <div
+                id="slamDemoPanel"
+                class="demo-panel active"
+                role="tabpanel"
+                aria-labelledby="slamTabBtn"
+                data-demo-panel="slam"
+            >
+                <div class="wasm-controls-grid">
+                    <div class="wasm-control-card">
+                        <div class="wasm-control-header">
+                            <div class="wasm-control-title">WASM Control</div>
+                            <div class="wasm-control-status">Status: <strong id="wasmRunStatus">Idle</strong></div>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="wasmProgramSelect">Program</label>
+                            <select id="wasmProgramSelect" disabled></select>
+                        </div>
+
+                        <div id="wasmSelectionMeta" class="wasm-control-meta">
+                            Connect to the iPhone to load available WASM programs.
+                        </div>
+
+                        <div class="wasm-control-actions">
+                            <button id="wasmRefreshBtn" class="btn-secondary" onclick="refreshWasmPrograms()" disabled>
+                                Refresh
+                            </button>
+                            <button id="wasmRunBtn" class="btn-connect" onclick="runSelectedWasmRemote()" disabled>
+                                Run
+                            </button>
+                            <button id="wasmStopBtn" class="btn-disconnect" onclick="stopSelectedWasmRemote()" disabled>
+                                Stop
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="wasm-control-card">
+                        <div class="wasm-control-header">
+                            <div class="wasm-control-title">WasmHub Public Files</div>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="hubProgramSelect">Download From Hub</label>
+                            <select id="hubProgramSelect" disabled></select>
+                        </div>
+
+                        <div id="hubSelectionMeta" class="wasm-control-meta">
+                            Refresh to load public WasmHub files.
+                        </div>
+
+                        <div class="wasm-control-actions">
+                            <button id="hubRefreshBtn" class="btn-secondary" onclick="refreshHubPrograms()" disabled>
+                                Refresh
+                            </button>
+                            <button id="hubDownloadBtn" class="btn-send" onclick="downloadSelectedHubFileRemote()" disabled>
+                                Download
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="viewer-stack">
+                    <div class="viewer-grid">
+                        <div id="mapSection" class="map-section">
+                            <div class="map-header">
+                                <div class="map-title-block">
+                                    <div class="map-title-row">
+                                        <div class="map-title">WASM Map Preview</div>
+                                        <div class="map-stats">
+                                            <span class="map-stat">Frames: <strong id="mapFrames">0</strong></span>
+                                            <span class="map-stat">Size: <strong id="mapSize">0 KB</strong></span>
+                                            <span class="map-stat">Time: <strong id="mapTimestamp">-</strong></span>
+                                        </div>
+                                    </div>
+                                    <div class="map-toolbar-row">
+                                        <div class="map-layer-toolbar">
+                                            <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerBase" checked>Base</label>
+                                            <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerOdometry" checked>Odometry</label>
+                                            <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerPlanning" checked>Planning</label>
+                                            <label class="map-layer-toggle"><input type="checkbox" id="toggleLayerFrontiers" checked>Frontiers</label>
+                                        </div>
+                                        <div class="map-export-actions">
+                                            <button
+                                                id="saveMapImageBtn"
+                                                class="btn-secondary map-action-btn"
+                                                onclick="saveBaseMapImage()"
+                                                disabled
+                                            >
+                                                Save Image
+                                            </button>
+                                            <button
+                                                id="saveMapArrayBtn"
+                                                class="btn-secondary map-action-btn"
+                                                onclick="saveBaseMapArray()"
+                                                disabled
+                                            >
+                                                Save Array
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="mapContainer" class="map-container">
+                                <div id="mapStage" class="map-stage">
+                                    <img id="mapPreview" alt="WASM Map Preview">
+                                    <canvas id="mapLayerBase" class="map-layer-canvas" aria-label="WASM Base Layer"></canvas>
+                                    <canvas id="mapLayerOdometry" class="map-layer-canvas" aria-label="WASM Odometry Layer"></canvas>
+                                    <canvas id="mapLayerPlanning" class="map-layer-canvas" aria-label="WASM Planning Layer"></canvas>
+                                    <canvas id="mapLayerFrontiers" class="map-layer-canvas" aria-label="WASM Frontiers Layer"></canvas>
+                                </div>
+                                <div class="map-placeholder" id="mapPlaceholder">
+                                    <div class="map-placeholder-icon">🗺️</div>
+                                    <div>Waiting for map preview...</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="slamConsoleSection" class="console-section">
+                            <div id="slamConsoleHeader" class="console-header">
+                                <div class="console-title">WASM Console</div>
+                                <div class="console-stats">
+                                    <span class="console-stat">Lines: <strong id="slamConsoleLineCount">0</strong></span>
+                                </div>
+                            </div>
+                            <div id="slamConsoleContainer" class="console-container">
+                                <div class="console-log" id="slamConsoleLog">
+                                    <div class="console-placeholder" id="slamConsolePlaceholder">
+                                        <div class="console-placeholder-icon">🧾</div>
+                                        <div>Waiting for WASM console output...</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="pointCloudSection" class="point-cloud-section">
+                        <div class="point-cloud-header">
+                            <div class="point-cloud-title">WASM Point Cloud</div>
+                            <div class="point-cloud-stats">
+                                <span class="point-cloud-stat">FPS: <strong id="pointCloudFps">0</strong></span>
+                                <span class="point-cloud-stat">Frames: <strong id="pointCloudFrames">0</strong></span>
+                                <span class="point-cloud-stat">Points: <strong id="pointCloudPoints">0</strong></span>
+                                <span class="point-cloud-stat">Radius: <strong id="pointCloudRadius">0.00 m</strong></span>
+                                <span class="point-cloud-stat">Time: <strong id="pointCloudTimestamp">-</strong></span>
+                            </div>
+                        </div>
+                        <div class="point-cloud-container">
+                            <canvas id="pointCloudCanvas"></canvas>
+                            <div class="point-cloud-placeholder" id="pointCloudPlaceholder">
+                                <div class="point-cloud-placeholder-icon">✳️</div>
+                                <div id="pointCloudStatusText">Waiting for the current WASM point cloud...</div>
+                                <div id="pointCloudHelpText" class="point-cloud-help">Drag to orbit. Scroll to zoom.</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="message-tools">
+                    <div class="input-group">
+                        <label for="message">Message to Send:</label>
+                        <input
+                            type="text"
+                            id="message"
+                            placeholder="Type your message here..."
+                            disabled
+                            onkeypress="if(event.key === 'Enter') sendMessage()"
+                        >
+                    </div>
+
+                    <button id="sendBtn" class="btn-send" onclick="sendMessage()" disabled>
+                        Send Message
+                    </button>
+
+                    <div class="message-log">
+                        <h3>Message Log</h3>
+                        <div id="messageLog"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div
+                id="mlDemoPanel"
+                class="demo-panel"
+                role="tabpanel"
+                aria-labelledby="mlTabBtn"
+                data-demo-panel="ml"
+                hidden
+            >
+                <div class="viewer-grid">
+                    <div id="mlSection" class="video-section">
+                        <div class="video-header">
+                            <div class="video-title">ML Overlay Stream</div>
+                            <div class="video-stats">
+                                <span class="video-stat">Models: <strong id="mlModelCount">0</strong></span>
+                                <span class="video-stat">Boxes: <strong id="mlBoxCount">0</strong></span>
+                                <span class="video-stat">Time: <strong id="mlTimestamp">-</strong></span>
+                            </div>
+                        </div>
+                        <div class="video-container">
+                            <img id="mlStream" class="ml-stream" alt="ML Overlay Stream">
+                            <canvas id="mlOverlay" class="ml-overlay"></canvas>
+                            <div class="video-placeholder" id="mlPlaceholder">
+                                <div class="video-placeholder-icon">🎯</div>
+                                <div>Waiting for ML overlay stream...</div>
+                                <div style="font-size: 12px; margin-top: 10px; color: #999;">
+                                    Start the camera stream and run a model-enabled WASM module
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="mlConsoleSection" class="console-section">
+                        <div id="mlConsoleHeader" class="console-header">
+                            <div class="console-title">WASM Console</div>
+                            <div class="console-stats">
+                                <span class="console-stat">Lines: <strong id="mlConsoleLineCount">0</strong></span>
+                            </div>
+                        </div>
+                        <div id="mlConsoleContainer" class="console-container">
+                            <div class="console-log" id="mlConsoleLog">
+                                <div class="console-placeholder" id="mlConsolePlaceholder">
+                                    <div class="console-placeholder-icon">🧾</div>
+                                    <div>Waiting for WASM console output...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -1207,13 +1295,16 @@
         const hubDownloadBtn = document.getElementById('hubDownloadBtn');
         const messageLog = document.getElementById('messageLog');
         const joystickContainer = document.getElementById('joystickContainer');
-        const videoSection = document.getElementById('videoSection');
+        const demoTabButtons = Array.from(document.querySelectorAll('[data-demo-tab]'));
+        const demoPanelsByKey = {
+            slam: document.getElementById('slamDemoPanel'),
+            ml: document.getElementById('mlDemoPanel')
+        };
         const mlSection = document.getElementById('mlSection');
         const pointCloudSection = document.getElementById('pointCloudSection');
         const mapSection = document.getElementById('mapSection');
-        const consoleSection = document.getElementById('consoleSection');
-        const consoleHeaderEl = consoleSection.querySelector('.console-header');
-        const consoleContainerEl = consoleSection.querySelector('.console-container');
+        const slamConsoleSection = document.getElementById('slamConsoleSection');
+        const mlConsoleSection = document.getElementById('mlConsoleSection');
         const teleopRttEl = document.getElementById('teleopRtt');
         const teleopPhoneBleEl = document.getElementById('teleopPhoneBle');
         const teleopBleOdomEl = document.getElementById('teleopBleOdom');
@@ -1256,9 +1347,6 @@
         const mapTimestampEl = document.getElementById('mapTimestamp');
         const saveMapImageBtn = document.getElementById('saveMapImageBtn');
         const saveMapArrayBtn = document.getElementById('saveMapArrayBtn');
-        const consoleLogEl = document.getElementById('consoleLog');
-        const consolePlaceholderEl = document.getElementById('consolePlaceholder');
-        const consoleLineCountEl = document.getElementById('consoleLineCount');
         const mlStreamEl = document.getElementById('mlStream');
         const mlOverlayEl = document.getElementById('mlOverlay');
         const mlOverlayCtx = mlOverlayEl.getContext('2d');
@@ -1266,6 +1354,26 @@
         const mlModelCountEl = document.getElementById('mlModelCount');
         const mlBoxCountEl = document.getElementById('mlBoxCount');
         const mlTimestampEl = document.getElementById('mlTimestamp');
+        const consoleViews = [
+            {
+                section: slamConsoleSection,
+                header: document.getElementById('slamConsoleHeader'),
+                container: document.getElementById('slamConsoleContainer'),
+                log: document.getElementById('slamConsoleLog'),
+                placeholder: document.getElementById('slamConsolePlaceholder'),
+                lineCount: document.getElementById('slamConsoleLineCount'),
+                reference: mapSection
+            },
+            {
+                section: mlConsoleSection,
+                header: document.getElementById('mlConsoleHeader'),
+                container: document.getElementById('mlConsoleContainer'),
+                log: document.getElementById('mlConsoleLog'),
+                placeholder: document.getElementById('mlConsolePlaceholder'),
+                lineCount: document.getElementById('mlConsoleLineCount'),
+                reference: mlSection
+            }
+        ];
 
         const POINTS_BINARY_MAGIC = [0x52, 0x52, 0x42, 0x31];
         const POINTS_BINARY_TYPE_POINTS = 1;
@@ -1299,11 +1407,8 @@
         };
         let joystickInitialized = false;
         let resetJoystickInteraction = null;
+        let activeDemoTab = 'slam';
 
-        // Video streaming variables
-        let videoFrameCount = 0;
-        let videoFpsCounter = 0;
-        let lastVideoFpsUpdate = Date.now();
         let latestMlDetectionsMessage = null;
         let pointCloudViewerInitialized = false;
         let mapViewerInitialized = false;
@@ -1382,6 +1487,34 @@
             models: []
         };
 
+        function setActiveDemoTab(tabKey) {
+            if (!demoPanelsByKey[tabKey]) {
+                return;
+            }
+
+            activeDemoTab = tabKey;
+            demoTabButtons.forEach((buttonEl) => {
+                const isActive = buttonEl.dataset.demoTab === tabKey;
+                buttonEl.classList.toggle('active', isActive);
+                buttonEl.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            });
+
+            Object.entries(demoPanelsByKey).forEach(([key, panelEl]) => {
+                const isActive = key === tabKey;
+                panelEl.classList.toggle('active', isActive);
+                panelEl.hidden = !isActive;
+            });
+
+            if (tabKey === 'slam') {
+                updateMapTransform();
+                schedulePointCloudRender();
+            } else if (tabKey === 'ml') {
+                drawMlOverlay();
+            }
+
+            syncConsoleHeights();
+        }
+
         function updateStatus(connected) {
             appContainer.classList.toggle('disconnected-layout', !connected);
             if (connected) {
@@ -1395,18 +1528,18 @@
                 messageInput.disabled = false;
                 sendBtn.disabled = false;
                 joystickContainer.classList.add('active');
-                videoSection.classList.add('active');
                 mlSection.classList.add('active');
                 pointCloudSection.classList.add('active');
                 mapSection.classList.add('active');
-                consoleSection.classList.add('active');
+                slamConsoleSection.classList.add('active');
+                mlConsoleSection.classList.add('active');
                 initJoystick();
                 initPointCloudViewer();
                 initMapViewer();
                 startPointCloudDiagnosticTimer();
                 updateWasmControlUI();
                 schedulePointCloudRender();
-                syncConsoleHeightToMap();
+                syncConsoleHeights();
             } else {
                 statusEl.className = 'status disconnected';
                 statusEl.innerHTML = '<span class="status-dot"></span><span>Disconnected</span>';
@@ -1418,18 +1551,13 @@
                 messageInput.disabled = true;
                 sendBtn.disabled = true;
                 joystickContainer.classList.remove('active');
-                videoSection.classList.remove('active');
                 mlSection.classList.remove('active');
                 pointCloudSection.classList.remove('active');
                 mapSection.classList.remove('active');
-                consoleSection.classList.remove('active');
-                syncConsoleHeightToMap();
-                // Reset video
-                document.getElementById('videoStream').style.display = 'none';
-                document.getElementById('videoPlaceholder').style.display = 'block';
+                slamConsoleSection.classList.remove('active');
+                mlConsoleSection.classList.remove('active');
+                syncConsoleHeights();
                 resetMlOverlay();
-                videoFrameCount = 0;
-                videoFpsCounter = 0;
                 pointCloudState.frameCount = 0;
                 pointCloudState.fpsCounter = 0;
                 pointCloudState.lastFpsUpdateMs = performance.now();
@@ -1542,36 +1670,10 @@
             const blob = new Blob([arrayBuffer], { type: 'image/jpeg' });
             const url = URL.createObjectURL(blob);
 
-            const videoImg = document.getElementById('videoStream');
-            const placeholder = document.getElementById('videoPlaceholder');
-            let pendingLoads = 2;
-
-            const finishImageLoad = () => {
-                pendingLoads -= 1;
-                if (pendingLoads <= 0) {
-                    URL.revokeObjectURL(url);
-                }
-            };
-
-            attachStreamImage(videoImg, placeholder, url, finishImageLoad);
             attachStreamImage(mlStreamEl, mlPlaceholderEl, url, () => {
                 drawMlOverlay();
-                finishImageLoad();
+                URL.revokeObjectURL(url);
             });
-
-            // Update statistics
-            videoFrameCount++;
-            videoFpsCounter++;
-            document.getElementById('videoFrames').textContent = videoFrameCount;
-            document.getElementById('videoSize').textContent = (arrayBuffer.byteLength / 1024).toFixed(1) + ' KB';
-
-            // Calculate FPS
-            const now = Date.now();
-            if (now - lastVideoFpsUpdate >= 1000) {
-                document.getElementById('videoFps').textContent = videoFpsCounter;
-                videoFpsCounter = 0;
-                lastVideoFpsUpdate = now;
-            }
         }
 
         function attachStreamImage(imgEl, placeholderEl, url, onComplete) {
@@ -2421,37 +2523,43 @@
         }
 
         function resetConsoleOutput() {
-            consoleLineCountEl.textContent = '0';
-            consoleLogEl.innerHTML = '';
-            consoleLogEl.appendChild(consolePlaceholderEl);
-            consolePlaceholderEl.style.display = 'block';
+            for (const consoleView of consoleViews) {
+                consoleView.lineCount.textContent = '0';
+                consoleView.log.innerHTML = '';
+                consoleView.log.appendChild(consoleView.placeholder);
+                consoleView.placeholder.style.display = 'block';
+            }
         }
 
         function appendConsoleLine(text) {
-            if (consolePlaceholderEl.parentElement === consoleLogEl) {
-                consolePlaceholderEl.style.display = 'none';
-            }
+            const timeText = new Date().toLocaleTimeString();
 
-            const lineEl = document.createElement('div');
-            lineEl.className = 'console-line';
-            lineEl.innerHTML = `
-                <div class="console-line-time">${new Date().toLocaleTimeString()}</div>
-                <div class="console-line-text"></div>
-            `;
-            lineEl.querySelector('.console-line-text').textContent = text;
-            consoleLogEl.appendChild(lineEl);
-
-            while (consoleLogEl.querySelectorAll('.console-line').length > MAX_CONSOLE_LINES) {
-                const firstLine = consoleLogEl.querySelector('.console-line');
-                if (!firstLine) {
-                    break;
+            for (const consoleView of consoleViews) {
+                if (consoleView.placeholder.parentElement === consoleView.log) {
+                    consoleView.placeholder.style.display = 'none';
                 }
-                firstLine.remove();
-            }
 
-            consoleLineCountEl.textContent =
-                consoleLogEl.querySelectorAll('.console-line').length.toLocaleString();
-            consoleLogEl.scrollTop = consoleLogEl.scrollHeight;
+                const lineEl = document.createElement('div');
+                lineEl.className = 'console-line';
+                lineEl.innerHTML = `
+                    <div class="console-line-time">${timeText}</div>
+                    <div class="console-line-text"></div>
+                `;
+                lineEl.querySelector('.console-line-text').textContent = text;
+                consoleView.log.appendChild(lineEl);
+
+                while (consoleView.log.querySelectorAll('.console-line').length > MAX_CONSOLE_LINES) {
+                    const firstLine = consoleView.log.querySelector('.console-line');
+                    if (!firstLine) {
+                        break;
+                    }
+                    firstLine.remove();
+                }
+
+                consoleView.lineCount.textContent =
+                    consoleView.log.querySelectorAll('.console-line').length.toLocaleString();
+                consoleView.log.scrollTop = consoleView.log.scrollHeight;
+            }
         }
 
         function startPointCloudDiagnosticTimer() {
@@ -2982,7 +3090,7 @@
         function updateMapTransform() {
             const metrics = getMapRenderMetrics();
             if (!metrics) {
-                syncConsoleHeightToMap();
+                syncConsoleHeights();
                 return;
             }
 
@@ -2992,35 +3100,41 @@
             mapStageEl.style.width = `${metrics.fittedWidth}px`;
             mapStageEl.style.height = `${metrics.fittedHeight}px`;
             mapStageEl.style.transform = `translate(${mapViewState.offsetX}px, ${mapViewState.offsetY}px) scale(${mapViewState.scale})`;
-            syncConsoleHeightToMap();
+            syncConsoleHeights();
         }
 
-        function syncConsoleHeightToMap() {
-            if (!consoleContainerEl || !consoleHeaderEl) {
-                return;
+        function syncConsoleHeights() {
+            for (const consoleView of consoleViews) {
+                if (!consoleView.container || !consoleView.header || !consoleView.section || !consoleView.reference) {
+                    continue;
+                }
+
+                const isConsoleVisible =
+                    consoleView.section.classList.contains('active') &&
+                    consoleView.section.getBoundingClientRect().height > 0;
+                const isReferenceVisible =
+                    consoleView.reference.classList.contains('active') &&
+                    consoleView.reference.getBoundingClientRect().height > 0;
+
+                if (!isConsoleVisible || !isReferenceVisible) {
+                    consoleView.container.style.height = '';
+                    continue;
+                }
+
+                const consoleSectionStyle = window.getComputedStyle(consoleView.section);
+                const consoleHeaderStyle = window.getComputedStyle(consoleView.header);
+                const paddingY = parseFloat(consoleSectionStyle.paddingTop) + parseFloat(consoleSectionStyle.paddingBottom);
+                const headerHeight = consoleView.header.getBoundingClientRect().height;
+                const headerMarginBottom = parseFloat(consoleHeaderStyle.marginBottom) || 0;
+                const targetHeight = Math.max(
+                    120,
+                    Math.round(
+                        consoleView.reference.getBoundingClientRect().height - paddingY - headerHeight - headerMarginBottom
+                    )
+                );
+
+                consoleView.container.style.height = `${targetHeight}px`;
             }
-
-            const isMapVisible = mapSection.classList.contains('active');
-            const isConsoleVisible = consoleSection.classList.contains('active');
-            if (!isMapVisible || !isConsoleVisible) {
-                consoleContainerEl.style.height = '';
-                return;
-            }
-
-            const mapRect = mapSection.getBoundingClientRect();
-            if (mapRect.height <= 0) {
-                consoleContainerEl.style.height = '';
-                return;
-            }
-
-            const consoleSectionStyle = window.getComputedStyle(consoleSection);
-            const consoleHeaderStyle = window.getComputedStyle(consoleHeaderEl);
-            const paddingY = parseFloat(consoleSectionStyle.paddingTop) + parseFloat(consoleSectionStyle.paddingBottom);
-            const headerHeight = consoleHeaderEl.getBoundingClientRect().height;
-            const headerMarginBottom = parseFloat(consoleHeaderStyle.marginBottom) || 0;
-            const targetHeight = Math.max(120, Math.round(mapRect.height - paddingY - headerHeight - headerMarginBottom));
-
-            consoleContainerEl.style.height = `${targetHeight}px`;
         }
 
         function resetMapTransform() {
@@ -3208,6 +3322,12 @@
             updateWasmControlUI();
         });
 
+        demoTabButtons.forEach((buttonEl) => {
+            buttonEl.addEventListener('click', () => {
+                setActiveDemoTab(buttonEl.dataset.demoTab);
+            });
+        });
+
         // Focus message input when page loads
         window.addEventListener('load', () => {
             ipInput.focus();
@@ -3218,6 +3338,7 @@
             resetMlOverlay();
             resetConsoleOutput();
             resetWasmControlState();
+            setActiveDemoTab(activeDemoTab);
         });
     </script>
 </body>
