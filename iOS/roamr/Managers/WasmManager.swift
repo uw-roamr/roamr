@@ -25,7 +25,7 @@ struct WasmSensorConfig: Equatable {
         wheelOdometryEnabled: true,
         lidarPointsEnabled: true,
         pointColorsEnabled: false,
-        cameraImageEnabled: false
+        cameraImageEnabled: true
     )
 }
 
@@ -56,6 +56,7 @@ final class WasmManager: ObservableObject {
     private var globalModuleNamePtr: UnsafeMutablePointer<CChar>?
 
     private var currentModuleInstance: OpaquePointer?
+    private var currentRuntimeBundleURL: URL?
     private var shouldStop = false
     private var activeRecordingSecurityScopeURL: URL?
     private let lock = NSLock()
@@ -89,11 +90,6 @@ final class WasmManager: ObservableObject {
     func effectiveSensorConfig() -> WasmSensorConfig {
         var config = sensorConfig
         config.pointColorsEnabled = false
-        config.cameraImageEnabled = false
-        // The current slam_main runtime still relies on these streams.
-        config.imuEnabled = true
-        config.wheelOdometryEnabled = true
-        config.lidarPointsEnabled = true
         return config
     }
 
@@ -229,6 +225,9 @@ final class WasmManager: ObservableObject {
             NativeFunction(name: "read_wheel_odometry", signature: "(*)", impl: read_wheel_odometry_impl),
             NativeFunction(name: "init_camera", signature: "(*)", impl: init_camera_impl),
             NativeFunction(name: "read_lidar_camera", signature: "(*)", impl: read_lidar_camera_impl),
+            NativeFunction(name: "ml_open_model", signature: "(*)", impl: ml_open_model_impl),
+            NativeFunction(name: "ml_run_latest_camera_frame", signature: "(*)", impl: ml_run_latest_camera_frame_impl),
+            NativeFunction(name: "ml_close_model", signature: "(*)", impl: ml_close_model_impl),
             NativeFunction(name: "wasm_log_text", signature: "(*)", impl: wasm_log_text_impl),
             NativeFunction(name: "rerun_log_lidar_frame", signature: "(*)", impl: rerun_log_lidar_frame_impl),
             NativeFunction(name: "rerun_log_map_frame", signature: "(*)", impl: rerun_log_map_frame_impl),
@@ -307,9 +306,12 @@ final class WasmManager: ObservableObject {
 
         lock.lock()
         shouldStop = false
+        currentRuntimeBundleURL = fileURL.deletingLastPathComponent()
         lock.unlock()
+        ModelRunner.shared.beginRun(bundleBaseURL: fileURL.deletingLastPathComponent())
         clearLogs()
         clearMapPreview()
+        clearMlDetections()
         appendLogLine("Running \(fileURL.lastPathComponent)")
         updateRunningState(true, currentRunDisplayName: fileURL.lastPathComponent)
 
@@ -317,6 +319,16 @@ final class WasmManager: ObservableObject {
             let wasmBytes = try Data(contentsOf: fileURL)
 
             wasmBytes.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+                defer {
+                    releaseRecordingSecurityScope()
+                    ModelRunner.shared.endRun()
+                    WebSocketManager.shared.publishMlDetectionsReset()
+                    lock.lock()
+                    currentRuntimeBundleURL = nil
+                    lock.unlock()
+                    updateRunningState(false, currentRunDisplayName: nil)
+                }
+
                 guard let baseAddress = buffer.baseAddress else { return }
                 let wasmBuffer = UnsafeMutablePointer(mutating: baseAddress.assumingMemoryBound(to: UInt8.self))
                 let wasmBufferSize = UInt32(buffer.count)
@@ -327,7 +339,6 @@ final class WasmManager: ObservableObject {
                 guard let wasmModule = wasm_runtime_load(wasmBuffer, wasmBufferSize, &errorBuf, UInt32(errorBuf.count)) else {
                     let message = "Error loading WASM module: \(String(cString: errorBuf))"
                     appendLogLine(message)
-                    updateRunningState(false, currentRunDisplayName: nil)
                     return
                 }
 
@@ -345,8 +356,6 @@ final class WasmManager: ObservableObject {
                 ) else {
                     let message = "Error instantiating WASM module: \(String(cString: errorBuf))"
                     appendLogLine(message)
-                    updateRunningState(false, currentRunDisplayName: nil)
-                    releaseRecordingSecurityScope()
                     wasm_runtime_unload(wasmModule)
                     return
                 }
@@ -360,8 +369,6 @@ final class WasmManager: ObservableObject {
                 guard let execEnv = wasm_runtime_create_exec_env(moduleInstance, stackSize) else {
                     let message = "Error creating execution environment"
                     appendLogLine(message)
-                    updateRunningState(false, currentRunDisplayName: nil)
-                    releaseRecordingSecurityScope()
                     lock.lock()
                     currentModuleInstance = nil
                     lock.unlock()
@@ -394,16 +401,33 @@ final class WasmManager: ObservableObject {
                 wasm_runtime_destroy_exec_env(execEnv)
                 wasm_runtime_deinstantiate(moduleInstance)
                 wasm_runtime_unload(wasmModule)
-                releaseRecordingSecurityScope()
 
                 appendLogLine("WASM execution finished.")
-                updateRunningState(false, currentRunDisplayName: nil)
             }
         } catch {
             releaseRecordingSecurityScope()
+            ModelRunner.shared.endRun()
+            WebSocketManager.shared.publishMlDetectionsReset()
+            lock.lock()
+            currentRuntimeBundleURL = nil
+            lock.unlock()
             appendLogLine("Error reading WASM file: \(error.localizedDescription)")
             updateRunningState(false, currentRunDisplayName: nil)
         }
+    }
+
+    func runtimeAssetURL(for path: String) -> URL? {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else { return nil }
+
+        if trimmedPath.hasPrefix("/") {
+            return URL(fileURLWithPath: trimmedPath, isDirectory: false)
+        }
+
+        lock.lock()
+        let bundleURL = currentRuntimeBundleURL
+        lock.unlock()
+        return bundleURL?.appendingPathComponent(trimmedPath, isDirectory: false)
     }
 
     private func updateRunningState(_ isRunning: Bool, currentRunDisplayName: String?) {
@@ -428,6 +452,10 @@ final class WasmManager: ObservableObject {
             self.latestMapTimestamp = 0
             self.latestMapFrameCount = 0
         }
+    }
+
+    func clearMlDetections() {
+        WebSocketManager.shared.publishMlDetectionsReset()
     }
 
     func appendLogLine(_ line: String) {

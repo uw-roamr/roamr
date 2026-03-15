@@ -1,0 +1,32 @@
+{
+  "name": "model",
+  "task": "object_detection",
+  "backend": "executorch",
+  "delegate": "xnnpack",
+  "method": "forward",
+  "model_file": "model.pte",
+  "labels_file": "labels.json",
+  "score_threshold": 0.8,
+  "input": {
+    "width": 320,
+    "height": 320,
+    "channels": 3,
+    "resize_mode": "stretch",
+    "value_scale": 0.00392156862745098,
+    "mean": [
+      0.0,
+      0.0,
+      0.0
+    ],
+    "std": [
+      1.0,
+      1.0,
+      1.0
+    ]
+  },
+  "output": {
+    "elements_per_detection": 6,
+    "max_detections": 32,
+    "normalized_boxes": true
+  }
+}

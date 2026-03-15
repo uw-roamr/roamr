@@ -581,6 +581,22 @@
             display: none;
         }
 
+        .ml-stream {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: none;
+        }
+
+        .ml-overlay {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            display: block;
+            pointer-events: none;
+        }
+
         .video-placeholder {
             color: #666;
             text-align: center;
@@ -1102,6 +1118,28 @@
                 </div>
             </div>
 
+            <div id="mlSection" class="video-section">
+                <div class="video-header">
+                    <div class="video-title">ML Overlay Stream</div>
+                    <div class="video-stats">
+                        <span class="video-stat">Models: <strong id="mlModelCount">0</strong></span>
+                        <span class="video-stat">Boxes: <strong id="mlBoxCount">0</strong></span>
+                        <span class="video-stat">Time: <strong id="mlTimestamp">-</strong></span>
+                    </div>
+                </div>
+                <div class="video-container">
+                    <img id="mlStream" class="ml-stream" alt="ML Overlay Stream">
+                    <canvas id="mlOverlay" class="ml-overlay"></canvas>
+                    <div class="video-placeholder" id="mlPlaceholder">
+                        <div class="video-placeholder-icon">🎯</div>
+                        <div>Waiting for ML overlay stream...</div>
+                        <div style="font-size: 12px; margin-top: 10px; color: #999;">
+                            Start the camera stream and run a model-enabled WASM module
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div id="pointCloudSection" class="point-cloud-section">
                 <div class="point-cloud-header">
                     <div class="point-cloud-title">WASM Point Cloud</div>
@@ -1170,6 +1208,7 @@
         const messageLog = document.getElementById('messageLog');
         const joystickContainer = document.getElementById('joystickContainer');
         const videoSection = document.getElementById('videoSection');
+        const mlSection = document.getElementById('mlSection');
         const pointCloudSection = document.getElementById('pointCloudSection');
         const mapSection = document.getElementById('mapSection');
         const consoleSection = document.getElementById('consoleSection');
@@ -1220,6 +1259,13 @@
         const consoleLogEl = document.getElementById('consoleLog');
         const consolePlaceholderEl = document.getElementById('consolePlaceholder');
         const consoleLineCountEl = document.getElementById('consoleLineCount');
+        const mlStreamEl = document.getElementById('mlStream');
+        const mlOverlayEl = document.getElementById('mlOverlay');
+        const mlOverlayCtx = mlOverlayEl.getContext('2d');
+        const mlPlaceholderEl = document.getElementById('mlPlaceholder');
+        const mlModelCountEl = document.getElementById('mlModelCount');
+        const mlBoxCountEl = document.getElementById('mlBoxCount');
+        const mlTimestampEl = document.getElementById('mlTimestamp');
 
         const POINTS_BINARY_MAGIC = [0x52, 0x52, 0x42, 0x31];
         const POINTS_BINARY_TYPE_POINTS = 1;
@@ -1258,6 +1304,7 @@
         let videoFrameCount = 0;
         let videoFpsCounter = 0;
         let lastVideoFpsUpdate = Date.now();
+        let latestMlDetectionsMessage = null;
         let pointCloudViewerInitialized = false;
         let mapViewerInitialized = false;
         let pointCloudDiagnosticTimer = null;
@@ -1329,6 +1376,12 @@
             lastPointerY: 0
         };
 
+        const mlOverlayState = {
+            imageWidth: 0,
+            imageHeight: 0,
+            models: []
+        };
+
         function updateStatus(connected) {
             appContainer.classList.toggle('disconnected-layout', !connected);
             if (connected) {
@@ -1343,6 +1396,7 @@
                 sendBtn.disabled = false;
                 joystickContainer.classList.add('active');
                 videoSection.classList.add('active');
+                mlSection.classList.add('active');
                 pointCloudSection.classList.add('active');
                 mapSection.classList.add('active');
                 consoleSection.classList.add('active');
@@ -1365,6 +1419,7 @@
                 sendBtn.disabled = true;
                 joystickContainer.classList.remove('active');
                 videoSection.classList.remove('active');
+                mlSection.classList.remove('active');
                 pointCloudSection.classList.remove('active');
                 mapSection.classList.remove('active');
                 consoleSection.classList.remove('active');
@@ -1372,6 +1427,7 @@
                 // Reset video
                 document.getElementById('videoStream').style.display = 'none';
                 document.getElementById('videoPlaceholder').style.display = 'block';
+                resetMlOverlay();
                 videoFrameCount = 0;
                 videoFpsCounter = 0;
                 pointCloudState.frameCount = 0;
@@ -1488,16 +1544,20 @@
 
             const videoImg = document.getElementById('videoStream');
             const placeholder = document.getElementById('videoPlaceholder');
+            let pendingLoads = 2;
 
-            // Update image and show it when loaded
-            videoImg.onload = () => {
-                // Show video, hide placeholder (do this inside onload)
-                videoImg.style.display = 'block';
-                placeholder.style.display = 'none';
-                URL.revokeObjectURL(url);  // Free memory
+            const finishImageLoad = () => {
+                pendingLoads -= 1;
+                if (pendingLoads <= 0) {
+                    URL.revokeObjectURL(url);
+                }
             };
 
-            videoImg.src = url;
+            attachStreamImage(videoImg, placeholder, url, finishImageLoad);
+            attachStreamImage(mlStreamEl, mlPlaceholderEl, url, () => {
+                drawMlOverlay();
+                finishImageLoad();
+            });
 
             // Update statistics
             videoFrameCount++;
@@ -1512,6 +1572,18 @@
                 videoFpsCounter = 0;
                 lastVideoFpsUpdate = now;
             }
+        }
+
+        function attachStreamImage(imgEl, placeholderEl, url, onComplete) {
+            imgEl.onload = () => {
+                imgEl.style.display = 'block';
+                placeholderEl.style.display = 'none';
+                onComplete();
+            };
+            imgEl.onerror = () => {
+                onComplete();
+            };
+            imgEl.src = url;
         }
 
         function disconnect() {
@@ -1593,6 +1665,16 @@
                 return;
             }
 
+            if (parsed.type === 'ml_detections_reset') {
+                resetMlOverlay();
+                return;
+            }
+
+            if (parsed.type === 'ml_detections') {
+                handleMlDetectionsMessage(parsed);
+                return;
+            }
+
             if (parsed.type === 'map_layer_frame') {
                 handleMapLayerFrameMessage(parsed);
                 return;
@@ -1609,6 +1691,169 @@
             }
 
             addLog(`📱 Received: ${message}`);
+        }
+
+        function handleMlDetectionsMessage(message) {
+            const models = Array.isArray(message.models) ? message.models : [];
+            latestMlDetectionsMessage = message;
+            mlOverlayState.imageWidth = Number(message.image_width) || 0;
+            mlOverlayState.imageHeight = Number(message.image_height) || 0;
+            mlOverlayState.models = models;
+
+            let boxCount = 0;
+            for (const model of models) {
+                if (!Array.isArray(model.detections)) {
+                    continue;
+                }
+                boxCount += model.detections.length;
+            }
+
+            mlModelCountEl.textContent = models.length.toString();
+            mlBoxCountEl.textContent = boxCount.toString();
+            mlTimestampEl.textContent = formatPointCloudTimestamp(Number(message.timestamp));
+            drawMlOverlay();
+        }
+
+        function resetMlOverlay() {
+            latestMlDetectionsMessage = null;
+            mlOverlayState.imageWidth = 0;
+            mlOverlayState.imageHeight = 0;
+            mlOverlayState.models = [];
+            mlStreamEl.style.display = 'none';
+            mlStreamEl.removeAttribute('src');
+            mlPlaceholderEl.style.display = 'block';
+            mlModelCountEl.textContent = '0';
+            mlBoxCountEl.textContent = '0';
+            mlTimestampEl.textContent = '-';
+            clearMlOverlayCanvas();
+        }
+
+        function clearMlOverlayCanvas() {
+            const width = mlOverlayEl.width || Math.round(mlOverlayEl.clientWidth * window.devicePixelRatio) || 1;
+            const height = mlOverlayEl.height || Math.round(mlOverlayEl.clientHeight * window.devicePixelRatio) || 1;
+            mlOverlayEl.width = width;
+            mlOverlayEl.height = height;
+            mlOverlayCtx.setTransform(1, 0, 0, 1, 0, 0);
+            mlOverlayCtx.clearRect(0, 0, width, height);
+        }
+
+        function drawMlOverlay() {
+            const container = mlOverlayEl.parentElement;
+            if (!container) {
+                return;
+            }
+
+            const clientWidth = container.clientWidth;
+            const clientHeight = container.clientHeight;
+            if (!clientWidth || !clientHeight) {
+                return;
+            }
+
+            const dpr = window.devicePixelRatio || 1;
+            const canvasWidth = Math.max(1, Math.round(clientWidth * dpr));
+            const canvasHeight = Math.max(1, Math.round(clientHeight * dpr));
+            if (mlOverlayEl.width !== canvasWidth || mlOverlayEl.height !== canvasHeight) {
+                mlOverlayEl.width = canvasWidth;
+                mlOverlayEl.height = canvasHeight;
+            }
+
+            mlOverlayCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            mlOverlayCtx.clearRect(0, 0, clientWidth, clientHeight);
+
+            const sourceWidth = mlStreamEl.naturalWidth || mlOverlayState.imageWidth;
+            const sourceHeight = mlStreamEl.naturalHeight || mlOverlayState.imageHeight;
+            if (!sourceWidth || !sourceHeight) {
+                return;
+            }
+
+            const fitScale = Math.min(clientWidth / sourceWidth, clientHeight / sourceHeight);
+            const drawWidth = sourceWidth * fitScale;
+            const drawHeight = sourceHeight * fitScale;
+            const offsetX = (clientWidth - drawWidth) * 0.5;
+            const offsetY = (clientHeight - drawHeight) * 0.5;
+
+            const showModelName = mlOverlayState.models.length > 1;
+            let modelIndex = 0;
+            for (const model of mlOverlayState.models) {
+                const detections = Array.isArray(model.detections) ? model.detections : [];
+                const modelColor = colorForMlModel(model.model_name || model.manifest_name || `model-${modelIndex}`);
+                const isSuccess = Number(model.status) === 0;
+                if (!isSuccess) {
+                    modelIndex += 1;
+                    continue;
+                }
+
+                for (const detection of detections) {
+                    drawMlDetectionBox(detection, modelColor, model, showModelName, sourceWidth, sourceHeight, offsetX, offsetY, drawWidth, drawHeight);
+                }
+                modelIndex += 1;
+            }
+        }
+
+        function drawMlDetectionBox(detection, color, model, showModelName, sourceWidth, sourceHeight, offsetX, offsetY, drawWidth, drawHeight) {
+            const xMinValue = Number(detection.x_min);
+            const yMinValue = Number(detection.y_min);
+            const xMaxValue = Number(detection.x_max);
+            const yMaxValue = Number(detection.y_max);
+            if (![xMinValue, yMinValue, xMaxValue, yMaxValue].every(Number.isFinite)) {
+                return;
+            }
+
+            const normalized = Math.max(Math.abs(xMaxValue), Math.abs(yMaxValue)) <= 1.5;
+            const xMin = normalized ? xMinValue * sourceWidth : xMinValue;
+            const yMin = normalized ? yMinValue * sourceHeight : yMinValue;
+            const xMax = normalized ? xMaxValue * sourceWidth : xMaxValue;
+            const yMax = normalized ? yMaxValue * sourceHeight : yMaxValue;
+
+            const left = offsetX + ((xMin / sourceWidth) * drawWidth);
+            const top = offsetY + ((yMin / sourceHeight) * drawHeight);
+            const width = Math.max(0, ((xMax - xMin) / sourceWidth) * drawWidth);
+            const height = Math.max(0, ((yMax - yMin) / sourceHeight) * drawHeight);
+            if (width < 1 || height < 1) {
+                return;
+            }
+
+            mlOverlayCtx.strokeStyle = color;
+            mlOverlayCtx.lineWidth = 2;
+            mlOverlayCtx.strokeRect(left, top, width, height);
+
+            const score = Number(detection.score);
+            const labelParts = [];
+            const labelName = typeof detection.label_name === 'string' ? detection.label_name.trim() : '';
+            if (labelName) {
+                labelParts.push(labelName);
+            } else if (Number.isFinite(Number(detection.class_id))) {
+                labelParts.push(`#${Number(detection.class_id)}`);
+            }
+            if (showModelName && model.model_name) {
+                labelParts.push(`(${model.model_name})`);
+            }
+            if (Number.isFinite(score)) {
+                labelParts.push(score.toFixed(2));
+            }
+            const label = labelParts.join(' ');
+            if (!label) {
+                return;
+            }
+
+            mlOverlayCtx.font = '12px ui-monospace, SFMono-Regular, Menlo, monospace';
+            const labelWidth = mlOverlayCtx.measureText(label).width + 10;
+            const labelHeight = 18;
+            const labelTop = Math.max(0, top - labelHeight - 4);
+            mlOverlayCtx.fillStyle = color;
+            mlOverlayCtx.fillRect(left, labelTop, labelWidth, labelHeight);
+            mlOverlayCtx.fillStyle = '#08111f';
+            mlOverlayCtx.fillText(label, left + 5, labelTop + 12.5);
+        }
+
+        function colorForMlModel(key) {
+            let hash = 0;
+            for (let index = 0; index < key.length; index += 1) {
+                hash = ((hash << 5) - hash) + key.charCodeAt(index);
+                hash |= 0;
+            }
+            const hue = Math.abs(hash) % 360;
+            return `hsl(${hue} 90% 62%)`;
         }
 
         function handleMapFrameMessage(message) {
@@ -2687,6 +2932,7 @@
             });
 
             window.addEventListener('resize', updateMapTransform);
+            window.addEventListener('resize', drawMlOverlay);
         }
 
         function clampMapTransform() {
@@ -2969,6 +3215,7 @@
             initPointCloudViewer();
             resetPointCloudData();
             resetMapPreview();
+            resetMlOverlay();
             resetConsoleOutput();
             resetWasmControlState();
         });

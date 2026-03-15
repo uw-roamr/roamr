@@ -53,6 +53,14 @@ struct PointCloudExportData {
     var pointCount: Int
 }
 
+struct CameraImageFrame {
+    var timestamp: Double
+    var width: Int
+    var height: Int
+    var channels: Int
+    var rgbBytes: [UInt8]
+}
+
 enum AVPreviewMode {
     case none
     case video
@@ -136,6 +144,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         points_frame_id: CoordinateFrameId.FLU.rawValue,
         image_frame_id: CoordinateFrameId.RDF.rawValue
     )
+    private var latestCameraFrame: CameraImageFrame?
 
     private struct RGBFrameData {
         let rawBytes: [UInt8]
@@ -181,7 +190,15 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             points_frame_id: CoordinateFrameId.FLU.rawValue,
             image_frame_id: CoordinateFrameId.RDF.rawValue
         )
+        latestCameraFrame = nil
         isDataDirty = false
+    }
+
+    func latestCameraFrameSnapshot() -> CameraImageFrame? {
+        lock.lock()
+        let frame = latestCameraFrame
+        lock.unlock()
+        return frame
     }
 
     func setPreviewMode(_ mode: AVPreviewMode) {
@@ -341,15 +358,15 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
-    private func streamFrame(image: UIImage) {
-        guard isStreaming else { return }
+    private func streamFrame(image: UIImage) -> Bool {
+        guard isStreaming else { return false }
 
         let currentTime = CACurrentMediaTime()
         let frameInterval = 1.0 / Double(streamTargetFPS)
 
         // Throttle frame rate.
         if currentTime - lastStreamTime < frameInterval {
-            return
+            return false
         }
         lastStreamTime = currentTime
 
@@ -366,7 +383,9 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         // Encode to JPEG and broadcast.
         if let jpegData = image.jpegData(compressionQuality: streamJpegQuality) {
             WebSocketManager.shared.broadcastBinaryData(jpegData)
+            return true
         }
+        return false
     }
 
     // MARK: - ARSessionDelegate
@@ -489,8 +508,9 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let needsPointCloud = sensorConfig.lidarPointsEnabled
         let needsPointColors = needsPointCloud && includePointColorsForWasm && sensorConfig.pointColorsEnabled
         let needsImagePayload = includeImageInWasmPayload && sensorConfig.cameraImageEnabled
+        let needsModelImage = ModelRunner.shared.hasActiveModels()
         let needsUIImage = needsPreviewVideo || isStreaming
-        let needsRGBFrame = needsImagePayload || needsUIImage
+        let needsRGBFrame = needsImagePayload || needsUIImage || needsModelImage
 
         let imageResolution = frame.camera.imageResolution
         let fallbackLayout = portraitLayout(
@@ -504,7 +524,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
                 from: frame.capturedImage,
                 downsampleFactor: rgbDownsampleFactor,
                 includeUIImage: needsUIImage,
-                includePortraitBytes: needsImagePayload
+                includePortraitBytes: needsImagePayload || needsModelImage
             )
         } else {
             rgbFrame = nil
@@ -538,8 +558,32 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             webSocketPointCloudData = nil
         }
 
+        let modelCameraFrame: CameraImageFrame? = {
+            guard needsModelImage,
+                  let rgbFrame,
+                  !rgbFrame.portraitBytes.isEmpty else {
+                return nil
+            }
+            return CameraImageFrame(
+                timestamp: frame.timestamp,
+                width: rgbFrame.portraitWidth,
+                height: rgbFrame.portraitHeight,
+                channels: 3,
+                rgbBytes: rgbFrame.portraitBytes
+            )
+        }()
+
         if let image = rgbFrame?.uiImage {
-            streamFrame(image: image)
+            let didStreamFrame = streamFrame(image: image)
+            if didStreamFrame,
+               let modelCameraFrame,
+               WebSocketManager.shared.hasConnectedWebSocketClients() {
+                let modelResults = ModelRunner.shared.runActiveModels(frame: modelCameraFrame)
+                WebSocketManager.shared.publishMlDetections(
+                    frame: modelCameraFrame,
+                    modelResults: modelResults
+                )
+            }
         }
 
         if shouldUpdatePreview {
@@ -569,6 +613,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         currentImageChannels = 3
 
         let imageBytes = needsImagePayload ? (rgbFrame?.portraitBytes ?? []) : []
+        latestCameraFrame = modelCameraFrame
         currentData = LidarCameraData(
             timestamp: frame.timestamp,
             points: pointCloudData?.points ?? [],

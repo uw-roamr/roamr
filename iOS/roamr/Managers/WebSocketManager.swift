@@ -56,6 +56,7 @@ class WebSocketManager: ObservableObject {
     private var latestPointCloudData: Data?
     private var latestMapFrameMessage: String?
     private var latestMapLayerPayloads: [String: Data] = [:]
+    private var latestMlDetectionsMessage: String?
     private var latestWasmStateMessage: String?
     private var recentWasmLogMessages: [String] = []
     private var selectedWasmTargetId: String
@@ -537,6 +538,57 @@ class WebSocketManager: ObservableObject {
         broadcastTextMessage(payload)
     }
 
+    func publishMlDetections(
+        frame: CameraImageFrame,
+        modelResults: [ActiveModelFrameDetections]
+    ) {
+        let models: [[String: Any]] = modelResults.map { model in
+            [
+                "model_id": model.modelId,
+                "model_name": model.modelName,
+                "manifest_name": model.manifestName,
+                "status": model.result.status.rawValue,
+                "detections": model.result.detections.map { detection in
+                    var serializedDetection: [String: Any] = [
+                        "class_id": detection.classId,
+                        "score": detection.score,
+                        "x_min": detection.xMin,
+                        "y_min": detection.yMin,
+                        "x_max": detection.xMax,
+                        "y_max": detection.yMax
+                    ]
+                    if let labelName = detection.labelName, !labelName.isEmpty {
+                        serializedDetection["label_name"] = labelName
+                    }
+                    return serializedDetection
+                }
+            ]
+        }
+
+        guard let payload = makeJSONString([
+            "type": "ml_detections",
+            "timestamp": frame.timestamp,
+            "image_width": frame.width,
+            "image_height": frame.height,
+            "models": models
+        ]) else {
+            return
+        }
+
+        latestMlDetectionsMessage = payload
+        broadcastTextMessage(payload)
+    }
+
+    func publishMlDetectionsReset() {
+        latestMlDetectionsMessage = nil
+        guard let payload = makeJSONString([
+            "type": "ml_detections_reset"
+        ]) else {
+            return
+        }
+        broadcastTextMessage(payload)
+    }
+
     // MARK: - WebSocket Frame Creation
 
     private func createBinaryFrame(data: Data) -> Data {
@@ -592,6 +644,10 @@ class WebSocketManager: ObservableObject {
 
         for payload in recentWasmLogMessages {
             sendTextFrame(payload, to: connection, label: "recent wasm log")
+        }
+
+        if let latestMlDetectionsMessage {
+            sendTextFrame(latestMlDetectionsMessage, to: connection, label: "latest ml detections")
         }
 
         sendLatestPointCloud(to: connection)

@@ -10,6 +10,7 @@ import SwiftUI
 enum WasmHubTab: String, CaseIterable {
     case hub = "Home"
     case downloaded = "Downloaded"
+    case mlBundles = "ML"
 }
 
 struct WasmHubView: View {
@@ -17,6 +18,7 @@ struct WasmHubView: View {
     @ObservedObject private var wasmManager = WasmManager.shared
     @State private var selectedTab: WasmHubTab = .hub
     @State private var selectedFile: LocalWasmFile?
+    @State private var selectedBundle: LocalWasmBundle?
     @State private var isMapExpanded = true
     @State private var isConsoleExpanded = true
 
@@ -24,8 +26,8 @@ struct WasmHubView: View {
         VStack(spacing: 0) {
             PageHeader(
                 title: "WASM",
-                statusText: wasmManager.isRunning ? "Running" : (selectedFile != nil ? "Ready" : "Idle"),
-                statusColor: wasmManager.isRunning ? .green : (selectedFile != nil ? .blue : .gray)
+                statusText: wasmManager.isRunning ? "Running" : (hasRunnableSelection ? "Ready" : "Idle"),
+                statusColor: wasmManager.isRunning ? .green : (hasRunnableSelection ? .blue : .gray)
             ) {
                 if wasmManager.isRunning {
                     Button {
@@ -44,7 +46,7 @@ struct WasmHubView: View {
                     } label: {
                         PlayButton(isActive: wasmManager.isRunning)
                     }
-                    .disabled(selectedFile == nil)
+                    .disabled(!hasRunnableSelection)
                 }
             }
 
@@ -69,6 +71,11 @@ struct WasmHubView: View {
                 case .downloaded:
                     DownloadedTab(
                         selectedFile: $selectedFile,
+                        isRunning: wasmManager.isRunning
+                    )
+                case .mlBundles:
+                    MLBundlesTab(
+                        selectedBundle: $selectedBundle,
                         isRunning: wasmManager.isRunning
                     )
                 }
@@ -144,15 +151,36 @@ struct WasmHubView: View {
         }
         .padding(.top, safeAreaInsets.top)
         .padding(.bottom, safeAreaInsets.bottom + AppConstants.shared.tabBarHeight)
+        .onChange(of: selectedFile) { _, file in
+            if file != nil {
+                selectedBundle = nil
+            }
+        }
+        .onChange(of: selectedBundle) { _, bundle in
+            if bundle != nil {
+                selectedFile = nil
+            }
+        }
+    }
+
+    private var hasRunnableSelection: Bool {
+        selectedFile != nil || selectedBundle != nil
     }
 
     private func runSelectedWasm() {
-        guard let file = selectedFile else { return }
+        let wasmURL: URL
+        if let bundle = selectedBundle {
+            wasmURL = bundle.entryWasmURL
+        } else if let file = selectedFile {
+            wasmURL = file.fileURL
+        } else {
+            return
+        }
 
         DispatchQueue.global(qos: .userInitiated).async {
             wasmManager.startConfiguredHostSensors()
 
-            wasmManager.runWasmFile(at: file.fileURL)
+            wasmManager.runWasmFile(at: wasmURL)
 
             wasmManager.stopConfiguredHostSensors()
         }

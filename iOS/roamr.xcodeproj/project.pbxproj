@@ -16,6 +16,9 @@
 		56AAE17A2ECD46B80057E1DF /* libc.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 56AAE1792ECD46B80057E1DF /* libc.tbd */; };
 		56AAE17C2ECD46C20057E1DF /* libdl.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 56AAE17B2ECD46C20057E1DF /* libdl.tbd */; };
 		56B658962ED23A6D00A35411 /* libc++.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 56B658952ED23A6D00A35411 /* libc++.tbd */; };
+		56EXECUTORCH112EE000000001 /* executorch in Frameworks */ = {isa = PBXBuildFile; productRef = 56EXECUTORCH012EE000000001 /* executorch */; };
+		56EXECUTORCH112EE000000002 /* backend_xnnpack in Frameworks */ = {isa = PBXBuildFile; productRef = 56EXECUTORCH012EE000000002 /* backend_xnnpack */; };
+		56EXECUTORCH112EE000000003 /* kernels_optimized in Frameworks */ = {isa = PBXBuildFile; productRef = 56EXECUTORCH012EE000000003 /* kernels_optimized */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -31,6 +34,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				WASM,
 			);
 			target = 56206B162EBAB1C600C8E9E8 /* roamr */;
 		};
@@ -52,6 +56,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				56EXECUTORCH112EE000000003 /* kernels_optimized in Frameworks */,
+				56EXECUTORCH112EE000000002 /* backend_xnnpack in Frameworks */,
+				56EXECUTORCH112EE000000001 /* executorch in Frameworks */,
 				563881B52F216CBB006D4C83 /* GoogleSignInSwift in Frameworks */,
 				563881B42F216CBB006D4C83 /* GoogleSignIn in Frameworks */,
 				56387F1D2F2161F1006D4C83 /* FirebaseStorage in Frameworks */,
@@ -104,6 +111,7 @@
 			buildPhases = (
 				56206B132EBAB1C600C8E9E8 /* Sources */,
 				56206B142EBAB1C600C8E9E8 /* Frameworks */,
+				C9E7E0CE2F00000100043F0F /* Stage WASM Assets */,
 				56206B152EBAB1C600C8E9E8 /* Resources */,
 			);
 			buildRules = (
@@ -115,6 +123,9 @@
 			);
 			name = roamr;
 			packageProductDependencies = (
+				56EXECUTORCH012EE000000001 /* executorch */,
+				56EXECUTORCH012EE000000002 /* backend_xnnpack */,
+				56EXECUTORCH012EE000000003 /* kernels_optimized */,
 				56FIREBASE012EE0000000001 /* FirebaseAuth */,
 				56FIREBASE012EE0000000002 /* FirebaseFirestore */,
 				56FIREBASE012EE0000000003 /* FirebaseStorage */,
@@ -151,6 +162,7 @@
 			mainGroup = 56206B0E2EBAB1C600C8E9E8;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
+				56EXECUTORCH002EE000000001 /* XCRemoteSwiftPackageReference "executorch" */,
 				56FIREBASE002EE0000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				56GOOGLE002EE0000000001 /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 			);
@@ -173,6 +185,37 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		C9E7E0CE2F00000100043F0F /* Stage WASM Assets */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+				inputPaths = (
+					"$(SRCROOT)/../WASM/slam_main.wasm",
+					"$(SRCROOT)/../WASM/stop_sign_main.wasm",
+					"$(SRCROOT)/../WASM/stop_sign_bundle/manifest.json",
+					"$(SRCROOT)/../WASM/stop_sign_bundle/model.pte",
+					"$(SRCROOT)/../WASM/stop_sign_bundle/labels.json",
+				);
+			name = "Stage WASM Assets";
+			outputFileListPaths = (
+			);
+				outputPaths = (
+					"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/WASM/slam_main.wasm",
+					"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/WASM/stop_sign_main.wasm",
+					"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/WASM/stop_sign_bundle/manifest.json",
+					"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/WASM/stop_sign_bundle/model.pte",
+					"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/WASM/stop_sign_bundle/labels.json",
+				);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nSRC_WASM_DIR=\"${SRCROOT}/../WASM\"\nDST_WASM_DIR=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/WASM\"\nmkdir -p \"${DST_WASM_DIR}\"\nfor wasm_file in slam_main.wasm stop_sign_main.wasm; do\n  if [ -f \"${SRC_WASM_DIR}/${wasm_file}\" ]; then\n    cp -f \"${SRC_WASM_DIR}/${wasm_file}\" \"${DST_WASM_DIR}/${wasm_file}\"\n  fi\ndone\nif [ -f \"${SRC_WASM_DIR}/stop_sign_bundle/manifest.json\" ] && [ -f \"${SRC_WASM_DIR}/stop_sign_bundle/model.pte\" ]; then\n  mkdir -p \"${DST_WASM_DIR}/stop_sign_bundle\"\n  cp -f \"${SRC_WASM_DIR}/stop_sign_bundle/manifest.json\" \"${DST_WASM_DIR}/stop_sign_bundle/manifest.json\"\n  cp -f \"${SRC_WASM_DIR}/stop_sign_bundle/model.pte\" \"${DST_WASM_DIR}/stop_sign_bundle/model.pte\"\n  if [ -f \"${SRC_WASM_DIR}/stop_sign_bundle/labels.json\" ]; then\n    cp -f \"${SRC_WASM_DIR}/stop_sign_bundle/labels.json\" \"${DST_WASM_DIR}/stop_sign_bundle/labels.json\"\n  fi\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		56206B132EBAB1C600C8E9E8 /* Sources */ = {
@@ -339,6 +382,8 @@
 				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-Wl,-all_load",
 					"-ldl",
 					"-lm",
 				);
@@ -388,6 +433,8 @@
 				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
+					"$(inherited)",
+					"-Wl,-all_load",
 					"-ldl",
 					"-lm",
 				);
@@ -429,6 +476,14 @@
 /* End XCConfigurationList section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		56EXECUTORCH002EE000000001 /* XCRemoteSwiftPackageReference "executorch" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/pytorch/executorch.git";
+			requirement = {
+				branch = "swiftpm-1.1.0";
+				kind = branch;
+			};
+		};
 		56FIREBASE002EE0000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/firebase/firebase-ios-sdk";
@@ -448,6 +503,21 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		56EXECUTORCH012EE000000001 /* executorch */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 56EXECUTORCH002EE000000001 /* XCRemoteSwiftPackageReference "executorch" */;
+			productName = executorch;
+		};
+		56EXECUTORCH012EE000000002 /* backend_xnnpack */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 56EXECUTORCH002EE000000001 /* XCRemoteSwiftPackageReference "executorch" */;
+			productName = backend_xnnpack;
+		};
+		56EXECUTORCH012EE000000003 /* kernels_optimized */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 56EXECUTORCH002EE000000001 /* XCRemoteSwiftPackageReference "executorch" */;
+			productName = kernels_optimized;
+		};
 		56FIREBASE012EE0000000001 /* FirebaseAuth */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 56FIREBASE002EE0000000001 /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;

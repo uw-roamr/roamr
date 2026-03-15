@@ -3,7 +3,7 @@
 This directory is the robot runtime that gets compiled to `slam_main.wasm` and hosted by the iOS app through WAMR. The best entrypoint for understanding the system is [WASM/slam_main.cpp](/Users/thomasonzhou/src/roamr/WASM/slam_main.cpp). A mirrored copy also exists at [iOS/roamr/WASM/slam_main.cpp](/Users/thomasonzhou/src/roamr/iOS/roamr/WASM/slam_main.cpp), but the code in this directory should be treated as the source of truth.
 
 
-Build from [WASM/build_wasm.sh](/Users/thomasonzhou/src/roamr/WASM/build_wasm.sh):
+Build `slam_main.wasm` from [WASM/build_wasm.sh](/Users/thomasonzhou/src/roamr/WASM/build_wasm.sh):
 
 ```sh
 cd WASM
@@ -65,6 +65,47 @@ Exported to the host:
 - `clear_planner_goal_map_pixel`
 
 Those exports let the UI set or clear a manual planning target on the rendered map.
+
+## Native ML Bridge
+
+The iOS host now includes a generic model bridge for dynamically loaded perception
+models. The intended bundle layout is:
+
+```text
+<bundle-dir>/
+  stop_sign_main.wasm
+  stop_sign_bundle/
+    manifest.json
+    model.pte
+```
+
+Build ML-focused entrypoints with [WASM/build_ml_wasm.sh](/Users/kai/code/roamr/WASM/build_ml_wasm.sh):
+
+```sh
+cd WASM
+./build_ml_wasm.sh
+./build_ml_wasm.sh stop_sign_main.cpp
+```
+
+`stop_sign_main.cpp` shows the guest-side pattern:
+
+1. call `ml::open_model("stop_sign_bundle/manifest.json", ...)`
+2. poll `ml::run_latest_camera_frame(...)`
+3. inspect detections
+4. call `write_motors(...)` when policy conditions are met
+
+The manifest contract currently expects:
+
+- `task = "object_detection"`
+- `backend = "executorch"`
+- first output tensor flattened as rows of 6 floats:
+  `class_id, score, x_min, y_min, x_max, y_max`
+- RGB input only
+- `resize_mode = "stretch"`
+
+See [WASM/ml/model.h](/Users/kai/code/roamr/WASM/ml/model.h),
+[WASM/stop_sign_main.cpp](/Users/kai/code/roamr/WASM/stop_sign_main.cpp),
+and [WASM/stop_sign_bundle/manifest.json](/Users/kai/code/roamr/WASM/stop_sign_bundle/manifest.json).
 
 ## Runtime Overview
 
