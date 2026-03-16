@@ -19,8 +19,6 @@ What if we turned the iPhone into a robot?
 - runs WASM bytecode using statically compiled WAMR iwasm
 - communicates with ESP32 over BLE to control motors
 
-- TODO: enable dynamic WASM loading through LocalSend
-
 ### WASM module:
 
 - imports read sensor functions from iOS host
@@ -50,6 +48,6 @@ pre-commit
 - Connect to app websocket
 - Drive robot!
 
-## Localization Demo
+## Development
 
 See [WASM/README.md](WASM/README.md)
