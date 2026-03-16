@@ -5,7 +5,7 @@
     "board/esp32c6-builtin.cfg"
   ],
   "idf.customExtraVars": {
-    "IDF_TARGET": "esp32c6"
+    "IDF_TARGET": "esp32s3"
   },
   "idf.port": "/dev/ttyUSB0",
   "idf.flashType": "UART"

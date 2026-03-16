@@ -3,9 +3,19 @@ bazel-*
 iOS/.DS_Store
 iOS/roamr.xcodeproj/xcuserdata/
 iOS/roamr.xcodeproj/project.xcworkspace/xcuserdata/
+iOS/roamr.xcodeproj/project.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings
 embedded/ble-test/build/
 .vscode/
 
 hw/**/*.lck
 hw/**/*backups*
 hw/**/*auto*
+# WASM Hub
+wasm-hub/node_modules/
+wasm-hub/dist/
+wasm-hub/.env
+wasm-hub/.env.local
+wasm-hub/.firebase/
+
+navigation_example/
+icp_example/
