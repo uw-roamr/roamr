@@ -504,10 +504,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         } else {
             shouldPublishWebSocketPointCloud = false
         }
-        let sensorConfig = WasmManager.shared.effectiveSensorConfig()
-        let needsPointCloud = sensorConfig.lidarPointsEnabled
-        let needsPointColors = needsPointCloud && includePointColorsForWasm && sensorConfig.pointColorsEnabled
-        let needsImagePayload = includeImageInWasmPayload && sensorConfig.cameraImageEnabled
+        let needsPointColors = includePointColorsForWasm
+        let needsImagePayload = includeImageInWasmPayload
         let needsModelImage = ModelRunner.shared.hasActiveModels()
         let needsUIImage = needsPreviewVideo || isStreaming
         let needsRGBFrame = needsImagePayload || needsUIImage || needsModelImage
@@ -530,18 +528,13 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             rgbFrame = nil
         }
 
-        let pointCloudData: PointCloudExportData?
-        if needsPointCloud {
-            pointCloudData = depthDataToPointCloud(
-                depthMap: depthData.depthMap,
-                confidenceMap: depthData.confidenceMap,
-                frame: frame,
-                colorSource: nil,
-                colorPixelBuffer: needsPointColors ? frame.capturedImage : nil
-            )
-        } else {
-            pointCloudData = nil
-        }
+        let pointCloudData = depthDataToPointCloud(
+            depthMap: depthData.depthMap,
+            confidenceMap: depthData.confidenceMap,
+            frame: frame,
+            colorSource: nil,
+            colorPixelBuffer: needsPointColors ? frame.capturedImage : nil
+        )
 
         let webSocketPointCloudData: PointCloudExportData?
         if shouldPublishWebSocketPointCloud {
