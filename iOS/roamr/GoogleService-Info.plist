@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CLIENT_ID</key>
+	<string>968645128342-7pnbrqngbgntep1pigic46fpkl1qu1b2.apps.googleusercontent.com</string>
+	<key>REVERSED_CLIENT_ID</key>
+	<string>com.googleusercontent.apps.968645128342-7pnbrqngbgntep1pigic46fpkl1qu1b2</string>
+	<key>API_KEY</key>
+	<string>AIzaSyBlR4Rvqr4ZUJMqPvv6_brqXmD5EAGU26U</string>
+	<key>GCM_SENDER_ID</key>
+	<string>968645128342</string>
+	<key>PLIST_VERSION</key>
+	<string>1</string>
+	<key>BUNDLE_ID</key>
+	<string>com.capstone.roamr</string>
+	<key>PROJECT_ID</key>
+	<string>capstone-roamr</string>
+	<key>STORAGE_BUCKET</key>
+	<string>capstone-roamr.firebasestorage.app</string>
+	<key>IS_ADS_ENABLED</key>
+	<false></false>
+	<key>IS_ANALYTICS_ENABLED</key>
+	<false></false>
+	<key>IS_APPINVITE_ENABLED</key>
+	<true></true>
+	<key>IS_GCM_ENABLED</key>
+	<true></true>
+	<key>IS_SIGNIN_ENABLED</key>
+	<true></true>
+	<key>GOOGLE_APP_ID</key>
+	<string>1:968645128342:ios:7c23ea0c5683b38374d2b7</string>
+</dict>
+</plist>

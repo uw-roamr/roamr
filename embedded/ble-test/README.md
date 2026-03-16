@@ -41,3 +41,149 @@ Run `idf.py monitor` to monitor the project. Or, you can the TV icon to monitor 
 ## SimpleFOC
 
 SimpleFOC and SimpleFOC drivers are cloned into components.
+
+Setup details (clone commands + required component `CMakeLists.txt` files):
+[`SIMPLEFOC_COMPONENTS_SETUP.md`](SIMPLEFOC_COMPONENTS_SETUP.md)
+
+# SimpleFOC Components Setup
+
+This project expects `simplefoc` and `simplefoc_drivers` as local ESP-IDF components under `components/`.
+
+## 1. Clone Repositories
+
+From the project root:
+
+```bash
+mkdir -p components
+git clone https://github.com/simplefoc/Arduino-FOC.git components/simplefoc
+git clone https://github.com/simplefoc/Arduino-FOC-drivers.git components/simplefoc_drivers
+```
+
+Optional: pin to known-good revisions:
+
+```bash
+git -C components/simplefoc checkout 395b6cd4c621fe460c1d61a99bc0fc38913d5481
+git -C components/simplefoc_drivers checkout ed05aa1644de36cbd19f43e8ea5c3edb643cefa9
+```
+
+## 2. Add `CMakeLists.txt` Files
+
+Upstream repos do not include ESP-IDF component registration files, so create them.
+
+### `components/simplefoc/CMakeLists.txt`
+
+```cmake
+file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.c")
+
+idf_component_register(SRCS ${SOURCES}
+                       INCLUDE_DIRS "src"
+                       REQUIRES espressif__arduino-esp32)
+
+target_compile_options(${COMPONENT_LIB} PRIVATE
+                       -Wno-error=uninitialized
+                       -Wno-error=overloaded-virtual
+                       -Wno-error=switch
+                       -Wno-error=comment)
+```
+
+### `components/simplefoc_drivers/CMakeLists.txt`
+
+```cmake
+file(GLOB_RECURSE SOURCES "src/*.cpp" "src/*.c")
+
+idf_component_register(SRCS ${SOURCES}
+                       INCLUDE_DIRS "src"
+                       REQUIRES espressif__arduino-esp32 simplefoc)
+
+target_compile_options(${COMPONENT_LIB} PRIVATE
+                       -Wno-error=overloaded-virtual
+                       -Wno-error=switch
+                       -Wno-error=comment)
+```
+
+## 3. Confirm Main Component Dependencies
+
+Ensure [`main/CMakeLists.txt`](main/CMakeLists.txt) includes:
+
+- `REQUIRES ... simplefoc ... simplefoc_drivers`
+
+Then build:
+
+```bash
+idf.py build
+```
+
+## BLE Odometry Upload Protocol
+
+The firmware exposes one custom service (`0x00FF`) with 2 characteristics:
+
+- `0xFF01` control (`WRITE`, `WRITE_NO_RSP`)
+- `0xFF02` data (`NOTIFY`)
+
+### Control commands (`FF01`)
+
+- `SET_PERIOD <sample_period_ms>`
+- `CLEAR` (clears pending encoder backlog)
+
+Legacy motor command writes (`"<left> <right> <duration>"`) still work on `FF01` and can be sent continuously while odometry notifications are active.
+
+### Data frames (`FF02` notify)
+
+Each notification is MTU-aware and chunked (`max_payload = ATT_MTU - 3`).
+
+- Header:
+- `seq`: `uint16` little-endian
+- `n`: `uint8` sample count
+- Payload:
+- `n` samples, each sample:
+- `dl_ticks`: `int16` little-endian
+- `dr_ticks`: `int16` little-endian
+
+So frame size is `3 + 4*n` bytes.
+
+There is no separate status characteristic in the stripped-down firmware.
+### Status payload (`FF03` read, little-endian)
+
+- `state`: `uint8` (`0=IDLE, 1=RECORDING, 2=UPLOADING`)
+- `buffered_samples`: `uint16`
+- `dropped_samples`: `uint16`
+- `last_seq`: `uint16` (`0xFFFF` before first upload frame)
+- `sample_period_ms`: `uint16`
+
+### docker build
+
+For reproducible builds across platforms, we suggest using the docker container for release-v5.5
+
+https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-guides/tools/idf-docker-image.html
+
+```sh
+docker run --rm -v $PWD:/project -w /project -u $UID -e HOME=/tmp -it espressif/idf:release-v5.5
+```
+
+## Linux
+```sh
+docker run --rm -v $PWD:/project -w /project -u $UID -e HOME=/tmp -it --device=/dev/ttyUSB0 --group-add dialout espressif/idf:release-v5.5
+```
+
+Build, then flash the firmware.
+
+```sh
+idf.py build
+```
+
+Then flash the ESP. It may be necessary to configure additional settings in Windows or MacOS.
+
+```sh
+idf.py flash
+```
+
+## Windows Instructions:
+
+Run the following command in a separate terminal to open the COM port to the ESP (check your COM port in device manager)
+```sh
+esp_rfc2217_server -v -p 4000 COM3
+```
+To flash the ESP,  run the following command in roamr/embedded/ble-test
+```sh
+MSYS_NO_PATHCONV=1 docker run --rm -v "/$(pwd):/project" -w /project -u $UID -e HOME=/tmp -it espressif/idf:release-v5.5 idf.py --port 'rfc2217://host.docker.internal:4000?ign_set_control' flash
+```

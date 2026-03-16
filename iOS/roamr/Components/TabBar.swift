@@ -41,16 +41,24 @@ struct FloatingBubbleTabBar: View {
 			TabBubble(page: .settings, currentPage: $currentPage)
 		}
 		.padding(12)
-		.background(
-			GeometryReader { geo in
-				Capsule()
-					.fill(.ultraThinMaterial)
-					.shadow(color: .black.opacity(0.15), radius: 10, y: 5)
-					.onAppear {
-						AppConstants.shared.tabBarHeight = geo.size.height
+		.background {
+			Capsule()
+				.fill(.regularMaterial)
+				.overlay(
+					Capsule()
+						.stroke(Color.black.opacity(0.08), lineWidth: 1)
+				)
+				.shadow(color: .black.opacity(0.18), radius: 12, y: 6)
+				.background {
+					GeometryReader { geo in
+						Color.clear
+							.onAppear {
+								AppConstants.shared.tabBarHeight = geo.size.height
+							}
 					}
-			}
-		)
+				}
+		}
+		.padding(.horizontal, 16)
 		.animation(.spring(response: 0.4, dampingFraction: 0.7), value: currentPage)
 	}
 }
