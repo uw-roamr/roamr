@@ -13,8 +13,7 @@ struct DownloadedTab: View {
 
     @State private var showDeleteConfirmation = false
     @State private var fileToDelete: LocalWasmFile?
-
-    private var downloadManager: DownloadManager { DownloadManager.shared }
+    @State private var downloadManager = DownloadManager.shared
 
     var body: some View {
         VStack {

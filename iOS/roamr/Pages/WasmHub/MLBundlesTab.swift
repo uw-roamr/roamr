@@ -16,8 +16,7 @@ struct MLBundlesTab: View {
     @State private var bundleToDelete: LocalWasmBundle?
     @State private var showDeleteConfirmation = false
     @State private var errorMessage: String?
-
-    private var bundleManager: MLBundleManager { MLBundleManager.shared }
+    @State private var bundleManager = MLBundleManager.shared
 
     var body: some View {
         VStack(spacing: 12) {

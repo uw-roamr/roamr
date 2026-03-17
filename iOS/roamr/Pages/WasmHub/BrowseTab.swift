@@ -16,12 +16,11 @@ struct BrowseTab: View {
     @State private var searchText = ""
     @State private var selectedFilter: BrowseFilter = .publicFiles
     @State private var errorMessage: String?
+    @State private var wasmHubService = WasmHubService.shared
+    @State private var downloadManager = DownloadManager.shared
+    @State private var authManager = AuthManager.shared
 
     let onSelectFile: (LocalWasmFile) -> Void
-
-    private var wasmHubService: WasmHubService { WasmHubService.shared }
-    private var downloadManager: DownloadManager { DownloadManager.shared }
-    private var authManager: AuthManager { AuthManager.shared }
 
     var body: some View {
         VStack(spacing: 0) {

@@ -106,6 +106,26 @@
             box-shadow: inset 0 0 0 1px rgba(102, 126, 234, 0.08);
         }
 
+        .wasm-control-card.collapsible .wasm-control-header {
+            cursor: pointer;
+        }
+
+        .wasm-control-card.collapsible .wasm-control-header::after {
+            content: '▾';
+            margin-left: auto;
+            color: #5f6981;
+            font-size: 14px;
+            transition: transform 0.16s ease;
+        }
+
+        .wasm-control-card.collapsible.collapsed .wasm-control-header::after {
+            transform: rotate(-90deg);
+        }
+
+        .wasm-control-card.collapsible.collapsed > :not(.wasm-control-header) {
+            display: none;
+        }
+
         .wasm-control-header {
             display: flex;
             justify-content: space-between;
@@ -969,7 +989,7 @@
         </div>
 
         <div class="wasm-controls-grid">
-            <div class="wasm-control-card">
+            <div class="wasm-control-card" data-card-key="wasm">
                 <div class="wasm-control-header">
                     <div class="wasm-control-title">WASM Control</div>
                     <div class="wasm-control-status">Status: <strong id="wasmRunStatus">Idle</strong></div>
@@ -997,7 +1017,7 @@
                 </div>
             </div>
 
-            <div class="wasm-control-card">
+            <div class="wasm-control-card" data-card-key="hub">
                 <div class="wasm-control-header">
                     <div class="wasm-control-title">WasmHub Public Files</div>
                 </div>
@@ -1021,7 +1041,18 @@
                 </div>
             </div>
 
-            <div class="wasm-control-card">
+            <div class="wasm-control-card" data-card-key="compatibility">
+                <div class="wasm-control-header">
+                    <div class="wasm-control-title">Client Compatibility</div>
+                    <div id="wasmCompatibilityStatus" class="wasm-status-pill">Unknown</div>
+                </div>
+
+                <div id="wasmCompatibilityMeta" class="wasm-control-meta">
+                    Connect to compare the web client and phone websocket versions.
+                </div>
+            </div>
+
+            <div class="wasm-control-card" data-card-key="ml">
                 <div class="wasm-control-header">
                     <div class="wasm-control-title">Imported ML Bundles</div>
                 </div>
@@ -1044,6 +1075,27 @@
                     </button>
                     <button id="mlBundleStopBtn" class="btn-disconnect" onclick="stopSelectedWasmRemote()" disabled>
                         Stop
+                    </button>
+                </div>
+            </div>
+
+            <div class="wasm-control-card" data-card-key="upload">
+                <div class="wasm-control-header">
+                    <div class="wasm-control-title">Upload WASM to Phone</div>
+                </div>
+
+                <div class="input-group">
+                    <label for="wasmUploadInput">Local WASM File</label>
+                    <input id="wasmUploadInput" type="file" accept=".wasm,application/wasm">
+                </div>
+
+                <div id="wasmUploadMeta" class="wasm-control-meta">
+                    Choose a local .wasm file and upload it directly to the phone.
+                </div>
+
+                <div class="wasm-control-actions">
+                    <button id="wasmUploadBtn" class="btn-send" onclick="uploadSelectedWasmFile()" disabled>
+                        Upload
                     </button>
                 </div>
             </div>
@@ -1207,6 +1259,8 @@
         const wasmProgramSelect = document.getElementById('wasmProgramSelect');
         const wasmSelectionMetaEl = document.getElementById('wasmSelectionMeta');
         const wasmRunStatusEl = document.getElementById('wasmRunStatus');
+        const wasmCompatibilityStatusEl = document.getElementById('wasmCompatibilityStatus');
+        const wasmCompatibilityMetaEl = document.getElementById('wasmCompatibilityMeta');
         const wasmRefreshBtn = document.getElementById('wasmRefreshBtn');
         const wasmRunBtn = document.getElementById('wasmRunBtn');
         const wasmStopBtn = document.getElementById('wasmStopBtn');
@@ -1216,6 +1270,9 @@
         const mlBundleRefreshBtn = document.getElementById('mlBundleRefreshBtn');
         const mlBundleRunBtn = document.getElementById('mlBundleRunBtn');
         const mlBundleStopBtn = document.getElementById('mlBundleStopBtn');
+        const wasmUploadInput = document.getElementById('wasmUploadInput');
+        const wasmUploadMetaEl = document.getElementById('wasmUploadMeta');
+        const wasmUploadBtn = document.getElementById('wasmUploadBtn');
         const hubRefreshBtn = document.getElementById('hubRefreshBtn');
         const hubSelectionMetaEl = document.getElementById('hubSelectionMeta');
         const hubDownloadBtn = document.getElementById('hubDownloadBtn');
@@ -1303,6 +1360,9 @@
             5: 'semantic'
         };
         const MAX_CONSOLE_LINES = 200;
+        const ROAMR_WEB_CLIENT_VERSION = '2026-03-17.1';
+        const ROAMR_WEBSOCKET_PROTOCOL_VERSION = '2026-03-17.1';
+        const wasmControlCards = Array.from(document.querySelectorAll('.wasm-control-card[data-card-key]'));
 
         // Joystick variables
         let joystickTimer = null;
@@ -1362,8 +1422,12 @@
             runningFileName: '',
             isRunning: false,
             isLoadingHub: false,
-            hubError: ''
+            hubError: '',
+            compatibility: null
         };
+        let wasmUploadInProgress = false;
+        let activeCollapsedControlCardKey = 'wasm';
+        let latestWasmUploadStatus = '';
 
         const pointCloudState = {
             points: null,
@@ -1977,7 +2041,12 @@
             if (typeof message.text !== 'string' || message.text.trim().length === 0) {
                 return;
             }
-            appendConsoleLine(message.text.trim());
+            const text = message.text.trim();
+            appendConsoleLine(text);
+            if (text.startsWith('[web][upload]')) {
+                latestWasmUploadStatus = text;
+                wasmUploadMetaEl.textContent = latestWasmUploadStatus;
+            }
         }
 
         function handleWasmStateMessage(message) {
@@ -1995,7 +2064,73 @@
             wasmControlState.isRunning = Boolean(message.is_running);
             wasmControlState.isLoadingHub = Boolean(message.is_loading_hub);
             wasmControlState.hubError = typeof message.hub_error === 'string' ? message.hub_error : '';
+            wasmControlState.compatibility = message.compatibility && typeof message.compatibility === 'object'
+                ? message.compatibility
+                : null;
             updateWasmControlUI();
+        }
+
+        function updateCompatibilityUI() {
+            const isConnected = ws && ws.readyState === WebSocket.OPEN;
+            const compatibility = wasmControlState.compatibility;
+
+            if (!isConnected) {
+                wasmCompatibilityStatusEl.textContent = 'Disconnected';
+                wasmCompatibilityStatusEl.style.background = '';
+                wasmCompatibilityMetaEl.textContent = 'Connect to compare the web client and phone websocket versions.';
+                return;
+            }
+
+            if (!compatibility) {
+                wasmCompatibilityStatusEl.textContent = 'Unknown';
+                wasmCompatibilityStatusEl.style.background = '';
+                wasmCompatibilityMetaEl.textContent =
+                    `web ${ROAMR_WEB_CLIENT_VERSION} • protocol ${ROAMR_WEBSOCKET_PROTOCOL_VERSION} • waiting for app compatibility info`;
+                return;
+            }
+
+            const serverProtocol = typeof compatibility.protocol_version === 'string'
+                ? compatibility.protocol_version
+                : 'unknown';
+            const appVersion = typeof compatibility.app_version === 'string'
+                ? compatibility.app_version
+                : 'unknown';
+            const buildVersion = typeof compatibility.build_version === 'string'
+                ? compatibility.build_version
+                : 'unknown';
+            const serverName = typeof compatibility.server_name === 'string'
+                ? compatibility.server_name
+                : 'roamr-ios';
+
+            const protocolMatches = serverProtocol === ROAMR_WEBSOCKET_PROTOCOL_VERSION;
+            wasmCompatibilityStatusEl.textContent = protocolMatches ? 'Matched' : 'Mismatch';
+            wasmCompatibilityStatusEl.style.background = protocolMatches
+                ? 'rgba(70, 160, 90, 0.18)'
+                : 'rgba(200, 120, 40, 0.18)';
+            wasmCompatibilityMetaEl.textContent =
+                `${serverName} app ${appVersion} (${buildVersion}) • server protocol ${serverProtocol} • web ${ROAMR_WEB_CLIENT_VERSION} • client protocol ${ROAMR_WEBSOCKET_PROTOCOL_VERSION}`
+                + (protocolMatches ? ' • versions look aligned' : ' • protocol mismatch may explain odd websocket behavior');
+        }
+
+        function applyWasmControlCardLayout() {
+            const useAccordion = wasmControlState.isRunning;
+            for (const card of wasmControlCards) {
+                const cardKey = card.dataset.cardKey || '';
+                card.classList.toggle('collapsible', useAccordion);
+                const shouldCollapse = useAccordion && cardKey !== activeCollapsedControlCardKey;
+                card.classList.toggle('collapsed', shouldCollapse);
+            }
+        }
+
+        function toggleWasmControlCard(cardKey) {
+            if (!wasmControlState.isRunning) {
+                return;
+            }
+            activeCollapsedControlCardKey = activeCollapsedControlCardKey === cardKey ? '' : cardKey;
+            if (!activeCollapsedControlCardKey) {
+                activeCollapsedControlCardKey = 'wasm';
+            }
+            applyWasmControlCardLayout();
         }
 
         function formatWasmTargetDetail(file) {
@@ -2008,6 +2143,63 @@
             return file.detail || file.file_size || file.kind || '';
         }
 
+        function updateWasmUploadUI() {
+            const isConnected = ws && ws.readyState === WebSocket.OPEN;
+            const file = wasmUploadInput.files && wasmUploadInput.files[0] ? wasmUploadInput.files[0] : null;
+            if (wasmUploadInProgress) {
+                wasmUploadMetaEl.textContent = file
+                    ? `Uploading ${file.name}...`
+                    : 'Uploading selected WASM file...';
+            } else if (file) {
+                wasmUploadMetaEl.textContent = `${file.name} • ${(file.size / 1024).toFixed(1)} KB`;
+            } else if (latestWasmUploadStatus) {
+                wasmUploadMetaEl.textContent = latestWasmUploadStatus;
+            } else {
+                wasmUploadMetaEl.textContent = isConnected
+                    ? 'Choose a local .wasm file and upload it directly to the phone.'
+                    : 'Connect to the iPhone before uploading a .wasm file.';
+            }
+            wasmUploadInput.disabled = !isConnected || wasmUploadInProgress;
+            wasmUploadBtn.disabled = !isConnected || wasmUploadInProgress || !file;
+        }
+
+        const wasmUploadMagic = [0x52, 0x52, 0x55, 0x31]; // "RRU1"
+        const wasmUploadMessageTypeBegin = 1;
+        const wasmUploadMessageTypeChunk = 2;
+        const wasmUploadMessageTypeComplete = 3;
+
+        function createWasmUploadBeginFrame(fileName, totalSize, totalChunks) {
+            const encodedName = new TextEncoder().encode(fileName);
+            const frame = new Uint8Array(14 + encodedName.length);
+            frame.set(wasmUploadMagic, 0);
+            frame[4] = wasmUploadMessageTypeBegin;
+            frame[5] = 0;
+            const view = new DataView(frame.buffer);
+            view.setUint32(6, totalSize, true);
+            view.setUint16(10, totalChunks, true);
+            view.setUint16(12, encodedName.length, true);
+            frame.set(encodedName, 14);
+            return frame.buffer;
+        }
+
+        function createWasmUploadChunkFrame(chunkIndex, chunkBytes) {
+            const frame = new Uint8Array(8 + chunkBytes.length);
+            frame.set(wasmUploadMagic, 0);
+            frame[4] = wasmUploadMessageTypeChunk;
+            frame[5] = 0;
+            const view = new DataView(frame.buffer);
+            view.setUint16(6, chunkIndex, true);
+            frame.set(chunkBytes, 8);
+            return frame.buffer;
+        }
+
+        function createWasmUploadCompleteFrame() {
+            const frame = new Uint8Array(5);
+            frame.set(wasmUploadMagic, 0);
+            frame[4] = wasmUploadMessageTypeComplete;
+            return frame.buffer;
+        }
+
         function updateWasmControlUI() {
             const isConnected = ws && ws.readyState === WebSocket.OPEN;
             const allFiles = wasmControlState.files;
@@ -2015,6 +2207,10 @@
             const mlBundles = allFiles.filter((file) => file.kind === 'ml bundle');
             const hubFiles = wasmControlState.hubFiles;
             const desiredHubFileId = wasmControlState.selectedHubFileId || hubProgramSelect.value;
+
+            if (!wasmControlState.isRunning) {
+                activeCollapsedControlCardKey = 'wasm';
+            }
 
             wasmProgramSelect.innerHTML = '';
             if (files.length === 0) {
@@ -2151,6 +2347,9 @@
             hubProgramSelect.disabled = !isConnected || wasmControlState.isLoadingHub || hubFiles.length === 0;
             hubRefreshBtn.disabled = !isConnected || wasmControlState.isLoadingHub;
             hubDownloadBtn.disabled = !isConnected || wasmControlState.isLoadingHub || !selectedHubFile || Boolean(selectedHubFile.is_downloaded);
+            updateCompatibilityUI();
+            updateWasmUploadUI();
+            applyWasmControlCardLayout();
         }
 
         function resetWasmControlState() {
@@ -2163,6 +2362,9 @@
             wasmControlState.isRunning = false;
             wasmControlState.isLoadingHub = false;
             wasmControlState.hubError = '';
+            wasmControlState.compatibility = null;
+            activeCollapsedControlCardKey = 'wasm';
+            latestWasmUploadStatus = '';
             updateWasmControlUI();
         }
 
@@ -2197,6 +2399,55 @@
                 });
             }
             sendWasmControlMessage({ type: 'wasm_run' });
+        }
+
+        async function uploadSelectedWasmFile() {
+            const file = wasmUploadInput.files && wasmUploadInput.files[0] ? wasmUploadInput.files[0] : null;
+            if (!file || !(ws && ws.readyState === WebSocket.OPEN) || wasmUploadInProgress) {
+                return;
+            }
+
+            wasmUploadInProgress = true;
+            latestWasmUploadStatus = '';
+            updateWasmUploadUI();
+
+            try {
+                const arrayBuffer = await file.arrayBuffer();
+                const bytes = new Uint8Array(arrayBuffer);
+                const rawChunkSize = 16 * 1024;
+                const totalChunks = Math.ceil(bytes.length / rawChunkSize);
+                const encodedNameLength = new TextEncoder().encode(file.name).length;
+
+                if (bytes.length > 0xFFFFFFFF) {
+                    throw new Error('file is too large for websocket upload');
+                }
+                if (totalChunks > 0xFFFF) {
+                    throw new Error('file requires too many upload chunks');
+                }
+                if (encodedNameLength > 0xFFFF) {
+                    throw new Error('file name is too long for upload');
+                }
+
+                ws.send(createWasmUploadBeginFrame(file.name, bytes.length, totalChunks));
+
+                for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+                    const start = chunkIndex * rawChunkSize;
+                    const end = Math.min(start + rawChunkSize, bytes.length);
+                    const chunkBytes = bytes.subarray(start, end);
+                    ws.send(createWasmUploadChunkFrame(chunkIndex, chunkBytes));
+                    await new Promise((resolve) => setTimeout(resolve, 0));
+                }
+
+                ws.send(createWasmUploadCompleteFrame());
+
+                wasmUploadInput.value = '';
+            } catch (error) {
+                const message = error instanceof Error ? error.message : 'upload failed';
+                wasmUploadMetaEl.textContent = `Upload failed: ${message}`;
+            } finally {
+                wasmUploadInProgress = false;
+                updateWasmUploadUI();
+            }
         }
 
         function stopSelectedWasmRemote() {
@@ -3281,9 +3532,24 @@
             });
         });
 
+        wasmUploadInput.addEventListener('change', () => {
+            updateWasmUploadUI();
+        });
+
         hubProgramSelect.addEventListener('change', () => {
             wasmControlState.selectedHubFileId = hubProgramSelect.value;
             updateWasmControlUI();
+        });
+
+        wasmControlCards.forEach((card) => {
+            const header = card.querySelector('.wasm-control-header');
+            const cardKey = card.dataset.cardKey || '';
+            if (!header || !cardKey) {
+                return;
+            }
+            header.addEventListener('click', () => {
+                toggleWasmControlCard(cardKey);
+            });
         });
 
         // Focus message input when page loads

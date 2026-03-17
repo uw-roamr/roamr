@@ -10,6 +10,11 @@ import Network
 import Combine
 import CryptoKit
 
+private enum RoamrWebSocketCompatibility {
+    static let protocolVersion = "2026-03-17.1"
+    static let webClientName = "roamr-web"
+}
+
 private struct WebSocketRollingTimingStat {
     private(set) var totalSeconds: Double = 0
     private(set) var maxSeconds: Double = 0
@@ -45,6 +50,33 @@ private struct PointCloudProfileWindow {
     }
 }
 
+private struct WasmUploadSession {
+    let fileName: String
+    let expectedSize: Int
+    let expectedChunks: Int
+    var receivedChunks: Int = 0
+    var data = Data()
+}
+
+private struct DecodedWebSocketFrame {
+    let fin: Bool
+    let opcode: UInt8
+    let payload: Data
+}
+
+private struct PartialIncomingWebSocketMessage {
+    let opcode: UInt8
+    var payload: Data
+}
+
+private enum IncomingWebSocketFrame {
+    case text(String)
+    case binary(Data)
+    case ping(Data)
+    case pong(Data)
+    case close(Data)
+}
+
 private enum RoamrBinaryPointCloudProtocol {
     static let magic: [UInt8] = [0x52, 0x52, 0x42, 0x31]  // "RRB1"
     static let messageTypePoints: UInt8 = 1
@@ -64,6 +96,16 @@ private enum RoamrBinaryMapLayerProtocol {
     static let channelsOffset = 24
     static let layerIdOffset = 28
     static let headerSize = 32
+}
+
+private enum RoamrBinaryUploadProtocol {
+    static let magic: [UInt8] = [0x52, 0x52, 0x55, 0x31]  // "RRU1"
+    static let messageTypeBegin: UInt8 = 1
+    static let messageTypeChunk: UInt8 = 2
+    static let messageTypeComplete: UInt8 = 3
+    static let beginHeaderSize = 14
+    static let chunkHeaderSize = 8
+    static let completeHeaderSize = 5
 }
 
 private struct IncomingTeleopCommand {
@@ -88,6 +130,8 @@ class WebSocketManager: ObservableObject {
     private var listener: NWListener?
     private var connections: [NWConnection] = []
     private var connectionStates: [ObjectIdentifier: Bool] = [:] // Track handshake completion
+    private var incomingFrameBuffers: [ObjectIdentifier: Data] = [:]
+    private var partialIncomingMessages: [ObjectIdentifier: PartialIncomingWebSocketMessage] = [:]
     private var latestPointCloudData: Data?
     private var latestMapFrameMessage: String?
     private var latestMapLayerPayloads: [String: Data] = [:]
@@ -95,6 +139,7 @@ class WebSocketManager: ObservableObject {
     private var latestWasmStateMessage: String?
     private var recentWasmLogMessages: [String] = []
     private var selectedWasmTargetId: String
+    private var wasmUploadSessions: [ObjectIdentifier: WasmUploadSession] = [:]
     private let port: NWEndpoint.Port = 8080
     private let enablePointCloudProfiling = true
     private let pointCloudProfilingSummaryInterval: TimeInterval = 3.0
@@ -161,7 +206,9 @@ class WebSocketManager: ObservableObject {
     private func handleNewConnection(_ connection: NWConnection) {
         connections.append(connection)
         connectedClients = connections.count
-        connectionStates[ObjectIdentifier(connection)] = false // Handshake not complete
+        let connectionId = ObjectIdentifier(connection)
+        connectionStates[connectionId] = false // Handshake not complete
+        incomingFrameBuffers[connectionId] = Data()
 
         print("🔗 New connection from \(connection.endpoint)")
 
@@ -248,79 +295,208 @@ class WebSocketManager: ObservableObject {
     }
 
     private func receiveWebSocketFrame(on connection: NWConnection) {
-        connection.receive(minimumIncompleteLength: 2, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 262144) { [weak self] data, _, isComplete, error in
             guard let self = self else { return }
 
             if let error = error {
                 print("❌ Receive error: \(error)")
+                self.removeConnection(connection)
                 return
             }
 
             if let data = data, !data.isEmpty {
-                if let message = self.decodeWebSocketFrame(data) {
-                    DispatchQueue.main.async {
-                        self.lastMessage = message
-                        print("📱 Received WebSocket message: \(message)")
+                let connectionId = ObjectIdentifier(connection)
+                var buffer = self.incomingFrameBuffers[connectionId] ?? Data()
+                buffer.append(data)
 
-                        self.handleIncomingMessage(message)
+                while let frame = self.decodeNextWebSocketFrame(from: &buffer) {
+                    guard let assembledFrame = self.assembleIncomingWebSocketFrame(
+                        frame,
+                        connectionId: connectionId
+                    ) else {
+                        continue
+                    }
+
+                    switch assembledFrame {
+                    case .text(let message):
+                        DispatchQueue.main.async {
+                            self.lastMessage = message
+                            print("📱 Received WebSocket message: \(message)")
+                            self.handleIncomingMessage(message)
+                        }
+                    case .binary(let payload):
+                        self.handleIncomingBinaryMessage(payload, from: connection)
+                    case .ping(let payload):
+                        self.sendControlFrame(opcode: 0xA, payload: payload, to: connection)
+                    case .pong:
+                        break
+                    case .close(let payload):
+                        self.sendControlFrame(opcode: 0x8, payload: payload, to: connection)
+                        connection.cancel()
+                        self.removeConnection(connection)
+                        return
                     }
                 }
+                self.incomingFrameBuffers[connectionId] = buffer
             }
 
             if !isComplete {
                 self.receiveWebSocketFrame(on: connection)
+            } else {
+                self.removeConnection(connection)
             }
         }
     }
 
-    private func decodeWebSocketFrame(_ data: Data) -> String? {
-        guard data.count >= 2 else { return nil }
+    private func decodeNextWebSocketFrame(from buffer: inout Data) -> DecodedWebSocketFrame? {
+        guard buffer.count >= 2 else { return nil }
 
-        let bytes = [UInt8](data)
-
-        // Parse WebSocket frame
+        let bytes = [UInt8](buffer)
+        let fin = (bytes[0] & 0x80) != 0
+        let opcode = bytes[0] & 0x0F
         let masked = (bytes[1] & 0x80) != 0
         var payloadLength = Int(bytes[1] & 0x7F)
-        var maskingKeyIndex = 2
+        var headerLength = 2
 
         if payloadLength == 126 {
-            guard data.count >= 4 else { return nil }
+            guard buffer.count >= 4 else { return nil }
             payloadLength = Int(bytes[2]) << 8 | Int(bytes[3])
-            maskingKeyIndex = 4
+            headerLength = 4
         } else if payloadLength == 127 {
-            guard data.count >= 10 else { return nil }
-            maskingKeyIndex = 10
+            guard buffer.count >= 10 else { return nil }
+            var extendedLength: UInt64 = 0
+            for index in 0..<8 {
+                extendedLength = (extendedLength << 8) | UInt64(bytes[2 + index])
+            }
+            guard extendedLength <= UInt64(Int.max) else {
+                print("⚠️ WebSocket payload too large")
+                buffer.removeAll()
+                return nil
+            }
+            payloadLength = Int(extendedLength)
+            headerLength = 10
         }
 
         guard masked else {
             print("⚠️ Frame not masked")
+            buffer.removeAll()
             return nil
         }
 
-        let maskingKey = Array(bytes[maskingKeyIndex..<maskingKeyIndex + 4])
-        let payloadStart = maskingKeyIndex + 4
+        let frameLength = headerLength + 4 + payloadLength
+        guard buffer.count >= frameLength else { return nil }
 
-        guard data.count >= payloadStart + payloadLength else { return nil }
-
-        var payload = Array(bytes[payloadStart..<payloadStart + payloadLength])
-
-        // Unmask payload
-        for i in 0..<payload.count {
-            payload[i] ^= maskingKey[i % 4]
+        let maskingKey = Array(bytes[headerLength..<(headerLength + 4)])
+        let payloadStart = headerLength + 4
+        var payload = Data(buffer[payloadStart..<(payloadStart + payloadLength)])
+        payload.withUnsafeMutableBytes { payloadRaw in
+            guard let payloadBase = payloadRaw.baseAddress?.assumingMemoryBound(to: UInt8.self) else {
+                return
+            }
+            for index in 0..<payloadLength {
+                payloadBase[index] ^= maskingKey[index % 4]
+            }
         }
+        buffer.removeSubrange(0..<frameLength)
 
-        return String(bytes: payload, encoding: .utf8)
+        return DecodedWebSocketFrame(fin: fin, opcode: opcode, payload: payload)
+    }
+
+    private func assembleIncomingWebSocketFrame(
+        _ frame: DecodedWebSocketFrame,
+        connectionId: ObjectIdentifier
+    ) -> IncomingWebSocketFrame? {
+        switch frame.opcode {
+        case 0x0:
+            guard var partial = partialIncomingMessages[connectionId] else {
+                print("⚠️ Received continuation frame without an active fragmented message")
+                return nil
+            }
+            partial.payload.append(frame.payload)
+            if frame.fin {
+                partialIncomingMessages.removeValue(forKey: connectionId)
+                return makeIncomingWebSocketFrame(opcode: partial.opcode, payload: partial.payload)
+            }
+            partialIncomingMessages[connectionId] = partial
+            return nil
+        case 0x1, 0x2:
+            if frame.fin {
+                return makeIncomingWebSocketFrame(opcode: frame.opcode, payload: frame.payload)
+            }
+            partialIncomingMessages[connectionId] = PartialIncomingWebSocketMessage(
+                opcode: frame.opcode,
+                payload: frame.payload
+            )
+            return nil
+        case 0x8, 0x9, 0xA:
+            return makeIncomingWebSocketFrame(opcode: frame.opcode, payload: frame.payload)
+        default:
+            print("⚠️ Unsupported WebSocket opcode: \(frame.opcode)")
+            return nil
+        }
+    }
+
+    private func makeIncomingWebSocketFrame(opcode: UInt8, payload: Data) -> IncomingWebSocketFrame? {
+        switch opcode {
+        case 0x1:
+            guard let message = String(data: payload, encoding: .utf8) else {
+                return nil
+            }
+            return .text(message)
+        case 0x2:
+            return .binary(payload)
+        case 0x8:
+            return .close(payload)
+        case 0x9:
+            return .ping(payload)
+        case 0xA:
+            return .pong(payload)
+        default:
+            return nil
+        }
     }
 
     private func removeConnection(_ connection: NWConnection) {
+        let connectionId = ObjectIdentifier(connection)
         connections.removeAll { $0 === connection }
-        connectionStates.removeValue(forKey: ObjectIdentifier(connection))
+        connectionStates.removeValue(forKey: connectionId)
+        incomingFrameBuffers.removeValue(forKey: connectionId)
+        partialIncomingMessages.removeValue(forKey: connectionId)
+        wasmUploadSessions.removeValue(forKey: connectionId)
         if connections.isEmpty {
             bluetoothManager?.sendMessage("0 0 0")
         }
         DispatchQueue.main.async {
             self.connectedClients = self.connections.count
         }
+    }
+
+    private func handleIncomingBinaryMessage(_ payload: Data, from connection: NWConnection) {
+        guard payload.count >= 5 else { return }
+        let bytes = [UInt8](payload)
+        guard Array(bytes.prefix(4)) == RoamrBinaryUploadProtocol.magic else {
+            return
+        }
+        let connectionId = ObjectIdentifier(connection)
+        switch bytes[4] {
+        case RoamrBinaryUploadProtocol.messageTypeBegin:
+            handleBinaryUploadBegin(payload, connectionId: connectionId)
+        case RoamrBinaryUploadProtocol.messageTypeChunk:
+            handleBinaryUploadChunk(payload, connectionId: connectionId)
+        case RoamrBinaryUploadProtocol.messageTypeComplete:
+            handleBinaryUploadComplete(connectionId: connectionId)
+        default:
+            break
+        }
+    }
+
+    private func sendControlFrame(opcode: UInt8, payload: Data = Data(), to connection: NWConnection) {
+        let frame = createControlFrame(opcode: opcode, data: payload)
+        connection.send(content: frame, completion: .contentProcessed { error in
+            if let error {
+                print("❌ Failed to send control frame: \(error)")
+            }
+        })
     }
 
     private func getLocalIPAddress() {
@@ -589,12 +765,21 @@ class WebSocketManager: ObservableObject {
         }
 
         let selectedName = wasmTargetName(for: selectedWasmTargetId) ?? Self.defaultBundledWasmName
+        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "unknown"
+        let buildVersion = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "unknown"
         guard let payload = makeJSONString([
             "type": "wasm_state",
             "is_running": WasmManager.shared.isRunning,
             "selected_target_id": selectedWasmTargetId,
             "selected_target_name": selectedName,
             "running_file_name": WasmManager.shared.currentRunDisplayName ?? "",
+            "compatibility": [
+                "protocol_version": RoamrWebSocketCompatibility.protocolVersion,
+                "server_name": "roamr-ios",
+                "web_client_name": RoamrWebSocketCompatibility.webClientName,
+                "app_version": appVersion,
+                "build_version": buildVersion
+            ],
             "files": files,
             "hub_files": availableHubFiles(),
             "is_loading_hub": WasmHubService.shared.isLoadingPublic,
@@ -711,6 +896,19 @@ class WebSocketManager: ObservableObject {
 
         // Append payload
         frame.append(data)
+
+        return frame
+    }
+
+    private func createControlFrame(opcode: UInt8, data: Data) -> Data {
+        var frame = Data()
+        frame.append(0x80 | opcode)
+
+        let length = min(data.count, 125)
+        frame.append(UInt8(length))
+        if length > 0 {
+            frame.append(data.prefix(length))
+        }
 
         return frame
     }
@@ -872,6 +1070,107 @@ class WebSocketManager: ObservableObject {
         }
     }
 
+    private func handleBinaryUploadBegin(_ payload: Data, connectionId: ObjectIdentifier) {
+        guard payload.count >= RoamrBinaryUploadProtocol.beginHeaderSize else {
+            publishWasmConsoleLine("[web][upload] invalid upload begin frame")
+            return
+        }
+        let totalSize = readUInt32LE(payload, offset: 6)
+        let totalChunks = Int(readUInt16LE(payload, offset: 10))
+        let fileNameLength = Int(readUInt16LE(payload, offset: 12))
+        let fileNameStart = RoamrBinaryUploadProtocol.beginHeaderSize
+        let fileNameEnd = fileNameStart + fileNameLength
+        guard totalSize > 0,
+              totalChunks > 0,
+              payload.count >= fileNameEnd,
+              let fileName = String(data: payload[fileNameStart..<fileNameEnd], encoding: .utf8),
+              !fileName.isEmpty else {
+            publishWasmConsoleLine("[web][upload] invalid upload metadata")
+            return
+        }
+
+        wasmUploadSessions[connectionId] = WasmUploadSession(
+            fileName: fileName,
+            expectedSize: Int(totalSize),
+            expectedChunks: totalChunks
+        )
+        publishWasmConsoleLine("[web][upload] receiving \(fileName) (\(totalSize) bytes)")
+    }
+
+    private func handleBinaryUploadChunk(_ payload: Data, connectionId: ObjectIdentifier) {
+        guard var session = wasmUploadSessions[connectionId] else {
+            publishWasmConsoleLine("[web][upload] chunk received without active upload")
+            return
+        }
+        guard payload.count >= RoamrBinaryUploadProtocol.chunkHeaderSize else {
+            publishWasmConsoleLine("[web][upload] invalid upload chunk frame")
+            wasmUploadSessions.removeValue(forKey: connectionId)
+            return
+        }
+
+        let chunkIndex = Int(readUInt16LE(payload, offset: 6))
+        let expectedChunkIndex = session.receivedChunks
+        guard chunkIndex == expectedChunkIndex else {
+            publishWasmConsoleLine("[web][upload] chunk order mismatch for \(session.fileName)")
+            wasmUploadSessions.removeValue(forKey: connectionId)
+            return
+        }
+
+        let chunkData = payload.suffix(from: RoamrBinaryUploadProtocol.chunkHeaderSize)
+        session.data.append(chunkData)
+        session.receivedChunks += 1
+        if session.data.count > session.expectedSize {
+            publishWasmConsoleLine("[web][upload] upload exceeded declared size")
+            wasmUploadSessions.removeValue(forKey: connectionId)
+            return
+        }
+        wasmUploadSessions[connectionId] = session
+    }
+
+    private func handleBinaryUploadComplete(connectionId: ObjectIdentifier) {
+        guard let session = wasmUploadSessions.removeValue(forKey: connectionId) else {
+            publishWasmConsoleLine("[web][upload] upload completion without active upload")
+            return
+        }
+        guard session.receivedChunks == session.expectedChunks else {
+            publishWasmConsoleLine("[web][upload] chunk count mismatch for \(session.fileName)")
+            return
+        }
+        guard session.data.count == session.expectedSize else {
+            publishWasmConsoleLine(
+                "[web][upload] size mismatch for \(session.fileName) expected \(session.expectedSize) got \(session.data.count)"
+            )
+            return
+        }
+
+        do {
+            let localFile = try DownloadManager.shared.importUploadedWasm(
+                data: session.data,
+                fileName: session.fileName
+            )
+            DownloadManager.shared.refreshDownloadedFiles()
+            selectedWasmTargetId = "local:\(localFile.id)"
+            publishWasmConsoleLine("[web][upload] saved \(session.fileName)")
+            publishWasmControlState()
+        } catch {
+            publishWasmConsoleLine("[web][upload] failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func readUInt16LE(_ data: Data, offset: Int) -> UInt16 {
+        guard offset + 1 < data.count else { return 0 }
+        return UInt16(data[data.index(data.startIndex, offsetBy: offset)])
+            | (UInt16(data[data.index(data.startIndex, offsetBy: offset + 1)]) << 8)
+    }
+
+    private func readUInt32LE(_ data: Data, offset: Int) -> UInt32 {
+        guard offset + 3 < data.count else { return 0 }
+        return UInt32(data[data.index(data.startIndex, offsetBy: offset)])
+            | (UInt32(data[data.index(data.startIndex, offsetBy: offset + 1)]) << 8)
+            | (UInt32(data[data.index(data.startIndex, offsetBy: offset + 2)]) << 16)
+            | (UInt32(data[data.index(data.startIndex, offsetBy: offset + 3)]) << 24)
+    }
+
     private func selectWasmTarget(_ targetId: String) {
         guard !WasmManager.shared.isRunning else {
             publishWasmConsoleLine("[web][wasm] stop the current module before changing selection")
@@ -970,40 +1269,36 @@ class WebSocketManager: ObservableObject {
     }
 
     private func availableWasmTargets() -> [[String: Any]] {
-        var targets: [[String: Any]] = [[
+        var targets: [[String: Any]] = []
+        targets.append([
             "id": Self.defaultBundledWasmId,
             "name": Self.defaultBundledWasmName,
             "kind": "bundled",
             "detail": "Built into the app"
-        ]]
+        ])
 
-        let downloadedTargets = DownloadManager.shared.downloadedFiles
-            .filter(\.exists)
-            .map { file in
-                [
-                    "id": "local:\(file.id)",
-                    "name": file.name,
-                    "kind": "downloaded",
-                    "detail": file.fileName,
-                    "uploader_name": file.uploaderName,
-                    "file_size": file.formattedFileSize
-                ] as [String : Any]
-            }
+        for file in DownloadManager.shared.downloadedFiles where file.exists {
+            let isUploaded = file.remoteId.hasPrefix("upload:")
+            targets.append([
+                "id": "local:\(file.id)",
+                "name": file.name,
+                "kind": isUploaded ? "uploaded" : "downloaded",
+                "detail": file.fileName,
+                "uploader_name": file.uploaderName,
+                "file_size": file.formattedFileSize
+            ])
+        }
 
-        let importedBundleTargets = MLBundleManager.shared.importedBundles
-            .filter(\.exists)
-            .map { bundle in
-                [
-                    "id": "bundle:\(bundle.id)",
-                    "name": bundle.name,
-                    "kind": "ml bundle",
-                    "detail": bundle.entryWasmFileName,
-                    "file_size": bundle.formattedFileSize
-                ] as [String : Any]
-            }
+        for bundle in MLBundleManager.shared.importedBundles where bundle.exists {
+            targets.append([
+                "id": "bundle:\(bundle.id)",
+                "name": bundle.name,
+                "kind": "ml bundle",
+                "detail": bundle.entryWasmFileName,
+                "file_size": bundle.formattedFileSize
+            ])
+        }
 
-        targets.append(contentsOf: downloadedTargets)
-        targets.append(contentsOf: importedBundleTargets)
         return targets
     }
 
