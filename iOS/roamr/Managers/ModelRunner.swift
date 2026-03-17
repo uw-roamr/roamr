@@ -49,6 +49,15 @@ struct ActiveModelFrameDetections {
     var result: ModelFrameDetections
 }
 
+struct ActiveInferenceStats {
+    var submittedCount: Int
+    var droppedCount: Int
+    var completedCount: Int
+    var pendingCount: Int
+    var isRunning: Bool
+    var latencyMs: Double
+}
+
 struct ModelBundleManifest: Decodable {
     struct InputConfig: Decodable {
         var width: Int
@@ -302,10 +311,30 @@ private final class LoadedObjectDetectionModel {
 final class ModelRunner {
     static let shared = ModelRunner()
 
+    private struct ActiveInferenceState {
+        var generation: UInt64 = 0
+        var pendingFrame: CameraImageFrame?
+        var isRunning = false
+        var submittedCount = 0
+        var droppedCount = 0
+        var completedCount = 0
+        var lastLoggedCompletedCount = 0
+        var lastLogTime: TimeInterval = 0
+    }
+
     private let lock = NSLock()
+    private let activeInferenceStateQueue = DispatchQueue(
+        label: "com.roamr.modelrunner.activeInference.state",
+        qos: .userInitiated
+    )
+    private let activeInferenceExecutionQueue = DispatchQueue(
+        label: "com.roamr.modelrunner.activeInference.execution",
+        qos: .userInitiated
+    )
     private var nextModelId: Int32 = 1
     private var bundleBaseURL: URL?
     private var loadedObjectDetectionModels: [Int32: LoadedObjectDetectionModel] = [:]
+    private var activeInferenceState = ActiveInferenceState()
 
     private init() {}
 
@@ -315,6 +344,7 @@ final class ModelRunner {
         loadedObjectDetectionModels.removeAll()
         nextModelId = 1
         lock.unlock()
+        resetActiveInferenceState()
     }
 
     func endRun() {
@@ -323,6 +353,7 @@ final class ModelRunner {
         bundleBaseURL = nil
         nextModelId = 1
         lock.unlock()
+        resetActiveInferenceState()
     }
 
     func hasActiveModels() -> Bool {
@@ -437,6 +468,27 @@ final class ModelRunner {
                 manifestName: model.manifestURL.lastPathComponent,
                 result: model.runLatestFrame(frame)
             )
+        }
+    }
+
+    func submitActiveModels(
+        frame: CameraImageFrame,
+        resultHandler: @escaping (CameraImageFrame, [ActiveModelFrameDetections], ActiveInferenceStats) -> Void
+    ) {
+        activeInferenceStateQueue.async {
+            self.activeInferenceState.submittedCount += 1
+            if self.activeInferenceState.pendingFrame != nil {
+                self.activeInferenceState.droppedCount += 1
+            }
+            self.activeInferenceState.pendingFrame = frame
+
+            guard !self.activeInferenceState.isRunning else {
+                return
+            }
+
+            self.activeInferenceState.isRunning = true
+            let generation = self.activeInferenceState.generation
+            self.startNextActiveInference(generation: generation, resultHandler: resultHandler)
         }
     }
 
@@ -596,6 +648,80 @@ final class ModelRunner {
             return 0
         }
         return 1
+    }
+
+    private func resetActiveInferenceState() {
+        activeInferenceStateQueue.sync {
+            activeInferenceState.generation &+= 1
+            activeInferenceState.pendingFrame = nil
+            activeInferenceState.isRunning = false
+            activeInferenceState.submittedCount = 0
+            activeInferenceState.droppedCount = 0
+            activeInferenceState.completedCount = 0
+            activeInferenceState.lastLoggedCompletedCount = 0
+            activeInferenceState.lastLogTime = 0
+        }
+    }
+
+    private func startNextActiveInference(
+        generation: UInt64,
+        resultHandler: @escaping (CameraImageFrame, [ActiveModelFrameDetections], ActiveInferenceStats) -> Void
+    ) {
+        activeInferenceStateQueue.async {
+            guard self.activeInferenceState.generation == generation else {
+                return
+            }
+
+            guard let frame = self.activeInferenceState.pendingFrame else {
+                self.activeInferenceState.isRunning = false
+                return
+            }
+
+            self.activeInferenceState.pendingFrame = nil
+
+            self.activeInferenceExecutionQueue.async {
+                let startedAt = CFAbsoluteTimeGetCurrent()
+                let results = self.runActiveModels(frame: frame)
+                let latencyMs = max(0, (CFAbsoluteTimeGetCurrent() - startedAt) * 1000.0)
+
+                self.activeInferenceStateQueue.async {
+                    guard self.activeInferenceState.generation == generation else {
+                        return
+                    }
+
+                    self.activeInferenceState.completedCount += 1
+                    let stats = ActiveInferenceStats(
+                        submittedCount: self.activeInferenceState.submittedCount,
+                        droppedCount: self.activeInferenceState.droppedCount,
+                        completedCount: self.activeInferenceState.completedCount,
+                        pendingCount: self.activeInferenceState.pendingFrame == nil ? 0 : 1,
+                        isRunning: true,
+                        latencyMs: latencyMs
+                    )
+
+                    self.maybeLogActiveInferenceStats(stats)
+                    resultHandler(frame, results, stats)
+                    self.startNextActiveInference(generation: generation, resultHandler: resultHandler)
+                }
+            }
+        }
+    }
+
+    private func maybeLogActiveInferenceStats(_ stats: ActiveInferenceStats) {
+        let now = CFAbsoluteTimeGetCurrent()
+        let shouldLogForDrop = stats.droppedCount > 0 && stats.droppedCount % 10 == 0
+        let shouldLogForCompletion = stats.completedCount - activeInferenceState.lastLoggedCompletedCount >= 30
+        let shouldLogForTime = now - activeInferenceState.lastLogTime >= 5.0
+        guard shouldLogForDrop || shouldLogForCompletion || shouldLogForTime else {
+            return
+        }
+
+        activeInferenceState.lastLoggedCompletedCount = stats.completedCount
+        activeInferenceState.lastLogTime = now
+        print(
+            "[ml] async inference submitted=\(stats.submittedCount) completed=\(stats.completedCount) " +
+            "dropped=\(stats.droppedCount) pending=\(stats.pendingCount) latency_ms=\(String(format: "%.1f", stats.latencyMs))"
+        )
     }
 }
 
