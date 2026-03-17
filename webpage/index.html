@@ -1053,104 +1053,104 @@
             <div class="wasm-controls-accordion-body">
                 <div class="wasm-controls-grid">
                     <div class="wasm-control-card">
-                <div class="wasm-control-header">
-                    <div class="wasm-control-title-block">
-                        <div class="wasm-control-title">WASM Control</div>
-                    </div>
-                </div>
+                        <div class="wasm-control-header">
+                            <div class="wasm-control-title-block">
+                                <div class="wasm-control-title">WASM Control</div>
+                            </div>
+                        </div>
 
-                <div class="input-group">
-                    <label for="wasmProgramSelect">Program</label>
-                    <select id="wasmProgramSelect" disabled></select>
-                </div>
+                        <div class="input-group">
+                            <label for="wasmProgramSelect">Program</label>
+                            <select id="wasmProgramSelect" disabled></select>
+                        </div>
 
-                <div id="wasmSelectionMeta" class="wasm-control-meta">
-                    Connect to the iPhone to load available WASM programs.
-                </div>
+                        <div id="wasmSelectionMeta" class="wasm-control-meta">
+                            Connect to the iPhone to load available WASM programs.
+                        </div>
 
-                <div class="wasm-control-actions">
-                    <button id="wasmRefreshBtn" class="btn-secondary" onclick="refreshWasmPrograms()" disabled>
-                        Refresh
-                    </button>
-                    <button id="wasmRunBtn" class="btn-connect" onclick="runSelectedWasmRemote()" disabled>
-                        Run
-                    </button>
-                    <button id="wasmStopBtn" class="btn-disconnect" onclick="stopSelectedWasmRemote()" disabled>
-                        Stop
-                    </button>
-                </div>
-                    </div>
-
-                    <div class="wasm-control-card">
-                <div class="wasm-control-header">
-                    <div class="wasm-control-title">WasmHub Public Files</div>
-                </div>
-
-                <div class="input-group">
-                    <label for="hubProgramSelect">Download From Hub</label>
-                    <select id="hubProgramSelect" disabled></select>
-                </div>
-
-                <div id="hubSelectionMeta" class="wasm-control-meta">
-                    Refresh to load public WasmHub files.
-                </div>
-
-                <div class="wasm-control-actions">
-                    <button id="hubRefreshBtn" class="btn-secondary" onclick="refreshHubPrograms()" disabled>
-                        Refresh
-                    </button>
-                    <button id="hubDownloadBtn" class="btn-send" onclick="downloadSelectedHubFileRemote()" disabled>
-                        Download
-                    </button>
-                </div>
+                        <div class="wasm-control-actions">
+                            <button id="wasmRefreshBtn" class="btn-secondary" onclick="refreshWasmPrograms()" disabled>
+                                Refresh
+                            </button>
+                            <button id="wasmRunBtn" class="btn-connect" onclick="runSelectedWasmRemote()" disabled>
+                                Run
+                            </button>
+                            <button id="wasmStopBtn" class="btn-disconnect" onclick="stopSelectedWasmRemote()" disabled>
+                                Stop
+                            </button>
+                        </div>
                     </div>
 
                     <div class="wasm-control-card">
-                <div class="wasm-control-header">
-                    <div class="wasm-control-title">Imported ML Bundles</div>
-                </div>
+                        <div class="wasm-control-header">
+                            <div class="wasm-control-title">WasmHub Public Files</div>
+                        </div>
 
-                <div class="input-group">
-                    <label for="mlBundleSelect">Bundle</label>
-                    <select id="mlBundleSelect" disabled></select>
-                </div>
+                        <div class="input-group">
+                            <label for="hubProgramSelect">Download From Hub</label>
+                            <select id="hubProgramSelect" disabled></select>
+                        </div>
 
-                <div id="mlBundleMeta" class="wasm-control-meta">
-                    Import ML bundle folders in the app, then connect here to run them.
-                </div>
+                        <div id="hubSelectionMeta" class="wasm-control-meta">
+                            Refresh to load public WasmHub files.
+                        </div>
 
-                <div class="wasm-control-actions">
-                    <button id="mlBundleRefreshBtn" class="btn-secondary" onclick="refreshWasmPrograms()" disabled>
-                        Refresh
-                    </button>
-                    <button id="mlBundleRunBtn" class="btn-connect" onclick="runSelectedMlBundleRemote()" disabled>
-                        Run Bundle
-                    </button>
-                    <button id="mlBundleStopBtn" class="btn-disconnect" onclick="stopSelectedWasmRemote()" disabled>
-                        Stop
-                    </button>
-                </div>
+                        <div class="wasm-control-actions">
+                            <button id="hubRefreshBtn" class="btn-secondary" onclick="refreshHubPrograms()" disabled>
+                                Refresh
+                            </button>
+                            <button id="hubDownloadBtn" class="btn-send" onclick="downloadSelectedHubFileRemote()" disabled>
+                                Download
+                            </button>
+                        </div>
                     </div>
 
                     <div class="wasm-control-card">
-                <div class="wasm-control-header">
-                    <div class="wasm-control-title">Upload WASM to Phone</div>
-                </div>
+                        <div class="wasm-control-header">
+                            <div class="wasm-control-title">Imported ML Bundles</div>
+                        </div>
 
-                <div class="input-group">
-                    <label for="wasmUploadInput">Local WASM File</label>
-                    <input id="wasmUploadInput" type="file" accept=".wasm,application/wasm">
-                </div>
+                        <div class="input-group">
+                            <label for="mlBundleSelect">Bundle</label>
+                            <select id="mlBundleSelect" disabled></select>
+                        </div>
 
-                <div id="wasmUploadMeta" class="wasm-control-meta">
-                    Choose a local .wasm file and upload it directly to the phone.
-                </div>
+                        <div id="mlBundleMeta" class="wasm-control-meta">
+                            Import ML bundle folders in the app, then connect here to run them.
+                        </div>
 
-                <div class="wasm-control-actions">
-                    <button id="wasmUploadBtn" class="btn-send" onclick="uploadSelectedWasmFile()" disabled>
-                        Upload
-                    </button>
-                </div>
+                        <div class="wasm-control-actions">
+                            <button id="mlBundleRefreshBtn" class="btn-secondary" onclick="refreshWasmPrograms()" disabled>
+                                Refresh
+                            </button>
+                            <button id="mlBundleRunBtn" class="btn-connect" onclick="runSelectedMlBundleRemote()" disabled>
+                                Run Bundle
+                            </button>
+                            <button id="mlBundleStopBtn" class="btn-disconnect" onclick="stopSelectedWasmRemote()" disabled>
+                                Stop
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="wasm-control-card">
+                        <div class="wasm-control-header">
+                            <div class="wasm-control-title">Upload WASM to Phone</div>
+                        </div>
+
+                        <div class="input-group">
+                            <label for="wasmUploadInput">Local WASM File</label>
+                            <input id="wasmUploadInput" type="file" accept=".wasm,application/wasm">
+                        </div>
+
+                        <div id="wasmUploadMeta" class="wasm-control-meta">
+                            Choose a local .wasm file and upload it directly to the phone.
+                        </div>
+
+                        <div class="wasm-control-actions">
+                            <button id="wasmUploadBtn" class="btn-send" onclick="uploadSelectedWasmFile()" disabled>
+                                Upload
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1627,9 +1627,12 @@
                     console.error('WebSocket error:', error);
                 };
 
-                ws.onclose = function() {
+                ws.onclose = function(event) {
                     updateStatus(false);
-                    addLog('❌ Disconnected from iPhone');
+                    const closeCode = typeof event.code === 'number' ? event.code : 0;
+                    const closeReason = event.reason ? ` (${event.reason})` : '';
+                    const closeClean = event.wasClean ? 'clean' : 'unclean';
+                    addLog(`❌ Disconnected from iPhone [code=${closeCode}, ${closeClean}]${closeReason}`);
                     ws = null;
                 };
             } catch (error) {

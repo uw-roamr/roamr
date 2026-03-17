@@ -120,6 +120,7 @@ class WebSocketManager: ObservableObject {
     private static let maxRecentWasmLogs = 200
     private static let defaultBundledWasmId = "builtin:slam_main"
     private static let defaultBundledWasmName = "slam_main"
+    private let networkQueue = DispatchQueue(label: "roamr.websocket.network", qos: .userInitiated)
 
     @Published var isServerRunning = false
     @Published var localIPAddress: String = "Not available"
@@ -187,7 +188,7 @@ class WebSocketManager: ObservableObject {
                 self?.handleNewConnection(connection)
             }
 
-            listener?.start(queue: .main)
+            listener?.start(queue: networkQueue)
         } catch {
             serverStatus = "Error: \(error.localizedDescription)"
         }
@@ -228,7 +229,7 @@ class WebSocketManager: ObservableObject {
             }
         }
 
-        connection.start(queue: .main)
+        connection.start(queue: networkQueue)
     }
 
     private func receiveHandshake(on connection: NWConnection) {
@@ -499,6 +500,22 @@ class WebSocketManager: ObservableObject {
         })
     }
 
+    private func shouldRemoveConnection(for error: NWError) -> Bool {
+        switch error {
+        case .posix(let posixError):
+            switch posixError {
+            case .ENOTCONN, .ECONNRESET, .EPIPE, .ETIMEDOUT, .ECONNABORTED, .ECONNREFUSED:
+                return true
+            default:
+                return false
+            }
+        case .tls, .dns:
+            return true
+        @unknown default:
+            return true
+        }
+    }
+
     private func getLocalIPAddress() {
         var address: String = "Not available"
 
@@ -563,7 +580,9 @@ class WebSocketManager: ObservableObject {
             connection.send(content: frame, completion: .contentProcessed { error in
                 if let error = error {
                     print("❌ Failed to send binary data: \(error)")
-                    self.removeConnection(connection)
+                    if self.shouldRemoveConnection(for: error) {
+                        self.removeConnection(connection)
+                    }
                 }
             })
         }
@@ -610,7 +629,9 @@ class WebSocketManager: ObservableObject {
             connection.send(content: frame, completion: .contentProcessed { error in
                 if let error = error {
                     print("❌ Failed to send point cloud: \(error)")
-                    self.removeConnection(connection)
+                    if self.shouldRemoveConnection(for: error) {
+                        self.removeConnection(connection)
+                    }
                 }
             })
         }
@@ -674,6 +695,9 @@ class WebSocketManager: ObservableObject {
             connection.send(content: frame, completion: .contentProcessed { error in
                 if let error = error {
                     print("❌ Failed to send text message: \(error)")
+                    if self.shouldRemoveConnection(for: error) {
+                        self.removeConnection(connection)
+                    }
                 }
             })
         }
