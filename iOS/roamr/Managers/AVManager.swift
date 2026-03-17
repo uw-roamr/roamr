@@ -119,7 +119,6 @@ private struct AVProfileWindow {
 
 private struct StreamFrameRequest {
     let frame: CameraImageFrame
-    let shouldSubmitInference: Bool
 }
 
 enum AVPreviewMode {
@@ -446,14 +445,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         return dst
     }
 
-    private func submitStreamFrame(
-        frame: CameraImageFrame,
-        shouldSubmitInference: Bool
-    ) {
-        let request = StreamFrameRequest(
-            frame: frame,
-            shouldSubmitInference: shouldSubmitInference
-        )
+    private func submitStreamFrame(frame: CameraImageFrame) {
+        let request = StreamFrameRequest(frame: frame)
         streamStateQueue.async {
             self.streamWorkerState.pendingRequest = request
             guard !self.streamWorkerState.isRunning else {
@@ -479,16 +472,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             self.streamWorkerState.pendingRequest = nil
 
             self.streamExecutionQueue.async {
-                let didStreamFrame = self.streamFrame(frame: request.frame)
-                if didStreamFrame, request.shouldSubmitInference {
-                    ModelRunner.shared.submitActiveModels(frame: request.frame) { frame, modelResults, _ in
-                        WebSocketManager.shared.publishMlDetections(
-                            frame: frame,
-                            modelResults: modelResults
-                        )
-                    }
-                }
-
+                _ = self.streamFrame(frame: request.frame)
                 self.startNextStreamWork(generation: generation)
             }
         }
@@ -916,16 +900,9 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             )
         }()
 
-        let didStreamFrame: Bool
         let jpegStreamStartedAt = profileNow()
         if needsMonitoredStreamImage, let canonicalCameraFrame {
-            submitStreamFrame(
-                frame: canonicalCameraFrame,
-                shouldSubmitInference: hasActiveModels
-            )
-            didStreamFrame = true
-        } else {
-            didStreamFrame = false
+            submitStreamFrame(frame: canonicalCameraFrame)
         }
         let jpegStreamDuration = profileNow() - jpegStreamStartedAt
 
@@ -978,6 +955,14 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let stateUpdateDuration = profileNow() - stateUpdateStartedAt
 
         let inferenceSubmitStartedAt = profileNow()
+        if hasActiveModels, hasWebSocketClients, let canonicalCameraFrame {
+            ModelRunner.shared.submitActiveModels(frame: canonicalCameraFrame) { frame, modelResults, _ in
+                WebSocketManager.shared.publishMlDetections(
+                    frame: frame,
+                    modelResults: modelResults
+                )
+            }
+        }
         let inferenceSubmitDuration = profileNow() - inferenceSubmitStartedAt
 
         if let webSocketPointCloudData,
