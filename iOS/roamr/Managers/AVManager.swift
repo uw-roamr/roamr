@@ -96,6 +96,8 @@ private struct AVProfileWindow {
     var processedFrames: Int = 0
     var overwrittenFrames: Int = 0
     var throttledFrames: Int = 0
+    var monitoredImageFrames: Int = 0
+    var streamBypassedFrames: Int = 0
 
     var totalProcess = RollingTimingStat()
     var rgbConversion = RollingTimingStat()
@@ -109,6 +111,11 @@ private struct AVProfileWindow {
     mutating func reset(startTime: CFTimeInterval) {
         self = AVProfileWindow(windowStartTime: startTime)
     }
+}
+
+private struct StreamFrameRequest {
+    let frame: CameraImageFrame
+    let shouldSubmitInference: Bool
 }
 
 enum AVPreviewMode {
@@ -135,6 +142,12 @@ enum LidarCameraConstants {
 
 final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     static let shared = AVManager()
+
+    private struct StreamWorkerState {
+        var generation: UInt64 = 0
+        var pendingRequest: StreamFrameRequest?
+        var isRunning = false
+    }
 
     // Keep compute cost bounded for WASM/Rerun telemetry.
     private let processingTargetFPS: Double = 20.0
@@ -167,8 +180,11 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     private let session = ARSession()
     private let sessionQueue = DispatchQueue(label: "com.roamr.arkit.session", qos: .userInitiated)
     private let processingQueue = DispatchQueue(label: "com.roamr.arkit.processing", qos: .userInitiated)
+    private let streamStateQueue = DispatchQueue(label: "com.roamr.arkit.stream.state", qos: .userInitiated)
+    private let streamExecutionQueue = DispatchQueue(label: "com.roamr.arkit.stream.execution", qos: .userInitiated)
     private let ciContext = CIContext(options: nil)
     private let profileLock = NSLock()
+    private let renderColorSpace = CGColorSpaceCreateDeviceRGB()
 
     private var currentFrame: ARFrame?
     private var hasNewFrame = false
@@ -178,6 +194,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     private var lastWebSocketPointCloudTimestamp: TimeInterval = 0
     private var previewMode: AVPreviewMode = .none
     private var profileWindow = AVProfileWindow()
+    private var renderRGBABytes: [UInt8] = []
+    private var streamWorkerState = StreamWorkerState()
 
     var isDataDirty = false
 
@@ -248,6 +266,14 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         isDataDirty = false
     }
 
+    private func resetStreamWorkerState() {
+        streamStateQueue.sync {
+            streamWorkerState.generation &+= 1
+            streamWorkerState.pendingRequest = nil
+            streamWorkerState.isRunning = false
+        }
+    }
+
     private func profileNow() -> CFTimeInterval {
         CACurrentMediaTime()
     }
@@ -290,6 +316,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         jpegStreamSeconds: Double,
         stateUpdateSeconds: Double,
         inferenceSubmitSeconds: Double,
+        builtMonitoredImage: Bool,
+        bypassedStreamImage: Bool,
         context: AVProfileContext
     ) {
         guard enableAVProfiling else { return }
@@ -307,6 +335,12 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         profileWindow.jpegStream.record(jpegStreamSeconds)
         profileWindow.stateUpdate.record(stateUpdateSeconds)
         profileWindow.inferenceSubmit.record(inferenceSubmitSeconds)
+        if builtMonitoredImage {
+            profileWindow.monitoredImageFrames += 1
+        }
+        if bypassedStreamImage {
+            profileWindow.streamBypassedFrames += 1
+        }
         let summary = makeProfileSummaryIfNeededLocked(now: now, context: context)
         profileLock.unlock()
         if let summary {
@@ -324,12 +358,14 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
 
         let fps = elapsed > 0 ? Double(profileWindow.processedFrames) / elapsed : 0
         let summary = String(
-            format: "[av][profile] window=%.1fs recv=%d proc=%d overwrite=%d throttle=%d fps=%.1f total=%.1f/%.1fms rgb=%.1f/%.1fms wasm_pc=%.1f/%.1fms ws_pc=%.1f/%.1fms preview=%.1f/%.1fms jpeg=%.1f/%.1fms state=%.1f/%.1fms submit=%.3f/%.3fms clients=%d stream=%d preview=%@ models=%d",
+            format: "[av][profile] window=%.1fs recv=%d proc=%d overwrite=%d throttle=%d monitored_img=%d bypassed_stream=%d fps=%.1f total=%.1f/%.1fms rgb=%.1f/%.1fms wasm_pc=%.1f/%.1fms ws_pc=%.1f/%.1fms preview=%.1f/%.1fms jpeg=%.1f/%.1fms state=%.1f/%.1fms submit=%.3f/%.3fms clients=%d stream=%d preview=%@ models=%d",
             elapsed,
             profileWindow.receivedFrames,
             profileWindow.processedFrames,
             profileWindow.overwrittenFrames,
             profileWindow.throttledFrames,
+            profileWindow.monitoredImageFrames,
+            profileWindow.streamBypassedFrames,
             fps,
             profileWindow.totalProcess.averageMilliseconds,
             profileWindow.totalProcess.maxMilliseconds,
@@ -402,12 +438,61 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         return dst
     }
 
+    private func submitStreamFrame(
+        frame: CameraImageFrame,
+        shouldSubmitInference: Bool
+    ) {
+        let request = StreamFrameRequest(
+            frame: frame,
+            shouldSubmitInference: shouldSubmitInference
+        )
+        streamStateQueue.async {
+            self.streamWorkerState.pendingRequest = request
+            guard !self.streamWorkerState.isRunning else {
+                return
+            }
+
+            self.streamWorkerState.isRunning = true
+            let generation = self.streamWorkerState.generation
+            self.startNextStreamWork(generation: generation)
+        }
+    }
+
+    private func startNextStreamWork(generation: UInt64) {
+        streamStateQueue.async {
+            guard self.streamWorkerState.generation == generation else {
+                return
+            }
+
+            guard let request = self.streamWorkerState.pendingRequest else {
+                self.streamWorkerState.isRunning = false
+                return
+            }
+            self.streamWorkerState.pendingRequest = nil
+
+            self.streamExecutionQueue.async {
+                let didStreamFrame = self.streamFrame(frame: request.frame)
+                if didStreamFrame, request.shouldSubmitInference {
+                    ModelRunner.shared.submitActiveModels(frame: request.frame) { frame, modelResults, _ in
+                        WebSocketManager.shared.publishMlDetections(
+                            frame: frame,
+                            modelResults: modelResults
+                        )
+                    }
+                }
+
+                self.startNextStreamWork(generation: generation)
+            }
+        }
+    }
+
     // MARK: - Session Control
 
     func start() {
         lock.lock()
         resetWasmFrameStateLocked()
         lock.unlock()
+        resetStreamWorkerState()
 
         guard ARWorldTrackingConfiguration.isSupported else {
             DispatchQueue.main.async {
@@ -451,6 +536,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             self.lock.lock()
             self.resetWasmFrameStateLocked()
             self.lock.unlock()
+            self.resetStreamWorkerState()
 
             DispatchQueue.main.async {
                 self.isActive = false
@@ -548,6 +634,66 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             return true
         }
         return false
+    }
+
+    private func streamFrame(frame: CameraImageFrame) -> Bool {
+        guard isStreaming else { return false }
+
+        let currentTime = CACurrentMediaTime()
+        let frameInterval = 1.0 / Double(streamTargetFPS)
+        if currentTime - lastStreamTime < frameInterval {
+            return false
+        }
+
+        guard let jpegData = jpegData(for: frame) else {
+            return false
+        }
+
+        lastStreamTime = currentTime
+        streamFrameCount += 1
+        if currentTime - lastFPSUpdateTime >= 1.0 {
+            DispatchQueue.main.async {
+                self.streamFPS = Double(self.streamFrameCount)
+            }
+            streamFrameCount = 0
+            lastFPSUpdateTime = currentTime
+        }
+
+        WebSocketManager.shared.broadcastBinaryData(jpegData)
+        return true
+    }
+
+    private func jpegData(for frame: CameraImageFrame) -> Data? {
+        guard frame.width > 0, frame.height > 0, frame.channels == 3 else {
+            return nil
+        }
+
+        var rgbaBytes = [UInt8](repeating: 0, count: frame.width * frame.height * 4)
+        var srcIndex = 0
+        var dstIndex = 0
+        while srcIndex + 2 < frame.rgbBytes.count, dstIndex + 3 < rgbaBytes.count {
+            rgbaBytes[dstIndex] = frame.rgbBytes[srcIndex]
+            rgbaBytes[dstIndex + 1] = frame.rgbBytes[srcIndex + 1]
+            rgbaBytes[dstIndex + 2] = frame.rgbBytes[srcIndex + 2]
+            rgbaBytes[dstIndex + 3] = 255
+            srcIndex += 3
+            dstIndex += 4
+        }
+
+        guard let context = CGContext(
+            data: &rgbaBytes,
+            width: frame.width,
+            height: frame.height,
+            bitsPerComponent: 8,
+            bytesPerRow: frame.width * 4,
+            space: renderColorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ), let cgImage = context.makeImage() else {
+            return nil
+        }
+
+        return UIImage(cgImage: cgImage, scale: 1.0, orientation: .up)
+            .jpegData(compressionQuality: streamJpegQuality)
     }
 
     // MARK: - ARSessionDelegate
@@ -688,8 +834,10 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let needsPointColors = includePointColorsForWasm
         let needsImagePayload = includeImageInWasmPayload
         let needsModelImage = hasActiveModels
-        let needsUIImage = needsPreviewVideo || isStreaming
-        let needsRGBFrame = needsImagePayload || needsUIImage || needsModelImage
+        let needsMonitoredStreamImage = isStreaming && hasWebSocketClients
+        let needsUIImage = needsPreviewVideo
+        let needsCanonicalRGBFrame = needsImagePayload || needsModelImage || needsMonitoredStreamImage
+        let needsRGBFrame = needsCanonicalRGBFrame || needsUIImage
 
         let imageResolution = frame.camera.imageResolution
         let fallbackLayout = portraitLayout(
@@ -704,7 +852,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
                 from: frame.capturedImage,
                 downsampleFactor: rgbDownsampleFactor,
                 includeUIImage: needsUIImage,
-                includePortraitBytes: needsImagePayload || needsModelImage
+                includePortraitBytes: needsCanonicalRGBFrame
             )
         } else {
             rgbFrame = nil
@@ -738,8 +886,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         }
         let webSocketPointCloudDuration = profileNow() - webSocketPointCloudStartedAt
 
-        let modelCameraFrame: CameraImageFrame? = {
-            guard needsModelImage,
+        let canonicalCameraFrame: CameraImageFrame? = {
+            guard needsCanonicalRGBFrame,
                   let rgbFrame,
                   !rgbFrame.portraitBytes.isEmpty else {
                 return nil
@@ -755,8 +903,12 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
 
         let didStreamFrame: Bool
         let jpegStreamStartedAt = profileNow()
-        if let image = rgbFrame?.uiImage {
-            didStreamFrame = streamFrame(image: image)
+        if needsMonitoredStreamImage, let canonicalCameraFrame {
+            submitStreamFrame(
+                frame: canonicalCameraFrame,
+                shouldSubmitInference: hasActiveModels
+            )
+            didStreamFrame = true
         } else {
             didStreamFrame = false
         }
@@ -792,7 +944,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         currentImageChannels = 3
 
         let imageBytes = needsImagePayload ? (rgbFrame?.portraitBytes ?? []) : []
-        latestCameraFrame = modelCameraFrame
+        latestCameraFrame = needsModelImage ? canonicalCameraFrame : nil
         currentData = LidarCameraData(
             timestamp: frame.timestamp,
             points: pointCloudData?.points ?? [],
@@ -809,16 +961,6 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let stateUpdateDuration = profileNow() - stateUpdateStartedAt
 
         let inferenceSubmitStartedAt = profileNow()
-        if didStreamFrame,
-           let modelCameraFrame,
-           hasWebSocketClients {
-            ModelRunner.shared.submitActiveModels(frame: modelCameraFrame) { frame, modelResults, _ in
-                WebSocketManager.shared.publishMlDetections(
-                    frame: frame,
-                    modelResults: modelResults
-                )
-            }
-        }
         let inferenceSubmitDuration = profileNow() - inferenceSubmitStartedAt
 
         if let webSocketPointCloudData,
@@ -846,6 +988,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             jpegStreamSeconds: jpegStreamDuration,
             stateUpdateSeconds: stateUpdateDuration,
             inferenceSubmitSeconds: inferenceSubmitDuration,
+            builtMonitoredImage: needsMonitoredStreamImage,
+            bypassedStreamImage: isStreaming && !hasWebSocketClients,
             context: profileContext
         )
     }
@@ -867,7 +1011,10 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let targetWidth = layout.width
         let targetHeight = layout.height
         let renderBounds = CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight)
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let rgbaByteCount = targetWidth * targetHeight * 4
+        if renderRGBABytes.count != rgbaByteCount {
+            renderRGBABytes = [UInt8](repeating: 0, count: rgbaByteCount)
+        }
 
         var ciImage = CIImage(cvPixelBuffer: pixelBuffer)
         if layout.rotate {
@@ -889,9 +1036,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             )
         }
 
-        var rgbaBytes = [UInt8](repeating: 0, count: targetWidth * targetHeight * 4)
         let rowBytes = targetWidth * 4
-        let rendered = rgbaBytes.withUnsafeMutableBytes { buffer -> Bool in
+        let rendered = renderRGBABytes.withUnsafeMutableBytes { buffer -> Bool in
             guard let baseAddress = buffer.baseAddress else {
                 return false
             }
@@ -901,7 +1047,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
                 rowBytes: rowBytes,
                 bounds: renderBounds,
                 format: .RGBA8,
-                colorSpace: colorSpace
+                colorSpace: renderColorSpace
             )
             return true
         }
@@ -912,10 +1058,10 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             var rgbBytes = [UInt8](repeating: 0, count: targetWidth * targetHeight * 3)
             var srcIndex = 0
             var dstIndex = 0
-            while srcIndex + 3 < rgbaBytes.count {
-                rgbBytes[dstIndex] = rgbaBytes[srcIndex]
-                rgbBytes[dstIndex + 1] = rgbaBytes[srcIndex + 1]
-                rgbBytes[dstIndex + 2] = rgbaBytes[srcIndex + 2]
+            while srcIndex + 3 < renderRGBABytes.count {
+                rgbBytes[dstIndex] = renderRGBABytes[srcIndex]
+                rgbBytes[dstIndex + 1] = renderRGBABytes[srcIndex + 1]
+                rgbBytes[dstIndex + 2] = renderRGBABytes[srcIndex + 2]
                 srcIndex += 4
                 dstIndex += 3
             }
@@ -929,7 +1075,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             let bitmapInfo = CGBitmapInfo.byteOrder32Big.union(
                 CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue)
             )
-            let data = Data(rgbaBytes)
+            let data = Data(renderRGBABytes)
             guard let provider = CGDataProvider(data: data as CFData),
                   let cgImage = CGImage(
                       width: targetWidth,
@@ -937,7 +1083,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
                       bitsPerComponent: 8,
                       bitsPerPixel: 32,
                       bytesPerRow: rowBytes,
-                      space: colorSpace,
+                      space: renderColorSpace,
                       bitmapInfo: bitmapInfo,
                       provider: provider,
                       decode: nil,
