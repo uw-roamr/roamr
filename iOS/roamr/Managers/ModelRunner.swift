@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Accelerate
 
 #if canImport(ExecuTorch)
 import ExecuTorch
@@ -40,6 +41,9 @@ struct ModelFrameDetections {
     var imageWidth: Int32
     var imageHeight: Int32
     var detections: [ModelDetection]
+    var preprocessMs: Double = 0
+    var forwardMs: Double = 0
+    var outputDecodeMs: Double = 0
 }
 
 struct ActiveModelFrameDetections {
@@ -56,6 +60,9 @@ struct ActiveInferenceStats {
     var pendingCount: Int
     var isRunning: Bool
     var latencyMs: Double
+    var preprocessMs: Double
+    var forwardMs: Double
+    var outputDecodeMs: Double
 }
 
 struct ModelBundleManifest: Decodable {
@@ -194,6 +201,7 @@ enum ModelRunnerError: LocalizedError {
 
 private protocol ObjectDetectionBackend {
     func predictDetections(frame: CameraImageFrame) throws -> [ModelDetection]
+    func predict(frame: CameraImageFrame) throws -> PredictionResult
 }
 
 private struct DetectionLabelLookup {
@@ -271,7 +279,8 @@ private final class LoadedObjectDetectionModel {
             }
 
             do {
-                let detections = try backend.predictDetections(frame: frame).map { detection in
+                let prediction = try backend.predict(frame: frame)
+                let detections = prediction.detections.map { detection in
                     var labeledDetection = detection
                     labeledDetection.labelName = labelLookup?.labelName(for: detection.classId)
                     return labeledDetection
@@ -285,7 +294,10 @@ private final class LoadedObjectDetectionModel {
                     frameTimestamp: frame.timestamp,
                     imageWidth: Int32(frame.width),
                     imageHeight: Int32(frame.height),
-                    detections: detections
+                    detections: detections,
+                    preprocessMs: prediction.preprocessMs,
+                    forwardMs: prediction.forwardMs,
+                    outputDecodeMs: prediction.outputDecodeMs
                 )
             } catch let error as ModelRunnerError {
                 return ModelFrameDetections(
@@ -683,6 +695,9 @@ final class ModelRunner {
                 let startedAt = CFAbsoluteTimeGetCurrent()
                 let results = self.runActiveModels(frame: frame)
                 let latencyMs = max(0, (CFAbsoluteTimeGetCurrent() - startedAt) * 1000.0)
+                let preprocessMs = results.map(\.result.preprocessMs).max() ?? 0
+                let forwardMs = results.map(\.result.forwardMs).max() ?? 0
+                let outputDecodeMs = results.map(\.result.outputDecodeMs).max() ?? 0
 
                 self.activeInferenceStateQueue.async {
                     guard self.activeInferenceState.generation == generation else {
@@ -696,7 +711,10 @@ final class ModelRunner {
                         completedCount: self.activeInferenceState.completedCount,
                         pendingCount: self.activeInferenceState.pendingFrame == nil ? 0 : 1,
                         isRunning: true,
-                        latencyMs: latencyMs
+                        latencyMs: latencyMs,
+                        preprocessMs: preprocessMs,
+                        forwardMs: forwardMs,
+                        outputDecodeMs: outputDecodeMs
                     )
 
                     self.maybeLogActiveInferenceStats(stats)
@@ -720,19 +738,80 @@ final class ModelRunner {
         activeInferenceState.lastLogTime = now
         print(
             "[ml] async inference submitted=\(stats.submittedCount) completed=\(stats.completedCount) " +
-            "dropped=\(stats.droppedCount) pending=\(stats.pendingCount) latency_ms=\(String(format: "%.1f", stats.latencyMs))"
+            "dropped=\(stats.droppedCount) pending=\(stats.pendingCount) latency_ms=\(String(format: "%.1f", stats.latencyMs)) " +
+            "pre_ms=\(String(format: "%.1f", stats.preprocessMs)) " +
+            "fwd_ms=\(String(format: "%.1f", stats.forwardMs)) " +
+            "out_ms=\(String(format: "%.1f", stats.outputDecodeMs))"
         )
     }
 }
 
 #if canImport(ExecuTorch)
+private struct PreprocessResult {
+    let chw: [Float]
+    let preprocessMs: Double
+}
+
+private struct PredictionResult {
+    let detections: [ModelDetection]
+    let preprocessMs: Double
+    let forwardMs: Double
+    let outputDecodeMs: Double
+}
+
+private struct FloatPlaneNormalization {
+    let scale: Float
+    let bias: Float
+}
+
 private final class ExecuTorchObjectDetectionBackend: ObjectDetectionBackend {
     private let manifest: ModelBundleManifest
     private let module: Module
+    private let inputWidth: Int
+    private let inputHeight: Int
+    private let planeSize: Int
+    private let usesFastNormalizationPath: Bool
+    private let normalization: [FloatPlaneNormalization]
+
+    private var sourcePlanarRed8: [UInt8] = []
+    private var sourcePlanarGreen8: [UInt8] = []
+    private var sourcePlanarBlue8: [UInt8] = []
+    private var planarRed8: [UInt8] = []
+    private var planarGreen8: [UInt8] = []
+    private var planarBlue8: [UInt8] = []
+    private var planarRedF: [Float] = []
+    private var planarGreenF: [Float] = []
+    private var planarBlueF: [Float] = []
+    private var chwBuffer: [Float] = []
 
     init(manifest: ModelBundleManifest, modelURL: URL) throws {
         self.manifest = manifest
         self.module = Module(filePath: modelURL.path)
+        self.inputWidth = manifest.input.width
+        self.inputHeight = manifest.input.height
+        self.planeSize = manifest.input.width * manifest.input.height
+        let means = ExecuTorchObjectDetectionBackend.normalizedMeans(values: manifest.input.mean)
+        let stds = ExecuTorchObjectDetectionBackend.normalizedStds(values: manifest.input.std)
+        self.usesFastNormalizationPath =
+            abs(manifest.input.valueScale - (1.0 / 255.0)) < 1e-8 &&
+            means == [0, 0, 0] &&
+            stds == [1, 1, 1]
+        self.normalization = zip(means, stds).map { mean, std in
+            FloatPlaneNormalization(
+                scale: manifest.input.valueScale / std,
+                bias: -mean / std
+            )
+        }
+        self.sourcePlanarRed8 = []
+        self.sourcePlanarGreen8 = []
+        self.sourcePlanarBlue8 = []
+        self.planarRed8 = [UInt8](repeating: 0, count: planeSize)
+        self.planarGreen8 = [UInt8](repeating: 0, count: planeSize)
+        self.planarBlue8 = [UInt8](repeating: 0, count: planeSize)
+        self.planarRedF = [Float](repeating: 0, count: planeSize)
+        self.planarGreenF = [Float](repeating: 0, count: planeSize)
+        self.planarBlueF = [Float](repeating: 0, count: planeSize)
+        self.chwBuffer = [Float](repeating: 0, count: planeSize * 3)
         do {
             try module.load(manifest.method)
         } catch {
@@ -741,30 +820,44 @@ private final class ExecuTorchObjectDetectionBackend: ObjectDetectionBackend {
     }
 
     func predictDetections(frame: CameraImageFrame) throws -> [ModelDetection] {
-        let inputTensorValues = preprocess(frame: frame, config: manifest.input)
+        let prediction = try predict(frame: frame)
+        return prediction.detections
+    }
+
+    func predict(frame: CameraImageFrame) throws -> PredictionResult {
+        let preprocessResult = try preprocess(frame: frame, config: manifest.input)
         let inputTensor = Tensor<Float>(
-            inputTensorValues,
+            preprocessResult.chw,
             shape: [1, 3, manifest.input.height, manifest.input.width]
         )
 
         let outputTensor: Tensor<Float>
+        let forwardStartedAt = CFAbsoluteTimeGetCurrent()
         do {
             outputTensor = try Tensor<Float>(module.forward(inputTensor))
         } catch {
             throw ModelRunnerError.inferenceFailed("ExecuTorch forward failed: \(error.localizedDescription)")
         }
+        let forwardMs = max(0, (CFAbsoluteTimeGetCurrent() - forwardStartedAt) * 1000.0)
 
         let scalars: [Float]
+        let outputDecodeStartedAt = CFAbsoluteTimeGetCurrent()
         do {
             scalars = try outputTensor.scalars()
         } catch {
             throw ModelRunnerError.inferenceFailed("failed to read model outputs: \(error.localizedDescription)")
         }
+        let outputDecodeMs = max(0, (CFAbsoluteTimeGetCurrent() - outputDecodeStartedAt) * 1000.0)
 
-        return parseDetections(
-            scalars: scalars,
-            output: manifest.output,
-            scoreThreshold: manifest.scoreThreshold
+        return PredictionResult(
+            detections: parseDetections(
+                scalars: scalars,
+                output: manifest.output,
+                scoreThreshold: manifest.scoreThreshold
+            ),
+            preprocessMs: preprocessResult.preprocessMs,
+            forwardMs: forwardMs,
+            outputDecodeMs: outputDecodeMs
         )
     }
 
@@ -807,43 +900,266 @@ private final class ExecuTorchObjectDetectionBackend: ObjectDetectionBackend {
     private func preprocess(
         frame: CameraImageFrame,
         config: ModelBundleManifest.InputConfig
-    ) -> [Float] {
-        let width = config.width
-        let height = config.height
-        let planeSize = width * height
-        var chw = [Float](repeating: 0, count: planeSize * 3)
-
-        let mean = normalizedMeans(values: config.mean)
-        let std = normalizedStds(values: config.std)
-
-        for y in 0..<height {
-            let srcY = min(frame.height - 1, (y * frame.height) / height)
-            for x in 0..<width {
-                let srcX = min(frame.width - 1, (x * frame.width) / width)
-                let srcBase = ((srcY * frame.width) + srcX) * 3
-                let dstIndex = (y * width) + x
-
-                let r = (Float(frame.rgbBytes[srcBase + 0]) * config.valueScale - mean[0]) / std[0]
-                let g = (Float(frame.rgbBytes[srcBase + 1]) * config.valueScale - mean[1]) / std[1]
-                let b = (Float(frame.rgbBytes[srcBase + 2]) * config.valueScale - mean[2]) / std[2]
-
-                chw[dstIndex] = r
-                chw[planeSize + dstIndex] = g
-                chw[(2 * planeSize) + dstIndex] = b
-            }
+    ) throws -> PreprocessResult {
+        guard frame.width > 0, frame.height > 0, frame.channels == 3 else {
+            throw ModelRunnerError.inferenceFailed("invalid camera frame for preprocess")
         }
 
-        return chw
+        let startedAt = CFAbsoluteTimeGetCurrent()
+        try splitSourceRGBToPlanar(frame: frame)
+        try resizePlanar8(
+            source: &sourcePlanarRed8,
+            sourceWidth: frame.width,
+            sourceHeight: frame.height,
+            destination: &planarRed8
+        )
+        try resizePlanar8(
+            source: &sourcePlanarGreen8,
+            sourceWidth: frame.width,
+            sourceHeight: frame.height,
+            destination: &planarGreen8
+        )
+        try resizePlanar8(
+            source: &sourcePlanarBlue8,
+            sourceWidth: frame.width,
+            sourceHeight: frame.height,
+            destination: &planarBlue8
+        )
+
+        if usesFastNormalizationPath {
+            try convertFastPlanar8ToUnitFloatCHW()
+        } else {
+            try convertGenericPlanar8ToFloatCHW()
+        }
+
+        return PreprocessResult(
+            chw: chwBuffer,
+            preprocessMs: max(0, (CFAbsoluteTimeGetCurrent() - startedAt) * 1000.0)
+        )
     }
 
-    private func normalizedMeans(values: [Float]) -> [Float] {
+    private func ensureSourcePlanarCapacity(pixelCount: Int) {
+        if sourcePlanarRed8.count != pixelCount {
+            sourcePlanarRed8 = [UInt8](repeating: 0, count: pixelCount)
+            sourcePlanarGreen8 = [UInt8](repeating: 0, count: pixelCount)
+            sourcePlanarBlue8 = [UInt8](repeating: 0, count: pixelCount)
+        }
+    }
+
+    private func splitSourceRGBToPlanar(frame: CameraImageFrame) throws {
+        let sourcePixelCount = frame.width * frame.height
+        ensureSourcePlanarCapacity(pixelCount: sourcePixelCount)
+
+        var sourceBytes = frame.rgbBytes
+        let error = sourceBytes.withUnsafeMutableBytes { srcRaw in
+            sourcePlanarRed8.withUnsafeMutableBytes { redRaw in
+                sourcePlanarGreen8.withUnsafeMutableBytes { greenRaw in
+                    sourcePlanarBlue8.withUnsafeMutableBytes { blueRaw in
+                        guard let srcBaseAddress = srcRaw.baseAddress,
+                              let redBaseAddress = redRaw.baseAddress,
+                              let greenBaseAddress = greenRaw.baseAddress,
+                              let blueBaseAddress = blueRaw.baseAddress else {
+                            return kvImageNullPointerArgument
+                        }
+
+                        var srcBuffer = vImage_Buffer(
+                            data: srcBaseAddress,
+                            height: vImagePixelCount(frame.height),
+                            width: vImagePixelCount(frame.width),
+                            rowBytes: frame.width * 3
+                        )
+                        var redBuffer = vImage_Buffer(
+                            data: redBaseAddress,
+                            height: vImagePixelCount(frame.height),
+                            width: vImagePixelCount(frame.width),
+                            rowBytes: frame.width
+                        )
+                        var greenBuffer = vImage_Buffer(
+                            data: greenBaseAddress,
+                            height: vImagePixelCount(frame.height),
+                            width: vImagePixelCount(frame.width),
+                            rowBytes: frame.width
+                        )
+                        var blueBuffer = vImage_Buffer(
+                            data: blueBaseAddress,
+                            height: vImagePixelCount(frame.height),
+                            width: vImagePixelCount(frame.width),
+                            rowBytes: frame.width
+                        )
+                        return vImageConvert_RGB888toPlanar8(
+                            &srcBuffer,
+                            &redBuffer,
+                            &greenBuffer,
+                            &blueBuffer,
+                            vImage_Flags(kvImageNoFlags)
+                        )
+                    }
+                }
+            }
+        }
+        guard error == kvImageNoError else {
+            throw ModelRunnerError.inferenceFailed("vImageConvert_RGB888toPlanar8 failed: \(error)")
+        }
+    }
+
+    private func resizePlanar8(
+        source: inout [UInt8],
+        sourceWidth: Int,
+        sourceHeight: Int,
+        destination: inout [UInt8]
+    ) throws {
+        let error = source.withUnsafeMutableBytes { srcRaw in
+            destination.withUnsafeMutableBytes { dstRaw in
+                guard let srcBaseAddress = srcRaw.baseAddress,
+                      let dstBaseAddress = dstRaw.baseAddress else {
+                    return kvImageNullPointerArgument
+                }
+
+                var srcBuffer = vImage_Buffer(
+                    data: srcBaseAddress,
+                    height: vImagePixelCount(sourceHeight),
+                    width: vImagePixelCount(sourceWidth),
+                    rowBytes: sourceWidth
+                )
+                var dstBuffer = vImage_Buffer(
+                    data: dstBaseAddress,
+                    height: vImagePixelCount(inputHeight),
+                    width: vImagePixelCount(inputWidth),
+                    rowBytes: inputWidth
+                )
+                return vImageScale_Planar8(&srcBuffer, &dstBuffer, nil, vImage_Flags(kvImageNoFlags))
+            }
+        }
+        guard error == kvImageNoError else {
+            throw ModelRunnerError.inferenceFailed("vImageScale_Planar8 failed: \(error)")
+        }
+    }
+
+    private func convertFastPlanar8ToUnitFloatCHW() throws {
+        try convertPlanar8(
+            source: &planarRed8,
+            destination: &planarRedF,
+            maxFloat: 1.0,
+            minFloat: 0.0
+        )
+        try convertPlanar8(
+            source: &planarGreen8,
+            destination: &planarGreenF,
+            maxFloat: 1.0,
+            minFloat: 0.0
+        )
+        try convertPlanar8(
+            source: &planarBlue8,
+            destination: &planarBlueF,
+            maxFloat: 1.0,
+            minFloat: 0.0
+        )
+
+        chwBuffer.withUnsafeMutableBufferPointer { chw in
+            guard let chwBase = chw.baseAddress else { return }
+            planarRedF.withUnsafeBufferPointer { red in
+                planarGreenF.withUnsafeBufferPointer { green in
+                    planarBlueF.withUnsafeBufferPointer { blue in
+                        guard let redBase = red.baseAddress,
+                              let greenBase = green.baseAddress,
+                              let blueBase = blue.baseAddress else {
+                            return
+                        }
+                        chwBase.initialize(from: redBase, count: planeSize)
+                        (chwBase + planeSize).initialize(from: greenBase, count: planeSize)
+                        (chwBase + (2 * planeSize)).initialize(from: blueBase, count: planeSize)
+                    }
+                }
+            }
+        }
+    }
+
+    private func convertGenericPlanar8ToFloatCHW() throws {
+        try convertPlanar8(
+            source: &planarRed8,
+            destination: &planarRedF,
+            maxFloat: normalization[0].scale * 255.0 + normalization[0].bias,
+            minFloat: normalization[0].bias
+        )
+        try convertPlanar8(
+            source: &planarGreen8,
+            destination: &planarGreenF,
+            maxFloat: normalization[1].scale * 255.0 + normalization[1].bias,
+            minFloat: normalization[1].bias
+        )
+        try convertPlanar8(
+            source: &planarBlue8,
+            destination: &planarBlueF,
+            maxFloat: normalization[2].scale * 255.0 + normalization[2].bias,
+            minFloat: normalization[2].bias
+        )
+
+        chwBuffer.withUnsafeMutableBufferPointer { chw in
+            guard let chwBase = chw.baseAddress else { return }
+            planarRedF.withUnsafeBufferPointer { red in
+                planarGreenF.withUnsafeBufferPointer { green in
+                    planarBlueF.withUnsafeBufferPointer { blue in
+                        guard let redBase = red.baseAddress,
+                              let greenBase = green.baseAddress,
+                              let blueBase = blue.baseAddress else {
+                            return
+                        }
+                        chwBase.initialize(from: redBase, count: planeSize)
+                        (chwBase + planeSize).initialize(from: greenBase, count: planeSize)
+                        (chwBase + (2 * planeSize)).initialize(from: blueBase, count: planeSize)
+                    }
+                }
+            }
+        }
+    }
+
+    private func convertPlanar8(
+        source: inout [UInt8],
+        destination: inout [Float],
+        maxFloat: Float,
+        minFloat: Float
+    ) throws {
+        let error = source.withUnsafeMutableBytes { srcRaw in
+            destination.withUnsafeMutableBytes { dstRaw in
+                guard let srcBaseAddress = srcRaw.baseAddress,
+                      let dstBaseAddress = dstRaw.baseAddress else {
+                    return kvImageNullPointerArgument
+                }
+
+                var srcBuffer = vImage_Buffer(
+                    data: srcBaseAddress,
+                    height: vImagePixelCount(inputHeight),
+                    width: vImagePixelCount(inputWidth),
+                    rowBytes: inputWidth
+                )
+                var dstBuffer = vImage_Buffer(
+                    data: dstBaseAddress,
+                    height: vImagePixelCount(inputHeight),
+                    width: vImagePixelCount(inputWidth),
+                    rowBytes: inputWidth * MemoryLayout<Float>.size
+                )
+                return vImageConvert_Planar8toPlanarF(
+                    &srcBuffer,
+                    &dstBuffer,
+                    maxFloat,
+                    minFloat,
+                    vImage_Flags(kvImageNoFlags)
+                )
+            }
+        }
+        guard error == kvImageNoError else {
+            throw ModelRunnerError.inferenceFailed("vImageConvert_Planar8toPlanarF failed: \(error)")
+        }
+    }
+
+    private static func normalizedMeans(values: [Float]) -> [Float] {
         if values.count >= 3 {
             return [values[0], values[1], values[2]]
         }
         return [0, 0, 0]
     }
 
-    private func normalizedStds(values: [Float]) -> [Float] {
+    private static func normalizedStds(values: [Float]) -> [Float] {
         if values.count >= 3 {
             return [
                 max(values[0], 1e-6),
@@ -863,6 +1179,10 @@ private final class ExecuTorchObjectDetectionBackend: ObjectDetectionBackend {
     }
 
     func predictDetections(frame: CameraImageFrame) throws -> [ModelDetection] {
+        throw ModelRunnerError.runtimeUnavailable("ExecuTorch package is not linked")
+    }
+
+    func predict(frame: CameraImageFrame) throws -> PredictionResult {
         throw ModelRunnerError.runtimeUnavailable("ExecuTorch package is not linked")
     }
 }
