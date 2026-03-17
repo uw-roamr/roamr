@@ -50,6 +50,16 @@ private struct PointCloudProfileWindow {
     }
 }
 
+private struct BestEffortMediaFrame {
+    let key: String
+    let frame: Data
+}
+
+private struct MediaSendState {
+    var isSending = false
+    var pendingFrames: [String: Data] = [:]
+}
+
 private struct WasmUploadSession {
     let fileName: String
     let expectedSize: Int
@@ -108,6 +118,15 @@ private enum RoamrBinaryUploadProtocol {
     static let completeHeaderSize = 5
 }
 
+private enum MediaTopicKey {
+    static let video = "video"
+    static let pointCloud = "pointcloud"
+
+    static func mapLayer(_ layer: String) -> String {
+        "map:\(layer)"
+    }
+}
+
 private struct IncomingTeleopCommand {
     let seq: Int
     let left: Int
@@ -133,6 +152,7 @@ class WebSocketManager: ObservableObject {
     private var connectionStates: [ObjectIdentifier: Bool] = [:] // Track handshake completion
     private var incomingFrameBuffers: [ObjectIdentifier: Data] = [:]
     private var partialIncomingMessages: [ObjectIdentifier: PartialIncomingWebSocketMessage] = [:]
+    private var mediaSendStates: [ObjectIdentifier: MediaSendState] = [:]
     private var latestPointCloudData: Data?
     private var latestMapFrameMessage: String?
     private var latestMapLayerPayloads: [String: Data] = [:]
@@ -199,6 +219,7 @@ class WebSocketManager: ObservableObject {
         connections.forEach { $0.cancel() }
         connections.removeAll()
         connectionStates.removeAll()
+        mediaSendStates.removeAll()
         isServerRunning = false
         serverStatus = "Stopped"
         connectedClients = 0
@@ -210,6 +231,7 @@ class WebSocketManager: ObservableObject {
         let connectionId = ObjectIdentifier(connection)
         connectionStates[connectionId] = false // Handshake not complete
         incomingFrameBuffers[connectionId] = Data()
+        mediaSendStates[connectionId] = MediaSendState()
 
         print("🔗 New connection from \(connection.endpoint)")
 
@@ -463,6 +485,7 @@ class WebSocketManager: ObservableObject {
         connectionStates.removeValue(forKey: connectionId)
         incomingFrameBuffers.removeValue(forKey: connectionId)
         partialIncomingMessages.removeValue(forKey: connectionId)
+        mediaSendStates.removeValue(forKey: connectionId)
         wasmUploadSessions.removeValue(forKey: connectionId)
         if connections.isEmpty {
             bluetoothManager?.sendMessage("0 0 0")
@@ -571,21 +594,7 @@ class WebSocketManager: ObservableObject {
     // MARK: - Broadcasting
 
     func broadcastBinaryData(_ data: Data) {
-        let frame = createBinaryFrame(data: data)
-
-        for connection in connections {
-            // Only send to connections that completed handshake
-            guard connectionStates[ObjectIdentifier(connection)] == true else { continue }
-
-            connection.send(content: frame, completion: .contentProcessed { error in
-                if let error = error {
-                    print("❌ Failed to send binary data: \(error)")
-                    if self.shouldRemoveConnection(for: error) {
-                        self.removeConnection(connection)
-                    }
-                }
-            })
-        }
+        broadcastBestEffortBinaryData(data, topicKey: MediaTopicKey.video)
     }
 
     func broadcastPointCloud(
@@ -621,20 +630,92 @@ class WebSocketManager: ObservableObject {
     func broadcastPointCloudPayload(_ payload: Data) {
         guard !payload.isEmpty else { return }
         latestPointCloudData = payload
-        let frame = createBinaryFrame(data: payload)
+        broadcastBestEffortBinaryData(payload, topicKey: MediaTopicKey.pointCloud)
+    }
+
+    private func broadcastBestEffortBinaryData(_ data: Data, topicKey: String) {
+        let frame = createBinaryFrame(data: data)
 
         for connection in connections {
-            guard connectionStates[ObjectIdentifier(connection)] == true else { continue }
+            let connectionId = ObjectIdentifier(connection)
+            guard connectionStates[connectionId] == true else { continue }
+            enqueueBestEffortMediaFrame(frame, topicKey: topicKey, to: connection, connectionId: connectionId)
+        }
+    }
 
-            connection.send(content: frame, completion: .contentProcessed { error in
+    private func enqueueBestEffortMediaFrame(
+        _ frame: Data,
+        topicKey: String,
+        to connection: NWConnection,
+        connectionId: ObjectIdentifier
+    ) {
+        networkQueue.async {
+            guard self.connectionStates[connectionId] == true else { return }
+            var state = self.mediaSendStates[connectionId] ?? MediaSendState()
+            state.pendingFrames[topicKey] = frame
+            let shouldStartSending = !state.isSending
+            if shouldStartSending {
+                state.isSending = true
+            }
+            self.mediaSendStates[connectionId] = state
+
+            if shouldStartSending {
+                self.sendNextBestEffortMediaFrame(to: connection, connectionId: connectionId)
+            }
+        }
+    }
+
+    private func sendNextBestEffortMediaFrame(to connection: NWConnection, connectionId: ObjectIdentifier) {
+        guard connectionStates[connectionId] == true else {
+            mediaSendStates.removeValue(forKey: connectionId)
+            return
+        }
+
+        var state = mediaSendStates[connectionId] ?? MediaSendState()
+        guard let nextFrame = dequeueNextBestEffortMediaFrame(from: &state) else {
+            state.isSending = false
+            mediaSendStates[connectionId] = state
+            return
+        }
+        mediaSendStates[connectionId] = state
+
+        connection.send(content: nextFrame.frame, completion: .contentProcessed { error in
+            self.networkQueue.async {
                 if let error = error {
-                    print("❌ Failed to send point cloud: \(error)")
+                    print("❌ Failed to send media frame [\(nextFrame.key)]: \(error)")
                     if self.shouldRemoveConnection(for: error) {
                         self.removeConnection(connection)
+                        return
                     }
                 }
-            })
+                self.sendNextBestEffortMediaFrame(to: connection, connectionId: connectionId)
+            }
+        })
+    }
+
+    private func dequeueNextBestEffortMediaFrame(from state: inout MediaSendState) -> BestEffortMediaFrame? {
+        let nextKey = state.pendingFrames.keys.min { lhs, rhs in
+            mediaPriority(for: lhs) < mediaPriority(for: rhs)
         }
+
+        guard let nextKey, let frame = state.pendingFrames.removeValue(forKey: nextKey) else {
+            return nil
+        }
+
+        return BestEffortMediaFrame(key: nextKey, frame: frame)
+    }
+
+    private func mediaPriority(for key: String) -> Int {
+        if key == MediaTopicKey.video {
+            return 0
+        }
+        if key == MediaTopicKey.pointCloud {
+            return 1
+        }
+        if key.hasPrefix("map:") {
+            return 2
+        }
+        return 3
     }
 
     private func recordPointCloudProfile(
@@ -777,7 +858,7 @@ class WebSocketManager: ObservableObject {
             return
         }
         latestMapLayerPayloads[layer] = payload
-        broadcastBinaryData(payload)
+        broadcastBestEffortBinaryData(payload, topicKey: MediaTopicKey.mapLayer(layer))
     }
 
     func publishWasmControlState() {
