@@ -92,11 +92,65 @@
             border-radius: 15px;
         }
 
+        .wasm-controls-accordion {
+            background: #edf3ff;
+            border-radius: 16px;
+            padding: 14px 16px 16px;
+            box-shadow: inset 0 0 0 1px rgba(102, 126, 234, 0.12);
+            margin-bottom: 24px;
+        }
+
+        .wasm-controls-accordion-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .wasm-controls-accordion-title {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            min-width: 0;
+        }
+
+        .wasm-controls-accordion-title h2 {
+            margin: 0;
+            font-size: 18px;
+            color: #24324d;
+        }
+
+        .wasm-controls-accordion-meta {
+            font-size: 11px;
+            color: #667085;
+            font-family: monospace;
+            line-height: 1.35;
+        }
+
+        .wasm-controls-accordion-chevron {
+            color: #5f6981;
+            font-size: 16px;
+            transition: transform 0.16s ease;
+        }
+
+        .wasm-controls-accordion.collapsed .wasm-controls-accordion-chevron {
+            transform: rotate(-90deg);
+        }
+
+        .wasm-controls-accordion-body {
+            margin-top: 14px;
+        }
+
+        .wasm-controls-accordion.collapsed .wasm-controls-accordion-body {
+            display: none;
+        }
+
         .wasm-controls-grid {
             display: grid;
             grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 20px;
-            margin-bottom: 24px;
         }
 
         .wasm-control-card {
@@ -104,26 +158,6 @@
             border-radius: 14px;
             padding: 16px;
             box-shadow: inset 0 0 0 1px rgba(102, 126, 234, 0.08);
-        }
-
-        .wasm-control-card.collapsible .wasm-control-header {
-            cursor: pointer;
-        }
-
-        .wasm-control-card.collapsible .wasm-control-header::after {
-            content: '▾';
-            margin-left: auto;
-            color: #5f6981;
-            font-size: 14px;
-            transition: transform 0.16s ease;
-        }
-
-        .wasm-control-card.collapsible.collapsed .wasm-control-header::after {
-            transform: rotate(-90deg);
-        }
-
-        .wasm-control-card.collapsible.collapsed > :not(.wasm-control-header) {
-            display: none;
         }
 
         .wasm-control-header {
@@ -135,9 +169,23 @@
             margin-bottom: 12px;
         }
 
+        .wasm-control-title-block {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            min-width: 0;
+        }
+
         .wasm-control-title {
             font-weight: 700;
             color: #334;
+        }
+
+        .wasm-control-inline-meta {
+            font-size: 11px;
+            color: #667085;
+            font-family: monospace;
+            line-height: 1.35;
         }
 
         .wasm-control-status {
@@ -988,11 +1036,27 @@
             </div>
         </div>
 
-        <div class="wasm-controls-grid">
-            <div class="wasm-control-card" data-card-key="wasm">
+        <div id="wasmControlsAccordion" class="wasm-controls-accordion">
+            <div id="wasmControlsAccordionHeader" class="wasm-controls-accordion-header">
+                <div class="wasm-controls-accordion-title">
+                    <h2>WASM Tools</h2>
+                    <div id="wasmCompatibilityInline" class="wasm-controls-accordion-meta">
+                        Connect to compare client/app websocket versions.
+                    </div>
+                </div>
+                <div class="wasm-control-status">
+                    Status: <strong id="wasmRunStatus">Idle</strong>
+                    <span id="wasmControlsAccordionChevron" class="wasm-controls-accordion-chevron">▾</span>
+                </div>
+            </div>
+
+            <div class="wasm-controls-accordion-body">
+                <div class="wasm-controls-grid">
+                    <div class="wasm-control-card">
                 <div class="wasm-control-header">
-                    <div class="wasm-control-title">WASM Control</div>
-                    <div class="wasm-control-status">Status: <strong id="wasmRunStatus">Idle</strong></div>
+                    <div class="wasm-control-title-block">
+                        <div class="wasm-control-title">WASM Control</div>
+                    </div>
                 </div>
 
                 <div class="input-group">
@@ -1015,9 +1079,9 @@
                         Stop
                     </button>
                 </div>
-            </div>
+                    </div>
 
-            <div class="wasm-control-card" data-card-key="hub">
+                    <div class="wasm-control-card">
                 <div class="wasm-control-header">
                     <div class="wasm-control-title">WasmHub Public Files</div>
                 </div>
@@ -1039,20 +1103,9 @@
                         Download
                     </button>
                 </div>
-            </div>
+                    </div>
 
-            <div class="wasm-control-card" data-card-key="compatibility">
-                <div class="wasm-control-header">
-                    <div class="wasm-control-title">Client Compatibility</div>
-                    <div id="wasmCompatibilityStatus" class="wasm-status-pill">Unknown</div>
-                </div>
-
-                <div id="wasmCompatibilityMeta" class="wasm-control-meta">
-                    Connect to compare the web client and phone websocket versions.
-                </div>
-            </div>
-
-            <div class="wasm-control-card" data-card-key="ml">
+                    <div class="wasm-control-card">
                 <div class="wasm-control-header">
                     <div class="wasm-control-title">Imported ML Bundles</div>
                 </div>
@@ -1077,9 +1130,9 @@
                         Stop
                     </button>
                 </div>
-            </div>
+                    </div>
 
-            <div class="wasm-control-card" data-card-key="upload">
+                    <div class="wasm-control-card">
                 <div class="wasm-control-header">
                     <div class="wasm-control-title">Upload WASM to Phone</div>
                 </div>
@@ -1097,6 +1150,8 @@
                     <button id="wasmUploadBtn" class="btn-send" onclick="uploadSelectedWasmFile()" disabled>
                         Upload
                     </button>
+                </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1259,8 +1314,9 @@
         const wasmProgramSelect = document.getElementById('wasmProgramSelect');
         const wasmSelectionMetaEl = document.getElementById('wasmSelectionMeta');
         const wasmRunStatusEl = document.getElementById('wasmRunStatus');
-        const wasmCompatibilityStatusEl = document.getElementById('wasmCompatibilityStatus');
-        const wasmCompatibilityMetaEl = document.getElementById('wasmCompatibilityMeta');
+        const wasmCompatibilityInlineEl = document.getElementById('wasmCompatibilityInline');
+        const wasmControlsAccordionEl = document.getElementById('wasmControlsAccordion');
+        const wasmControlsAccordionHeaderEl = document.getElementById('wasmControlsAccordionHeader');
         const wasmRefreshBtn = document.getElementById('wasmRefreshBtn');
         const wasmRunBtn = document.getElementById('wasmRunBtn');
         const wasmStopBtn = document.getElementById('wasmStopBtn');
@@ -1362,7 +1418,6 @@
         const MAX_CONSOLE_LINES = 200;
         const ROAMR_WEB_CLIENT_VERSION = '2026-03-17.1';
         const ROAMR_WEBSOCKET_PROTOCOL_VERSION = '2026-03-17.1';
-        const wasmControlCards = Array.from(document.querySelectorAll('.wasm-control-card[data-card-key]'));
 
         // Joystick variables
         let joystickTimer = null;
@@ -1426,7 +1481,8 @@
             compatibility: null
         };
         let wasmUploadInProgress = false;
-        let activeCollapsedControlCardKey = 'wasm';
+        let wasmControlsAccordionExpanded = true;
+        let lastKnownWasmRunningState = false;
         let latestWasmUploadStatus = '';
 
         const pointCloudState = {
@@ -2075,17 +2131,15 @@
             const compatibility = wasmControlState.compatibility;
 
             if (!isConnected) {
-                wasmCompatibilityStatusEl.textContent = 'Disconnected';
-                wasmCompatibilityStatusEl.style.background = '';
-                wasmCompatibilityMetaEl.textContent = 'Connect to compare the web client and phone websocket versions.';
+                wasmCompatibilityInlineEl.textContent = 'Connect to compare client/app websocket versions.';
+                wasmCompatibilityInlineEl.style.color = '#667085';
                 return;
             }
 
             if (!compatibility) {
-                wasmCompatibilityStatusEl.textContent = 'Unknown';
-                wasmCompatibilityStatusEl.style.background = '';
-                wasmCompatibilityMetaEl.textContent =
-                    `web ${ROAMR_WEB_CLIENT_VERSION} • protocol ${ROAMR_WEBSOCKET_PROTOCOL_VERSION} • waiting for app compatibility info`;
+                wasmCompatibilityInlineEl.textContent =
+                    `web ${ROAMR_WEB_CLIENT_VERSION} • protocol ${ROAMR_WEBSOCKET_PROTOCOL_VERSION} • waiting for app info`;
+                wasmCompatibilityInlineEl.style.color = '#667085';
                 return;
             }
 
@@ -2103,34 +2157,18 @@
                 : 'roamr-ios';
 
             const protocolMatches = serverProtocol === ROAMR_WEBSOCKET_PROTOCOL_VERSION;
-            wasmCompatibilityStatusEl.textContent = protocolMatches ? 'Matched' : 'Mismatch';
-            wasmCompatibilityStatusEl.style.background = protocolMatches
-                ? 'rgba(70, 160, 90, 0.18)'
-                : 'rgba(200, 120, 40, 0.18)';
-            wasmCompatibilityMetaEl.textContent =
-                `${serverName} app ${appVersion} (${buildVersion}) • server protocol ${serverProtocol} • web ${ROAMR_WEB_CLIENT_VERSION} • client protocol ${ROAMR_WEBSOCKET_PROTOCOL_VERSION}`
-                + (protocolMatches ? ' • versions look aligned' : ' • protocol mismatch may explain odd websocket behavior');
+            wasmCompatibilityInlineEl.textContent =
+                `${protocolMatches ? 'matched' : 'mismatch'} • ${serverName} ${appVersion} (${buildVersion}) • app ${serverProtocol} vs web ${ROAMR_WEBSOCKET_PROTOCOL_VERSION}`;
+            wasmCompatibilityInlineEl.style.color = protocolMatches ? '#3f7f4b' : '#a15a16';
         }
 
-        function applyWasmControlCardLayout() {
-            const useAccordion = wasmControlState.isRunning;
-            for (const card of wasmControlCards) {
-                const cardKey = card.dataset.cardKey || '';
-                card.classList.toggle('collapsible', useAccordion);
-                const shouldCollapse = useAccordion && cardKey !== activeCollapsedControlCardKey;
-                card.classList.toggle('collapsed', shouldCollapse);
-            }
+        function applyWasmControlsAccordionLayout() {
+            wasmControlsAccordionEl.classList.toggle('collapsed', !wasmControlsAccordionExpanded);
         }
 
-        function toggleWasmControlCard(cardKey) {
-            if (!wasmControlState.isRunning) {
-                return;
-            }
-            activeCollapsedControlCardKey = activeCollapsedControlCardKey === cardKey ? '' : cardKey;
-            if (!activeCollapsedControlCardKey) {
-                activeCollapsedControlCardKey = 'wasm';
-            }
-            applyWasmControlCardLayout();
+        function toggleWasmControlsAccordion() {
+            wasmControlsAccordionExpanded = !wasmControlsAccordionExpanded;
+            applyWasmControlsAccordionLayout();
         }
 
         function formatWasmTargetDetail(file) {
@@ -2208,8 +2246,9 @@
             const hubFiles = wasmControlState.hubFiles;
             const desiredHubFileId = wasmControlState.selectedHubFileId || hubProgramSelect.value;
 
-            if (!wasmControlState.isRunning) {
-                activeCollapsedControlCardKey = 'wasm';
+            if (wasmControlState.isRunning !== lastKnownWasmRunningState) {
+                wasmControlsAccordionExpanded = !wasmControlState.isRunning;
+                lastKnownWasmRunningState = wasmControlState.isRunning;
             }
 
             wasmProgramSelect.innerHTML = '';
@@ -2349,7 +2388,7 @@
             hubDownloadBtn.disabled = !isConnected || wasmControlState.isLoadingHub || !selectedHubFile || Boolean(selectedHubFile.is_downloaded);
             updateCompatibilityUI();
             updateWasmUploadUI();
-            applyWasmControlCardLayout();
+            applyWasmControlsAccordionLayout();
         }
 
         function resetWasmControlState() {
@@ -2363,7 +2402,8 @@
             wasmControlState.isLoadingHub = false;
             wasmControlState.hubError = '';
             wasmControlState.compatibility = null;
-            activeCollapsedControlCardKey = 'wasm';
+            wasmControlsAccordionExpanded = true;
+            lastKnownWasmRunningState = false;
             latestWasmUploadStatus = '';
             updateWasmControlUI();
         }
@@ -3541,15 +3581,8 @@
             updateWasmControlUI();
         });
 
-        wasmControlCards.forEach((card) => {
-            const header = card.querySelector('.wasm-control-header');
-            const cardKey = card.dataset.cardKey || '';
-            if (!header || !cardKey) {
-                return;
-            }
-            header.addEventListener('click', () => {
-                toggleWasmControlCard(cardKey);
-            });
+        wasmControlsAccordionHeaderEl.addEventListener('click', () => {
+            toggleWasmControlsAccordion();
         });
 
         // Focus message input when page loads
@@ -3562,6 +3595,7 @@
             resetMlOverlay();
             resetConsoleOutput();
             resetWasmControlState();
+            applyWasmControlsAccordionLayout();
             syncConsoleHeights();
         });
     </script>
