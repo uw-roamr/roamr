@@ -10,6 +10,41 @@ import Network
 import Combine
 import CryptoKit
 
+private struct WebSocketRollingTimingStat {
+    private(set) var totalSeconds: Double = 0
+    private(set) var maxSeconds: Double = 0
+    private(set) var sampleCount: Int = 0
+
+    mutating func record(_ seconds: Double) {
+        guard seconds.isFinite, seconds >= 0 else { return }
+        totalSeconds += seconds
+        maxSeconds = max(maxSeconds, seconds)
+        sampleCount += 1
+    }
+
+    var averageMilliseconds: Double {
+        guard sampleCount > 0 else { return 0 }
+        return (totalSeconds / Double(sampleCount)) * 1000.0
+    }
+
+    var maxMilliseconds: Double {
+        maxSeconds * 1000.0
+    }
+}
+
+private struct PointCloudProfileWindow {
+    var windowStartTime: CFAbsoluteTime = 0
+    var messages: Int = 0
+    var totalPoints: Int = 0
+    var totalBytes: Int = 0
+    var payloadBuild = WebSocketRollingTimingStat()
+    var sendEnqueue = WebSocketRollingTimingStat()
+
+    mutating func reset(startTime: CFAbsoluteTime) {
+        self = PointCloudProfileWindow(windowStartTime: startTime)
+    }
+}
+
 private enum RoamrBinaryPointCloudProtocol {
     static let magic: [UInt8] = [0x52, 0x52, 0x42, 0x31]  // "RRB1"
     static let messageTypePoints: UInt8 = 1
@@ -61,6 +96,10 @@ class WebSocketManager: ObservableObject {
     private var recentWasmLogMessages: [String] = []
     private var selectedWasmTargetId: String
     private let port: NWEndpoint.Port = 8080
+    private let enablePointCloudProfiling = true
+    private let pointCloudProfilingSummaryInterval: TimeInterval = 3.0
+    private let pointCloudProfileLock = NSLock()
+    private var pointCloudProfileWindow = PointCloudProfileWindow()
 
     // Bluetooth manager for forwarding messages
     var bluetoothManager: BluetoothManager?
@@ -361,6 +400,7 @@ class WebSocketManager: ObservableObject {
         colorsPointer: UnsafePointer<UInt8>?,
         colorsCount: Int
     ) {
+        let buildStartedAt = CFAbsoluteTimeGetCurrent()
         guard let payload = makeBinaryPointCloudPayload(
             timestamp: timestamp,
             pointsPointer: pointsPointer,
@@ -370,8 +410,17 @@ class WebSocketManager: ObservableObject {
         ) else {
             return
         }
+        let buildDuration = CFAbsoluteTimeGetCurrent() - buildStartedAt
 
+        let sendStartedAt = CFAbsoluteTimeGetCurrent()
         broadcastPointCloudPayload(payload)
+        let sendDuration = CFAbsoluteTimeGetCurrent() - sendStartedAt
+        recordPointCloudProfile(
+            pointCount: pointCount,
+            payloadBytes: payload.count,
+            payloadBuildSeconds: buildDuration,
+            sendEnqueueSeconds: sendDuration
+        )
     }
 
     func broadcastPointCloudPayload(_ payload: Data) {
@@ -389,6 +438,53 @@ class WebSocketManager: ObservableObject {
                 }
             })
         }
+    }
+
+    private func recordPointCloudProfile(
+        pointCount: Int,
+        payloadBytes: Int,
+        payloadBuildSeconds: Double,
+        sendEnqueueSeconds: Double
+    ) {
+        guard enablePointCloudProfiling else { return }
+        let now = CFAbsoluteTimeGetCurrent()
+        pointCloudProfileLock.lock()
+        if pointCloudProfileWindow.windowStartTime == 0 {
+            pointCloudProfileWindow.windowStartTime = now
+        }
+        pointCloudProfileWindow.messages += 1
+        pointCloudProfileWindow.totalPoints += pointCount
+        pointCloudProfileWindow.totalBytes += payloadBytes
+        pointCloudProfileWindow.payloadBuild.record(payloadBuildSeconds)
+        pointCloudProfileWindow.sendEnqueue.record(sendEnqueueSeconds)
+        let summary = makePointCloudProfileSummaryIfNeededLocked(now: now)
+        pointCloudProfileLock.unlock()
+        if let summary {
+            print(summary)
+        }
+    }
+
+    private func makePointCloudProfileSummaryIfNeededLocked(now: CFAbsoluteTime) -> String? {
+        guard pointCloudProfileWindow.windowStartTime > 0 else { return nil }
+        let elapsed = now - pointCloudProfileWindow.windowStartTime
+        guard elapsed >= pointCloudProfilingSummaryInterval else { return nil }
+        let messages = pointCloudProfileWindow.messages
+        let avgPoints = messages > 0 ? Double(pointCloudProfileWindow.totalPoints) / Double(messages) : 0
+        let avgBytes = messages > 0 ? Double(pointCloudProfileWindow.totalBytes) / Double(messages) : 0
+        let summary = String(
+            format: "[ws][pointcloud] window=%.1fs msgs=%d avg_pts=%.0f avg_bytes=%.0f build=%.3f/%.3fms send=%.3f/%.3fms clients=%d",
+            elapsed,
+            messages,
+            avgPoints,
+            avgBytes,
+            pointCloudProfileWindow.payloadBuild.averageMilliseconds,
+            pointCloudProfileWindow.payloadBuild.maxMilliseconds,
+            pointCloudProfileWindow.sendEnqueue.averageMilliseconds,
+            pointCloudProfileWindow.sendEnqueue.maxMilliseconds,
+            connectedClients
+        )
+        pointCloudProfileWindow.reset(startTime: now)
+        return summary
     }
 
     func broadcastTextMessage(_ message: String) {
@@ -486,6 +582,7 @@ class WebSocketManager: ObservableObject {
 
     func publishWasmControlState() {
         DownloadManager.shared.refreshDownloadedFiles()
+        MLBundleManager.shared.refreshBundles()
         let files = availableWasmTargets()
         if !files.contains(where: { ($0["id"] as? String) == selectedWasmTargetId }) {
             selectedWasmTargetId = Self.defaultBundledWasmId
@@ -808,6 +905,7 @@ class WebSocketManager: ObservableObject {
         publishWasmConsoleLine("[web][wasm] starting \(targetName)")
         publishWasmControlState()
         let localFile = localWasmFile(for: targetId)
+        let localBundle = localMLBundle(for: targetId)
 
         DispatchQueue.global(qos: .userInitiated).async {
             WasmManager.shared.startConfiguredHostSensors()
@@ -816,6 +914,8 @@ class WebSocketManager: ObservableObject {
                 WasmManager.shared.runWasmFile(named: targetName)
             } else if let file = localFile {
                 WasmManager.shared.runWasmFile(at: file.fileURL)
+            } else if let bundle = localBundle {
+                WasmManager.shared.runWasmFile(at: bundle.entryWasmURL)
             } else {
                 WebSocketManager.shared.publishWasmConsoleLine("[web][wasm] selected file is no longer available")
             }
@@ -890,7 +990,20 @@ class WebSocketManager: ObservableObject {
                 ] as [String : Any]
             }
 
+        let importedBundleTargets = MLBundleManager.shared.importedBundles
+            .filter(\.exists)
+            .map { bundle in
+                [
+                    "id": "bundle:\(bundle.id)",
+                    "name": bundle.name,
+                    "kind": "ml bundle",
+                    "detail": bundle.entryWasmFileName,
+                    "file_size": bundle.formattedFileSize
+                ] as [String : Any]
+            }
+
         targets.append(contentsOf: downloadedTargets)
+        targets.append(contentsOf: importedBundleTargets)
         return targets
     }
 
@@ -914,13 +1027,19 @@ class WebSocketManager: ObservableObject {
         if targetId == Self.defaultBundledWasmId {
             return Self.defaultBundledWasmName
         }
-        return localWasmFile(for: targetId)?.name
+        return localWasmFile(for: targetId)?.name ?? localMLBundle(for: targetId)?.name
     }
 
     private func localWasmFile(for targetId: String) -> LocalWasmFile? {
         guard targetId.hasPrefix("local:") else { return nil }
         let localId = String(targetId.dropFirst("local:".count))
         return DownloadManager.shared.downloadedFiles.first { $0.id == localId && $0.exists }
+    }
+
+    private func localMLBundle(for targetId: String) -> LocalWasmBundle? {
+        guard targetId.hasPrefix("bundle:") else { return nil }
+        let bundleId = String(targetId.dropFirst("bundle:".count))
+        return MLBundleManager.shared.importedBundles.first { $0.id == bundleId && $0.exists }
     }
 
     private func publishTeleopAck(seq: Int, forwarded: Bool, sampledForLatency: Bool) {

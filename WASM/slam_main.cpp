@@ -116,7 +116,17 @@ static std::atomic<double> g_scan_map_skip_until_timestamp{-1.0};
 
 struct MappingStats {
     uint64_t integrated_lidar_frames = 0;
+    uint64_t window_lidar_frames = 0;
+    double total_update_seconds = 0.0;
+    double max_update_seconds = 0.0;
+    size_t total_points = 0;
+    size_t max_points = 0;
+    double window_total_update_seconds = 0.0;
+    double window_max_update_seconds = 0.0;
+    size_t window_total_points = 0;
+    size_t window_max_points = 0;
     std::chrono::steady_clock::time_point start_time{};
+    std::chrono::steady_clock::time_point last_summary_time{};
     bool started = false;
 };
 
@@ -154,14 +164,62 @@ static void reset_mapping_stats() {
     g_mapping_stats = MappingStats{};
 }
 
-static void record_mapping_frame() {
+static void record_mapping_frame(double update_seconds, size_t point_count) {
     const auto now = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lk(g_mapping_stats_mutex);
     if (!g_mapping_stats.started) {
         g_mapping_stats.start_time = now;
+        g_mapping_stats.last_summary_time = now;
         g_mapping_stats.started = true;
     }
-    g_mapping_stats.integrated_lidar_frames += 2;
+    g_mapping_stats.integrated_lidar_frames += 1;
+    g_mapping_stats.window_lidar_frames += 1;
+    g_mapping_stats.total_update_seconds += update_seconds;
+    g_mapping_stats.max_update_seconds = std::max(g_mapping_stats.max_update_seconds, update_seconds);
+    g_mapping_stats.total_points += point_count;
+    g_mapping_stats.max_points = std::max(g_mapping_stats.max_points, point_count);
+    g_mapping_stats.window_total_update_seconds += update_seconds;
+    g_mapping_stats.window_max_update_seconds =
+        std::max(g_mapping_stats.window_max_update_seconds, update_seconds);
+    g_mapping_stats.window_total_points += point_count;
+    g_mapping_stats.window_max_points = std::max(g_mapping_stats.window_max_points, point_count);
+    const double summary_interval_seconds = 3.0;
+    const double elapsed_since_summary =
+        std::chrono::duration<double>(now - g_mapping_stats.last_summary_time).count();
+    if (elapsed_since_summary < summary_interval_seconds) {
+        return;
+    }
+    const double total_mapping_seconds =
+        std::chrono::duration<double>(now - g_mapping_stats.start_time).count();
+    const double hz =
+        (total_mapping_seconds > 1e-6)
+            ? (static_cast<double>(g_mapping_stats.integrated_lidar_frames) / total_mapping_seconds)
+            : 0.0;
+    const double avg_update_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_update_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_update_ms = g_mapping_stats.window_max_update_seconds * 1000.0;
+    const double avg_points =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (static_cast<double>(g_mapping_stats.window_total_points) /
+               static_cast<double>(g_mapping_stats.window_lidar_frames))
+            : 0.0;
+    std::ostringstream log;
+    log << "[mapping][profile]"
+        << " window=" << elapsed_since_summary << "s"
+        << " frames=" << g_mapping_stats.window_lidar_frames
+        << " hz=" << hz
+        << " update_ms=" << avg_update_ms << "/" << max_update_ms
+        << " pts=" << avg_points << "/" << g_mapping_stats.window_max_points;
+    g_mapping_stats.last_summary_time = now;
+    g_mapping_stats.window_lidar_frames = 0;
+    g_mapping_stats.window_total_update_seconds = 0.0;
+    g_mapping_stats.window_max_update_seconds = 0.0;
+    g_mapping_stats.window_total_points = 0;
+    g_mapping_stats.window_max_points = 0;
+    wasm_log_line(log.str());
 }
 
 static void log_mapping_rate_summary(const char* reason) {
@@ -1152,6 +1210,7 @@ int main(){
         }
         uint64_t map_revision = 0;
         newly_occupied_cells.clear();
+        const auto map_update_started_at = std::chrono::steady_clock::now();
         {
             std::lock_guard<std::mutex> lk(g_map_mutex);
             // project the filtered lidar scan into the occupancy grid.
@@ -1164,14 +1223,17 @@ int main(){
             map_revision =
                 g_map_update_revision.fetch_add(1, std::memory_order_acq_rel) + 1;
             g_latest_map_state.body_to_world = body_to_world;
-            g_latest_map_state.timestamp = candidate_timestamp;
-            g_latest_map_state.revision = map_revision;
-            g_latest_map_state.valid = true;
+                g_latest_map_state.timestamp = candidate_timestamp;
+                g_latest_map_state.revision = map_revision;
+                g_latest_map_state.valid = true;
         }
+        const double map_update_seconds =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - map_update_started_at).count();
         if (!g_first_map_update_done.load(std::memory_order_relaxed)) {
             g_first_map_update_done.store(true, std::memory_order_release);
         }
-        record_mapping_frame();
+        record_mapping_frame(map_update_seconds, lc_data.points_size / sensors::float_per_point);
         last_map_timestamp = candidate_timestamp;
         enqueue_planner_delta_event(
             map_revision,

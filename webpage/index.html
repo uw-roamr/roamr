@@ -1020,6 +1020,33 @@
                     </button>
                 </div>
             </div>
+
+            <div class="wasm-control-card">
+                <div class="wasm-control-header">
+                    <div class="wasm-control-title">Imported ML Bundles</div>
+                </div>
+
+                <div class="input-group">
+                    <label for="mlBundleSelect">Bundle</label>
+                    <select id="mlBundleSelect" disabled></select>
+                </div>
+
+                <div id="mlBundleMeta" class="wasm-control-meta">
+                    Import ML bundle folders in the app, then connect here to run them.
+                </div>
+
+                <div class="wasm-control-actions">
+                    <button id="mlBundleRefreshBtn" class="btn-secondary" onclick="refreshWasmPrograms()" disabled>
+                        Refresh
+                    </button>
+                    <button id="mlBundleRunBtn" class="btn-connect" onclick="runSelectedMlBundleRemote()" disabled>
+                        Run Bundle
+                    </button>
+                    <button id="mlBundleStopBtn" class="btn-disconnect" onclick="stopSelectedWasmRemote()" disabled>
+                        Stop
+                    </button>
+                </div>
+            </div>
         </div>
 
         <div class="viewer-stack">
@@ -1184,6 +1211,11 @@
         const wasmRunBtn = document.getElementById('wasmRunBtn');
         const wasmStopBtn = document.getElementById('wasmStopBtn');
         const hubProgramSelect = document.getElementById('hubProgramSelect');
+        const mlBundleSelect = document.getElementById('mlBundleSelect');
+        const mlBundleMetaEl = document.getElementById('mlBundleMeta');
+        const mlBundleRefreshBtn = document.getElementById('mlBundleRefreshBtn');
+        const mlBundleRunBtn = document.getElementById('mlBundleRunBtn');
+        const mlBundleStopBtn = document.getElementById('mlBundleStopBtn');
         const hubRefreshBtn = document.getElementById('hubRefreshBtn');
         const hubSelectionMetaEl = document.getElementById('hubSelectionMeta');
         const hubDownloadBtn = document.getElementById('hubDownloadBtn');
@@ -1966,9 +1998,21 @@
             updateWasmControlUI();
         }
 
+        function formatWasmTargetDetail(file) {
+            if (file.kind === 'bundled') {
+                return 'bundled';
+            }
+            if (file.file_size && file.detail) {
+                return `${file.detail} • ${file.file_size}`;
+            }
+            return file.detail || file.file_size || file.kind || '';
+        }
+
         function updateWasmControlUI() {
             const isConnected = ws && ws.readyState === WebSocket.OPEN;
-            const files = wasmControlState.files;
+            const allFiles = wasmControlState.files;
+            const files = allFiles.filter((file) => file.kind !== 'ml bundle');
+            const mlBundles = allFiles.filter((file) => file.kind === 'ml bundle');
             const hubFiles = wasmControlState.hubFiles;
             const desiredHubFileId = wasmControlState.selectedHubFileId || hubProgramSelect.value;
 
@@ -1982,9 +2026,7 @@
                 for (const file of files) {
                     const option = document.createElement('option');
                     option.value = file.id || '';
-                    const detail = file.kind === 'bundled'
-                        ? 'bundled'
-                        : ((file.file_size && file.detail) ? `${file.detail} • ${file.file_size}` : (file.detail || 'downloaded'));
+                    const detail = formatWasmTargetDetail(file);
                     option.textContent = detail ? `${file.name} (${detail})` : file.name;
                     wasmProgramSelect.appendChild(option);
                 }
@@ -1994,7 +2036,7 @@
                 wasmProgramSelect.value = wasmControlState.selectedTargetId;
             }
 
-            const selectedFile = files.find((file) => file.id === wasmProgramSelect.value) || null;
+            const selectedFile = allFiles.find((file) => file.id === wasmControlState.selectedTargetId) || null;
             const statusText = wasmControlState.isRunning ? 'Running' : (selectedFile ? 'Ready' : 'Idle');
             wasmRunStatusEl.textContent = statusText;
 
@@ -2019,6 +2061,47 @@
             wasmRefreshBtn.disabled = !isConnected;
             wasmRunBtn.disabled = !isConnected || wasmControlState.isRunning || files.length === 0;
             wasmStopBtn.disabled = !isConnected || !wasmControlState.isRunning;
+
+            mlBundleSelect.innerHTML = '';
+            if (mlBundles.length === 0) {
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = isConnected ? 'No imported ML bundles found' : 'Connect to load imported ML bundles';
+                mlBundleSelect.appendChild(option);
+            } else {
+                for (const file of mlBundles) {
+                    const option = document.createElement('option');
+                    option.value = file.id || '';
+                    const detail = formatWasmTargetDetail(file);
+                    option.textContent = detail ? `${file.name} (${detail})` : file.name;
+                    mlBundleSelect.appendChild(option);
+                }
+            }
+
+            if (mlBundles.some((file) => file.id === wasmControlState.selectedTargetId)) {
+                mlBundleSelect.value = wasmControlState.selectedTargetId;
+            }
+
+            const selectedMlBundle = mlBundles.find((file) => file.id === mlBundleSelect.value) || null;
+            if (wasmControlState.isRunning && selectedFile?.kind === 'ml bundle') {
+                mlBundleMetaEl.textContent = wasmControlState.runningFileName
+                    ? `running ${wasmControlState.runningFileName}`
+                    : 'Imported ML bundle is running';
+            } else if (selectedMlBundle) {
+                const metaParts = [];
+                if (selectedMlBundle.detail) metaParts.push(selectedMlBundle.detail);
+                if (selectedMlBundle.file_size) metaParts.push(selectedMlBundle.file_size);
+                mlBundleMetaEl.textContent = metaParts.join(' • ') || selectedMlBundle.name || 'Ready';
+            } else {
+                mlBundleMetaEl.textContent = isConnected
+                    ? 'Import ML bundle folders in the app, then connect here to run them.'
+                    : 'Connect to load imported ML bundles.';
+            }
+
+            mlBundleSelect.disabled = !isConnected || mlBundles.length === 0 || wasmControlState.isRunning;
+            mlBundleRefreshBtn.disabled = !isConnected;
+            mlBundleRunBtn.disabled = !isConnected || wasmControlState.isRunning || !selectedMlBundle;
+            mlBundleStopBtn.disabled = !isConnected || !wasmControlState.isRunning;
 
             hubProgramSelect.innerHTML = '';
             if (hubFiles.length === 0) {
@@ -2099,6 +2182,20 @@
         }
 
         function runSelectedWasmRemote() {
+            sendWasmControlMessage({ type: 'wasm_run' });
+        }
+
+        function runSelectedMlBundleRemote() {
+            const selectedTargetId = mlBundleSelect.value;
+            if (!selectedTargetId) {
+                return;
+            }
+            if (selectedTargetId !== wasmControlState.selectedTargetId) {
+                sendWasmControlMessage({
+                    type: 'wasm_select',
+                    target_id: selectedTargetId
+                });
+            }
             sendWasmControlMessage({ type: 'wasm_run' });
         }
 
@@ -3164,6 +3261,17 @@
 
         wasmProgramSelect.addEventListener('change', () => {
             const selectedTargetId = wasmProgramSelect.value;
+            if (!selectedTargetId) {
+                return;
+            }
+            sendWasmControlMessage({
+                type: 'wasm_select',
+                target_id: selectedTargetId
+            });
+        });
+
+        mlBundleSelect.addEventListener('change', () => {
+            const selectedTargetId = mlBundleSelect.value;
             if (!selectedTargetId) {
                 return;
             }
