@@ -15,7 +15,7 @@ namespace {
 
 constexpr int32_t kMaxPixels = Map::kMaxImageWidth * Map::kMaxImageHeight;
 constexpr int32_t kPoseLineLength = 10;
-constexpr bool kEmitCompositeMapFrame = false;
+constexpr bool kEmitCompositeMapFrame = true;
 
 static std::array<uint8_t, kMaxPixels * 4> s_image_buf{};
 static std::array<uint8_t, kMaxPixels * 4> s_base_layer_buf{};
@@ -493,6 +493,7 @@ void render_map_frame(
     const PoseTrailState& pose_trail,
     const planning::bridge::PlanningOverlay& overlay,
     const std::vector<semantic::FruitLandmark>& fruit_landmarks,
+    uint64_t fruit_revision,
     uint64_t overlay_revision,
     int32_t width,
     int32_t height,
@@ -547,10 +548,13 @@ void render_map_frame(
   }
 
   clear_image(0, 0, 0, 0);
-  draw_fruit_landmarks(snapshot, fruit_landmarks, scale, off_x, off_y);
   draw_pose_trail(snapshot, pose_trail, scale, off_x, off_y);
   draw_pose(snapshot, scale, off_x, off_y);
   emit_frame(MapRenderLayerId::Odometry, snapshot.timestamp, out_frame);
+
+  clear_image(0, 0, 0, 0);
+  draw_fruit_landmarks(snapshot, fruit_landmarks, scale, off_x, off_y);
+  emit_frame(MapRenderLayerId::Semantic, snapshot.timestamp, out_frame);
 
   if (!kEmitCompositeMapFrame) {
     return;
@@ -575,7 +579,6 @@ void render_map_frame(
       s_image_buf[off + 3] = 255;
     }
   }
-  draw_fruit_landmarks(snapshot, fruit_landmarks, scale, off_x, off_y);
   draw_pose_trail(snapshot, pose_trail, scale, off_x, off_y);
   draw_pose(snapshot, scale, off_x, off_y);
   emit_frame(MapRenderLayerId::Composite, snapshot.timestamp, out_frame);

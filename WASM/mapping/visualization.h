@@ -16,6 +16,7 @@ void render_map_frame(
     const PoseTrailState& pose_trail,
     const planning::bridge::PlanningOverlay& overlay,
     const std::vector<semantic::FruitLandmark>& fruit_landmarks,
+    uint64_t fruit_revision,
     uint64_t overlay_revision,
     int32_t width,
     int32_t height,

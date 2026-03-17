@@ -35,7 +35,7 @@ struct FruitMapperConfig {
   double max_frame_lidar_dt_sec = 0.20;
   double min_process_interval_sec = 0.25;
   double landmark_merge_radius_m = 0.18;
-  int32_t min_reported_observations = 2;
+  int32_t min_reported_observations = 1;
 };
 
 class FruitMapper {

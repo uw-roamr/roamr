@@ -56,6 +56,7 @@ private enum WasmMapLayerId: Int32 {
     case odometry = 2
     case planning = 3
     case frontiers = 4
+    case semantic = 5
 
     var websocketLayerName: String {
         switch self {
@@ -69,6 +70,8 @@ private enum WasmMapLayerId: Int32 {
             return "planning"
         case .frontiers:
             return "frontiers"
+        case .semantic:
+            return "semantic"
         }
     }
 }
@@ -662,7 +665,7 @@ private final class WasmRerunMapBridge {
 
             WasmManager.shared.updateMapPreview(jpegData: jpegData, timestamp: frame.timestamp)
             WebSocketManager.shared.publishMapFrame(timestamp: frame.timestamp, jpegData: jpegData)
-        case .base, .odometry, .planning, .frontiers:
+        case .base, .odometry, .planning, .frontiers, .semantic:
             guard frame.channels >= 4 else { return }
             WebSocketManager.shared.publishMapLayerFrame(
                 timestamp: frame.timestamp,

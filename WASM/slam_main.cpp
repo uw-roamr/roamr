@@ -146,7 +146,7 @@ static void set_autonomy_substate(
     if (reason && reason[0] != '\0') {
         log << " reason=" << reason;
     }
-    wasm_log_line(log.str());
+    // wasm_log_line(log.str());
 }
 
 static void reset_mapping_stats() {
@@ -1449,7 +1449,9 @@ int main(){
         std::vector<semantic::FruitLandmark> fruit_landmarks;
         uint64_t last_rendered_map_revision = 0;
         uint64_t last_rendered_overlay_revision = 0;
+        uint64_t last_rendered_fruit_revision = 0;
         uint64_t cached_overlay_revision = 0;
+        uint64_t cached_fruit_revision = 0;
         double cached_snapshot_timestamp = -1.0;
         double last_rendered_pose_timestamp = -1.0;
         double last_rendered_pose_visual_timestamp = -1.0;
@@ -1484,6 +1486,11 @@ int main(){
                 cached_overlay = g_latest_plan_overlay;
                 cached_overlay_revision = overlay_revision;
             }
+            const uint64_t fruit_revision = g_fruit_mapper.landmark_revision();
+            if (fruit_revision != cached_fruit_revision) {
+                g_fruit_mapper.copy_landmarks(&fruit_landmarks);
+                cached_fruit_revision = fruit_revision;
+            }
 
             mapping::MapSnapshot& snapshot = cached_snapshot;
             planning::bridge::PlanningOverlay& overlay = cached_overlay;
@@ -1504,6 +1511,7 @@ int main(){
 
             const bool map_changed = snapshot.map_revision != last_rendered_map_revision;
             const bool overlay_changed = overlay_revision != last_rendered_overlay_revision;
+            const bool fruit_changed = fruit_revision != last_rendered_fruit_revision;
             const bool pose_changed = pose_snapshot.timestamp > last_rendered_pose_timestamp;
             const bool pose_visual_changed =
                 pose_changed &&
@@ -1536,23 +1544,28 @@ int main(){
                 have_last_trail_pose = true;
                 pose_trail_changed = true;
             }
-            if (!map_changed && !overlay_changed && !pose_visual_changed && !pose_trail_changed) {
+            if (!map_changed &&
+                !overlay_changed &&
+                !fruit_changed &&
+                !pose_visual_changed &&
+                !pose_trail_changed) {
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(kTelemetryRenderIntervalMs));
                 continue;
             }
-            g_fruit_mapper.copy_reportable_landmarks(&fruit_landmarks);
             mapping::visualization::render_map_frame(
                 snapshot,
                 pose_trail,
                 overlay,
                 fruit_landmarks,
+                fruit_revision,
                 overlay_revision,
                 kRenderWidth,
                 kRenderHeight,
                 g_map_image);
             last_rendered_map_revision = snapshot.map_revision;
             last_rendered_overlay_revision = overlay_revision;
+            last_rendered_fruit_revision = fruit_revision;
             last_rendered_pose_timestamp = pose_snapshot.timestamp;
             last_rendered_pose_visual_timestamp = pose_snapshot.timestamp;
             std::this_thread::sleep_for(
@@ -1710,7 +1723,7 @@ int main(){
                          << " target_index=" << status.target_index
                          << " status_dist_error=" << status.distance_error_m
                          << " status_heading_error=" << status.heading_error_rad;
-                wasm_log_line(goal_log.str());
+                // wasm_log_line(goal_log.str());
                 last_goal_check_log_timestamp = odom.timestamp;
             }
             if (status.goal_reached) {

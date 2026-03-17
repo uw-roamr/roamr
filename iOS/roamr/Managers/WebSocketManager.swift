@@ -1137,6 +1137,8 @@ class WebSocketManager: ObservableObject {
             return 3
         case "frontiers":
             return 4
+        case "semantic":
+            return 5
         default:
             return nil
         }
@@ -1152,6 +1154,8 @@ class WebSocketManager: ObservableObject {
             return 2
         case "frontiers":
             return 3
+        case "semantic":
+            return 4
         default:
             return Int.max
         }

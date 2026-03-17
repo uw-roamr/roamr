@@ -9,8 +9,10 @@
 namespace semantic {
 namespace {
 
-constexpr int32_t kAppleClassId = 47;
-constexpr int32_t kOrangeClassId = 49;
+// This detector bundle uses a COCO label list with "__background__" at index 0.
+// That shifts apple/orange to 53/55 instead of the common 47/49 convention.
+constexpr int32_t kAppleClassId = 53;
+constexpr int32_t kOrangeClassId = 55;
 
 const char* detection_log_label(FruitLabel label) {
   switch (label) {
@@ -243,6 +245,13 @@ void FruitMapper::process_lidar_frame(
     }
     LidarBoundingBoxQueryResult lidar_query{};
     if (!query_lidar_bbox_coordinates(lidar_data, box, &lidar_query)) {
+      std::ostringstream log;
+      log << "[fruit] " << label_name(candidate.label)
+          << " bbox had no LiDAR correspondence"
+          << " score=" << candidate.score
+          << " bbox=(" << box.x_min << "," << box.y_min << ")-("
+          << box.x_max << "," << box.y_max << ")";
+      wasm_log_line(log.str());
       continue;
     }
 

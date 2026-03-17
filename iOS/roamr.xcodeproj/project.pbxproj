@@ -34,20 +34,6 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
-				WASM/core/recorder.cpp,
-				WASM/core/telemetry.cpp,
-				WASM/mapping/map_update.cpp,
-				WASM/mapping/map.cpp,
-				WASM/mapping/visualization.cpp,
-				WASM/ml/README.md,
-				WASM/planning/frontier_explorer.cpp,
-				WASM/planning/frontier_simplified.cpp,
-				WASM/planning/navigation.cpp,
-				WASM/planning/planner_bridge.cpp,
-				WASM/sensors/imu_calibration.cpp,
-				WASM/sensors/imu_preintegration.cpp,
-				WASM/slam_main.cpp,
-				WASM/stop_sign_main.cpp,
 			);
 			target = 56206B162EBAB1C600C8E9E8 /* roamr */;
 		};
@@ -126,6 +112,7 @@
 				56206B142EBAB1C600C8E9E8 /* Frameworks */,
 				C9E7E0CE2F00000100043F0F /* Stage WASM Assets */,
 				56206B152EBAB1C600C8E9E8 /* Resources */,
+				C9E7E0D02F00000100043F0F /* Prune Bundled WASM Sources */,
 			);
 			buildRules = (
 			);
@@ -228,6 +215,24 @@
 			shellPath = /bin/sh;
 			shellScript = "set -eu\nSRC_WASM_DIR=\"${SRCROOT}/../WASM\"\nDST_WASM_DIR=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/WASM\"\nmkdir -p \"${DST_WASM_DIR}\"\nfor wasm_file in slam_main.wasm stop_sign_main.wasm; do\n  if [ -f \"${SRC_WASM_DIR}/${wasm_file}\" ]; then\n    cp -f \"${SRC_WASM_DIR}/${wasm_file}\" \"${DST_WASM_DIR}/${wasm_file}\"\n  fi\ndone\nif [ -f \"${SRC_WASM_DIR}/stop_sign_bundle/manifest.json\" ] && [ -f \"${SRC_WASM_DIR}/stop_sign_bundle/model.pte\" ]; then\n  mkdir -p \"${DST_WASM_DIR}/stop_sign_bundle\"\n  cp -f \"${SRC_WASM_DIR}/stop_sign_bundle/manifest.json\" \"${DST_WASM_DIR}/stop_sign_bundle/manifest.json\"\n  cp -f \"${SRC_WASM_DIR}/stop_sign_bundle/model.pte\" \"${DST_WASM_DIR}/stop_sign_bundle/model.pte\"\n  if [ -f \"${SRC_WASM_DIR}/stop_sign_bundle/labels.json\" ]; then\n    cp -f \"${SRC_WASM_DIR}/stop_sign_bundle/labels.json\" \"${DST_WASM_DIR}/stop_sign_bundle/labels.json\"\n  fi\nfi\n";
 		};
+		C9E7E0D02F00000100043F0F /* Prune Bundled WASM Sources */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Prune Bundled WASM Sources";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -eu\nDST_WASM_DIR=\"${TARGET_BUILD_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/WASM\"\nif [ ! -d \"${DST_WASM_DIR}\" ]; then\n  exit 0\nfi\nfind \"${DST_WASM_DIR}\" -mindepth 1 -maxdepth 1 \\\n  ! -name 'slam_main.wasm' \\\n  ! -name 'stop_sign_main.wasm' \\\n  ! -name 'stop_sign_bundle' \\\n  -exec rm -rf {} +\nif [ -d \"${DST_WASM_DIR}/stop_sign_bundle\" ]; then\n  find \"${DST_WASM_DIR}/stop_sign_bundle\" -mindepth 1 -maxdepth 1 \\\n    ! -name 'manifest.json' \\\n    ! -name 'model.pte' \\\n    ! -name 'labels.json' \\\n    -exec rm -rf {} +\nfi\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
@@ -278,7 +283,7 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -343,7 +348,7 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -373,7 +378,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"roamr/Preview Content\"";
-				DEVELOPMENT_TEAM = 542KRJUPYH;
+				DEVELOPMENT_TEAM = J4F43645LT;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = roamr/Info.plist;
@@ -400,7 +405,7 @@
 					"-ldl",
 					"-lm",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.thchzh.roamr;
+				PRODUCT_BUNDLE_IDENTIFIER = com.xykmz.roamr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -424,7 +429,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"roamr/Preview Content\"";
-				DEVELOPMENT_TEAM = 542KRJUPYH;
+				DEVELOPMENT_TEAM = J4F43645LT;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = roamr/Info.plist;
@@ -451,7 +456,7 @@
 					"-ldl",
 					"-lm",
 				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.thchzh.roamr;
+				PRODUCT_BUNDLE_IDENTIFIER = com.xykmz.roamr;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;

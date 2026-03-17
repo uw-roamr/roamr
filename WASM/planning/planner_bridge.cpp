@@ -534,7 +534,7 @@ PlanningOverlay update_plan_overlay(
     start_log << "[planning] start pose outside grid pose=("
               << snapshot.pose.x << "," << snapshot.pose.y << "," << snapshot.pose.theta
               << ")";
-    wasm_log_line(start_log.str());
+    // wasm_log_line(start_log.str());
     update_cached_path_world({});
     update_cached_overlay(overlay);
     return overlay;
@@ -570,7 +570,7 @@ PlanningOverlay update_plan_overlay(
              << " goal=(" << goal_cell.x << "," << goal_cell.y << ")"
              << " path_cells=" << planned.path_grid.size()
              << " message=" << planned.message;
-    wasm_log_line(plan_log.str());
+    // wasm_log_line(plan_log.str());
     return overlay_from_plan_result(snapshot.map_revision, planned);
   }
 
@@ -610,7 +610,7 @@ PlanningOverlay update_plan_overlay(
                << " selected_seed=(" << planned.selected_seed.x << ","
                << planned.selected_seed.y << ")"
                << " message=" << planned.message;
-  wasm_log_line(frontier_log.str());
+  // wasm_log_line(frontier_log.str());
   overlay = overlay_from_frontier_result(snapshot.map_revision, planned);
   update_cached_overlay(overlay);
   return overlay;
