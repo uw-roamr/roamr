@@ -214,6 +214,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     private var fullResolutionARGBBytes: [UInt8] = []
     private var scaledARGBBytes: [UInt8] = []
     private var renderARGBBytes: [UInt8] = []
+    private var packedRGBBytes: [UInt8] = []
     private var fallbackRGBABytes: [UInt8] = []
     private var streamWorkerState = StreamWorkerState()
     private var fullRangeYpCbCrToARGB = vImage_YpCbCrToARGB()
@@ -1218,6 +1219,53 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         return UIImage(cgImage: cgImage, scale: 1.0, orientation: .up)
     }
 
+    private func packedRGBBytesFromARGB(
+        _ argbBytes: [UInt8],
+        width: Int,
+        height: Int,
+        reuseBuffer: inout [UInt8]
+    ) -> [UInt8]? {
+        guard width > 0,
+              height > 0,
+              argbBytes.count == width * height * 4 else {
+            return nil
+        }
+
+        ensureByteBuffer(&reuseBuffer, count: width * height * 3)
+        var sourceBytes = argbBytes
+        let conversionError = sourceBytes.withUnsafeMutableBytes { srcRawBuffer -> vImage_Error in
+            reuseBuffer.withUnsafeMutableBytes { dstRawBuffer -> vImage_Error in
+                guard let srcBaseAddress = srcRawBuffer.baseAddress,
+                      let dstBaseAddress = dstRawBuffer.baseAddress else {
+                    return kvImageNullPointerArgument
+                }
+
+                var srcBuffer = vImage_Buffer(
+                    data: srcBaseAddress,
+                    height: vImagePixelCount(height),
+                    width: vImagePixelCount(width),
+                    rowBytes: width * 4
+                )
+                var dstBuffer = vImage_Buffer(
+                    data: dstBaseAddress,
+                    height: vImagePixelCount(height),
+                    width: vImagePixelCount(width),
+                    rowBytes: width * 3
+                )
+                return vImageConvert_ARGB8888toRGB888(
+                    &srcBuffer,
+                    &dstBuffer,
+                    vImage_Flags(kvImageNoFlags)
+                )
+            }
+        }
+
+        guard conversionError == kvImageNoError else {
+            return nil
+        }
+        return reuseBuffer
+    }
+
     private func rgbFrameDataFromBiPlanarPixelBuffer(
         _ pixelBuffer: CVPixelBuffer,
         pixelFormat: OSType,
@@ -1351,15 +1399,13 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let packStartedAt = profileNow()
         let portraitBytes: [UInt8]
         if includePortraitBytes {
-            var rgbBytes = [UInt8](repeating: 0, count: targetWidth * targetHeight * 3)
-            var srcIndex = 0
-            var dstIndex = 0
-            while srcIndex + 3 < renderARGBBytes.count, dstIndex + 2 < rgbBytes.count {
-                rgbBytes[dstIndex] = renderARGBBytes[srcIndex + 1]
-                rgbBytes[dstIndex + 1] = renderARGBBytes[srcIndex + 2]
-                rgbBytes[dstIndex + 2] = renderARGBBytes[srcIndex + 3]
-                srcIndex += 4
-                dstIndex += 3
+            guard let rgbBytes = packedRGBBytesFromARGB(
+                renderARGBBytes,
+                width: targetWidth,
+                height: targetHeight,
+                reuseBuffer: &packedRGBBytes
+            ) else {
+                return nil
             }
             portraitBytes = rgbBytes
         } else {
@@ -1374,15 +1420,13 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             if includePortraitBytes {
                 previewRGBBytes = portraitBytes
             } else {
-                var rgbBytes = [UInt8](repeating: 0, count: targetWidth * targetHeight * 3)
-                var srcIndex = 0
-                var dstIndex = 0
-                while srcIndex + 3 < renderARGBBytes.count, dstIndex + 2 < rgbBytes.count {
-                    rgbBytes[dstIndex] = renderARGBBytes[srcIndex + 1]
-                    rgbBytes[dstIndex + 1] = renderARGBBytes[srcIndex + 2]
-                    rgbBytes[dstIndex + 2] = renderARGBBytes[srcIndex + 3]
-                    srcIndex += 4
-                    dstIndex += 3
+                guard let rgbBytes = packedRGBBytesFromARGB(
+                    renderARGBBytes,
+                    width: targetWidth,
+                    height: targetHeight,
+                    reuseBuffer: &packedRGBBytes
+                ) else {
+                    return nil
                 }
                 previewRGBBytes = rgbBytes
             }
