@@ -566,17 +566,11 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             )
         }()
 
+        let didStreamFrame: Bool
         if let image = rgbFrame?.uiImage {
-            let didStreamFrame = streamFrame(image: image)
-            if didStreamFrame,
-               let modelCameraFrame,
-               WebSocketManager.shared.hasConnectedWebSocketClients() {
-                let modelResults = ModelRunner.shared.runActiveModels(frame: modelCameraFrame)
-                WebSocketManager.shared.publishMlDetections(
-                    frame: modelCameraFrame,
-                    modelResults: modelResults
-                )
-            }
+            didStreamFrame = streamFrame(image: image)
+        } else {
+            didStreamFrame = false
         }
 
         if shouldUpdatePreview {
@@ -620,6 +614,17 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         )
         isDataDirty = true
         lock.unlock()
+
+        if didStreamFrame,
+           let modelCameraFrame,
+           WebSocketManager.shared.hasConnectedWebSocketClients() {
+            ModelRunner.shared.submitActiveModels(frame: modelCameraFrame) { frame, modelResults, _ in
+                WebSocketManager.shared.publishMlDetections(
+                    frame: frame,
+                    modelResults: modelResults
+                )
+            }
+        }
 
         if let webSocketPointCloudData,
            webSocketPointCloudData.pointCount > 0 {
