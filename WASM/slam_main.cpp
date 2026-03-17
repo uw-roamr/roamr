@@ -21,6 +21,7 @@
 #include "mapping/map_update.h"
 #include "mapping/visualization.h"
 #include "planning/planner_bridge.h"
+#include "semantic/fruit_mapper.h"
 #include "sensors/calibration.h"
 #include "sensors/imu.h"
 #include "sensors/imu_preintegration.h"
@@ -121,6 +122,8 @@ struct MappingStats {
 
 static std::mutex g_mapping_stats_mutex;
 static MappingStats g_mapping_stats;
+static semantic::FruitMapper g_fruit_mapper;
+static sensors::LidarCameraDataV2 g_fruit_lidar_buffer{};
 
 
 static void set_autonomy_substate(
@@ -511,6 +514,7 @@ struct RuntimeSensorConfig {
     bool lidar_points_enabled = true;
     bool point_colors_enabled = false;
     bool camera_image_enabled = false;
+    bool fruit_semantics_enabled = true;
 };
 
 static RuntimeSensorConfig g_sensor_config{};
@@ -539,6 +543,8 @@ static RuntimeSensorConfig load_sensor_config_from_env() {
         env_flag_enabled("ROAMR_SENSOR_ENABLE_POINT_COLORS", false);
     config.camera_image_enabled =
         env_flag_enabled("ROAMR_SENSOR_ENABLE_CAMERA_IMAGE", false);
+    config.fruit_semantics_enabled =
+        env_flag_enabled("ROAMR_SENSOR_ENABLE_FRUIT_SEMANTICS", true);
     return config;
 }
 
@@ -548,7 +554,8 @@ static void log_sensor_config(const RuntimeSensorConfig& config) {
         << " wheel=" << (config.wheel_odometry_enabled ? 1 : 0)
         << " lidar_points=" << (config.lidar_points_enabled ? 1 : 0)
         << " point_colors=" << (config.point_colors_enabled ? 1 : 0)
-        << " camera_image=" << (config.camera_image_enabled ? 1 : 0);
+        << " camera_image=" << (config.camera_image_enabled ? 1 : 0)
+        << " fruit_semantics=" << (config.fruit_semantics_enabled ? 1 : 0);
     wasm_log_line(log.str());
 }
 
@@ -568,6 +575,7 @@ static constexpr double kTelemetryPoseRenderMinIntervalSec = 0.15;
 static constexpr double kPoseTrailMinDistanceM = 0.05;
 static constexpr double kPoseTrailMinYawDeltaRad = 10.0 * core::pi / 180.0;
 static constexpr double kPoseTrailMinIntervalSec = 0.05;
+static constexpr int32_t kFruitSemanticLoopSleepMs = 125;
 
 struct OuterLoopTurnPidConfig {
     double kp_omega_per_rad;
@@ -866,6 +874,7 @@ int main(){
     });
     std::thread lidar_camera_thread([&m_lc, &m_pose](){
         double last_lidar_log_timestamp = -1.0;
+        bool logged_first_queued_frame = false;
 
         while(true){
             int write_idx = -1;
@@ -915,6 +924,15 @@ int main(){
                     std::lock_guard<std::mutex> lk(g_lc_cv_mutex);
                     g_lc_slot_states[write_idx] = LidarSlotState::QUEUED;
                     push_lidar_ready_slot_locked(write_idx);
+                    if (!logged_first_queued_frame) {
+                        std::ostringstream log;
+                        log << "[lidar] queued first frame"
+                            << " lidar_t=" << g_lc_buffers[write_idx].timestamp
+                            << " pose_t=" << g_lc_pose_buffers[write_idx].timestamp
+                            << " queue_size=" << g_lc_ready_size;
+                        wasm_log_line(log.str());
+                        logged_first_queued_frame = true;
+                    }
                 }
                 g_lc_cv.notify_one();
                 if (g_sensor_config.lidar_points_enabled &&
@@ -968,9 +986,68 @@ int main(){
         }
     });
 
+    std::thread fruit_semantics_thread([&m_pose](){
+        if (!g_sensor_config.fruit_semantics_enabled) {
+            wasm_log_line("[fruit] semantic mapping disabled");
+            return;
+        }
+
+        while (!g_first_map_update_done.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kFruitSemanticLoopSleepMs));
+        }
+
+        const semantic::FruitMapperConfig mapper_config{};
+        if (!g_fruit_mapper.initialize(mapper_config)) {
+            wasm_log_line("[fruit] semantic mapper unavailable");
+            return;
+        }
+
+        while (true) {
+            if (!g_lc_ready.load(std::memory_order_acquire)) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(kFruitSemanticLoopSleepMs));
+                continue;
+            }
+
+            g_fruit_lidar_buffer.timestamp = 0.0;
+            g_fruit_lidar_buffer.points_size = 0;
+            g_fruit_lidar_buffer.colors_size = 0;
+            g_fruit_lidar_buffer.image_size = 0;
+            g_fruit_lidar_buffer.pixel_coords_size = 0;
+            read_lidar_camera_v2(&g_fruit_lidar_buffer);
+            sensors::ensure_points_flu(g_fruit_lidar_buffer);
+            if (g_fruit_lidar_buffer.timestamp <= 0.0 || g_fruit_lidar_buffer.points_size == 0 ||
+                g_fruit_lidar_buffer.pixel_coords_size == 0) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(kFruitSemanticLoopSleepMs));
+                continue;
+            }
+
+            sensors::PoseLog pose_snapshot{};
+            {
+                std::lock_guard<std::mutex> lk(m_pose);
+                if (!sample_pose_at_timestamp_locked(g_fruit_lidar_buffer.timestamp, &pose_snapshot)) {
+                    pose_snapshot = g_pose;
+                }
+            }
+            if (!pose_log_valid(pose_snapshot)) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(kFruitSemanticLoopSleepMs));
+                continue;
+            }
+
+            g_fruit_mapper.process_lidar_frame(g_fruit_lidar_buffer, pose_snapshot);
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kFruitSemanticLoopSleepMs));
+        }
+    });
+
 
     std::thread mapping_thread([&m_pose](){
       double last_map_timestamp = -1.0;
+      double last_empty_queue_log_timestamp = -1.0;
+      bool logged_first_mapping_frame = false;
       std::vector<planning::GridCoord> newly_occupied_cells;
       newly_occupied_cells.reserve(2048);
 
@@ -1000,7 +1077,24 @@ int main(){
         int ready_idx = -1;
         {
             std::unique_lock<std::mutex> lk(g_lc_cv_mutex);
-            g_lc_cv.wait(lk, []{return g_lc_ready_size > 0;});
+            if (!g_lc_cv.wait_for(
+                    lk,
+                    std::chrono::milliseconds(1000),
+                    []{return g_lc_ready_size > 0;})) {
+                const double now_pose_t = g_pose.timestamp;
+                if (last_empty_queue_log_timestamp < 0.0 ||
+                    (now_pose_t > 0.0 &&
+                     (now_pose_t - last_empty_queue_log_timestamp) >= 1.0)) {
+                    std::ostringstream log;
+                    log << "[mapping] waiting for queued lidar frame"
+                        << " lc_ready=" << (g_lc_ready.load(std::memory_order_relaxed) ? 1 : 0)
+                        << " queue_size=" << g_lc_ready_size
+                        << " pose_t=" << now_pose_t;
+                    wasm_log_line(log.str());
+                    last_empty_queue_log_timestamp = now_pose_t;
+                }
+                continue;
+            }
             ready_idx = pop_lidar_ready_slot_locked();
             if (ready_idx >= 0) {
                 g_lc_slot_states[ready_idx] = LidarSlotState::READING;
@@ -1033,6 +1127,14 @@ int main(){
             }
             g_lc_cv.notify_one();
             continue;
+        }
+        if (!logged_first_mapping_frame) {
+            std::ostringstream log;
+            log << "[mapping] consuming first queued lidar frame"
+                << " lidar_t=" << lc_data.timestamp
+                << " pose_t=" << pose_snapshot.timestamp;
+            wasm_log_line(log.str());
+            logged_first_mapping_frame = true;
         }
         core::PoseSE3d body_to_world;
         body_to_world.quaternion = pose_snapshot.quaternion;
@@ -1344,6 +1446,7 @@ int main(){
         mapping::PoseTrailState pose_trail;
         mapping::MapSnapshot cached_snapshot;
         planning::bridge::PlanningOverlay cached_overlay;
+        std::vector<semantic::FruitLandmark> fruit_landmarks;
         uint64_t last_rendered_map_revision = 0;
         uint64_t last_rendered_overlay_revision = 0;
         uint64_t cached_overlay_revision = 0;
@@ -1438,10 +1541,12 @@ int main(){
                     std::chrono::milliseconds(kTelemetryRenderIntervalMs));
                 continue;
             }
+            g_fruit_mapper.copy_reportable_landmarks(&fruit_landmarks);
             mapping::visualization::render_map_frame(
                 snapshot,
                 pose_trail,
                 overlay,
+                fruit_landmarks,
                 overlay_revision,
                 kRenderWidth,
                 kRenderHeight,
@@ -1638,6 +1743,7 @@ int main(){
     imu_thread.join();
     lidar_camera_thread.join();
     lidar_preview_thread.join();
+    fruit_semantics_thread.join();
     mapping_thread.join();
     // planner_thread.join();
     telemetry_thread.join();

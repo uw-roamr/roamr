@@ -356,6 +356,65 @@ void draw_frontiers(
   }
 }
 
+void draw_fruit_landmarks(
+    const MapSnapshot& snapshot,
+    const std::vector<semantic::FruitLandmark>& fruit_landmarks,
+    float scale,
+    float off_x,
+    float off_y) {
+  for (const semantic::FruitLandmark& landmark : fruit_landmarks) {
+    const int32_t gx = static_cast<int32_t>(
+        std::floor(
+            (landmark.world_point.x - snapshot.meta.origin_x_m) /
+            snapshot.meta.resolution_m));
+    const int32_t gy = static_cast<int32_t>(
+        std::floor(
+            (landmark.world_point.y - snapshot.meta.origin_y_m) /
+            snapshot.meta.resolution_m));
+
+    int32_t ppx = 0;
+    int32_t ppy = 0;
+    if (!snapshot_grid_to_pixel(
+            snapshot.meta,
+            gx,
+            gy,
+            s_cur_w,
+            s_cur_h,
+            scale,
+            off_x,
+            off_y,
+            &ppx,
+            &ppy)) {
+      continue;
+    }
+
+    uint8_t r = 255;
+    uint8_t g = 255;
+    uint8_t b = 255;
+    switch (landmark.label) {
+      case semantic::FruitLabel::kApple:
+        r = 255;
+        g = 0;
+        b = 0;
+        break;
+      case semantic::FruitLabel::kOrange:
+        r = 255;
+        g = 165;
+        b = 0;
+        break;
+      case semantic::FruitLabel::kUnknown:
+      default:
+        break;
+    }
+
+    for (int32_t dy = -1; dy <= 1; ++dy) {
+      for (int32_t dx = -1; dx <= 1; ++dx) {
+        paint_pixel(ppx + dx, ppy + dy, r, g, b, 255);
+      }
+    }
+  }
+}
+
 void cache_static_layers(
     const MapSnapshot& snapshot,
     const planning::bridge::PlanningOverlay& overlay,
@@ -433,6 +492,7 @@ void render_map_frame(
     const MapSnapshot& snapshot,
     const PoseTrailState& pose_trail,
     const planning::bridge::PlanningOverlay& overlay,
+    const std::vector<semantic::FruitLandmark>& fruit_landmarks,
     uint64_t overlay_revision,
     int32_t width,
     int32_t height,
@@ -487,6 +547,7 @@ void render_map_frame(
   }
 
   clear_image(0, 0, 0, 0);
+  draw_fruit_landmarks(snapshot, fruit_landmarks, scale, off_x, off_y);
   draw_pose_trail(snapshot, pose_trail, scale, off_x, off_y);
   draw_pose(snapshot, scale, off_x, off_y);
   emit_frame(MapRenderLayerId::Odometry, snapshot.timestamp, out_frame);
@@ -514,6 +575,7 @@ void render_map_frame(
       s_image_buf[off + 3] = 255;
     }
   }
+  draw_fruit_landmarks(snapshot, fruit_landmarks, scale, off_x, off_y);
   draw_pose_trail(snapshot, pose_trail, scale, off_x, off_y);
   draw_pose(snapshot, scale, off_x, off_y);
   emit_frame(MapRenderLayerId::Composite, snapshot.timestamp, out_frame);

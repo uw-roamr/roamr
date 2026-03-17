@@ -301,6 +301,11 @@ def parse_args() -> argparse.Namespace:
         help="Directory where model.pte and manifest.json will be written.",
     )
     parser.add_argument(
+        "--labels-file",
+        default="labels.json",
+        help="Label filename to include in the generated manifest.",
+    )
+    parser.add_argument(
         "--model-name",
         default="model",
         help="Base filename for the .pte output. 'model' produces model.pte.",
@@ -449,6 +454,7 @@ def write_manifest(args: argparse.Namespace, output_dir: Path, pte_path: Path) -
         "delegate": None if args.backend == "portable" else args.backend,
         "method": args.method,
         "model_file": pte_path.name,
+        "labels_file": args.labels_file,
         "score_threshold": float(args.score_threshold),
         "input": {
             "width": int(args.image_size),

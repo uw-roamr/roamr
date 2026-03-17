@@ -31,7 +31,7 @@ struct WasmSensorConfig: Equatable {
 
 final class WasmManager: ObservableObject {
     static let shared = WasmManager()
-    private static let maxWasmThreads: UInt32 = 8
+    private static let maxWasmThreads: UInt32 = 12
     private static let maxLogLines = 200
     private static let sensorImuEnabledDefaultsKey = "com.roamr.wasm.sensor.imuEnabled"
     private static let sensorWheelOdometryEnabledDefaultsKey = "com.roamr.wasm.sensor.wheelOdometryEnabled"
@@ -225,6 +225,7 @@ final class WasmManager: ObservableObject {
             NativeFunction(name: "read_wheel_odometry", signature: "(*)", impl: read_wheel_odometry_impl),
             NativeFunction(name: "init_camera", signature: "(*)", impl: init_camera_impl),
             NativeFunction(name: "read_lidar_camera", signature: "(*)", impl: read_lidar_camera_impl),
+            NativeFunction(name: "read_lidar_camera_v2", signature: "(*)", impl: read_lidar_camera_v2_impl),
             NativeFunction(name: "ml_open_model", signature: "(*)", impl: ml_open_model_impl),
             NativeFunction(name: "ml_run_latest_camera_frame", signature: "(*)", impl: ml_run_latest_camera_frame_impl),
             NativeFunction(name: "ml_close_model", signature: "(*)", impl: ml_close_model_impl),

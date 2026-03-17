@@ -32,6 +32,9 @@ struct LidarCameraData {
 
     var points_frame_id: FrameId
     var image_frame_id: FrameId
+
+    var pixel_coords: [UInt16]
+    var pixel_coords_size: Int32
 }
 
 struct PointCloudData {
@@ -50,6 +53,7 @@ struct DepthPixelData {
 struct PointCloudExportData {
     var points: [Float32]  // FLU frame packed as xyzxyz...
     var colors: [UInt8]    // RGB per point
+    var pixelCoords: [UInt16]  // image-space xyxy...
     var pointCount: Int
 }
 
@@ -142,7 +146,9 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         image: [UInt8](),
         image_size: 0,
         points_frame_id: CoordinateFrameId.FLU.rawValue,
-        image_frame_id: CoordinateFrameId.RDF.rawValue
+        image_frame_id: CoordinateFrameId.RDF.rawValue,
+        pixel_coords: [UInt16](),
+        pixel_coords_size: 0
     )
     private var latestCameraFrame: CameraImageFrame?
 
@@ -188,7 +194,9 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             image: [],
             image_size: 0,
             points_frame_id: CoordinateFrameId.FLU.rawValue,
-            image_frame_id: CoordinateFrameId.RDF.rawValue
+            image_frame_id: CoordinateFrameId.RDF.rawValue,
+            pixel_coords: [],
+            pixel_coords_size: 0
         )
         latestCameraFrame = nil
         isDataDirty = false
@@ -529,6 +537,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         } else {
             rgbFrame = nil
         }
+        let wasmOutputWidth = rgbFrame?.portraitWidth ?? fallbackLayout.width
+        let wasmOutputHeight = rgbFrame?.portraitHeight ?? fallbackLayout.height
 
         let pointCloudData: PointCloudExportData?
         if needsPointCloud {
@@ -536,6 +546,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
                 depthMap: depthData.depthMap,
                 confidenceMap: depthData.confidenceMap,
                 frame: frame,
+                outputWidth: wasmOutputWidth,
+                outputHeight: wasmOutputHeight,
                 colorSource: nil,
                 colorPixelBuffer: needsPointColors ? frame.capturedImage : nil
             )
@@ -549,6 +561,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
                 depthMap: depthData.depthMap,
                 confidenceMap: depthData.confidenceMap,
                 frame: frame,
+                outputWidth: wasmOutputWidth,
+                outputHeight: wasmOutputHeight,
                 colorSource: nil,
                 colorPixelBuffer: frame.capturedImage,
                 pointStride: websocketPointCloudStride,
@@ -608,8 +622,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         }
 
         lock.lock()
-        currentImageWidth = Int32(rgbFrame?.portraitWidth ?? fallbackLayout.width)
-        currentImageHeight = Int32(rgbFrame?.portraitHeight ?? fallbackLayout.height)
+        currentImageWidth = Int32(wasmOutputWidth)
+        currentImageHeight = Int32(wasmOutputHeight)
         currentImageChannels = 3
 
         let imageBytes = needsImagePayload ? (rgbFrame?.portraitBytes ?? []) : []
@@ -623,7 +637,9 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             image: imageBytes,
             image_size: Int32(imageBytes.count),
             points_frame_id: CoordinateFrameId.FLU.rawValue,
-            image_frame_id: CoordinateFrameId.RDF.rawValue
+            image_frame_id: CoordinateFrameId.RDF.rawValue,
+            pixel_coords: pointCloudData?.pixelCoords ?? [],
+            pixel_coords_size: Int32(pointCloudData?.pixelCoords.count ?? 0)
         )
         isDataDirty = true
         lock.unlock()
@@ -789,6 +805,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         depthMap: CVPixelBuffer,
         confidenceMap: CVPixelBuffer?,
         frame: ARFrame,
+        outputWidth: Int,
+        outputHeight: Int,
         colorSource: RGBColorSource?,
         colorPixelBuffer: CVPixelBuffer?,
         pointStride: Int? = nil,
@@ -829,8 +847,14 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let cy = intrinsics.columns.2.y
 
         let imageResolution = frame.camera.imageResolution
+        let outputLayout = portraitLayout(
+            width: Int(imageResolution.width),
+            height: Int(imageResolution.height)
+        )
         let intrinsicsScaleX = Float(imageResolution.width) / Float(max(1, depthWidth))
         let intrinsicsScaleY = Float(imageResolution.height) / Float(max(1, depthHeight))
+        let outputScaleX = Float(outputWidth) / Float(max(1, outputLayout.width))
+        let outputScaleY = Float(outputHeight) / Float(max(1, outputLayout.height))
 
         let colorScaleX: Float
         let colorScaleY: Float
@@ -884,6 +908,10 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             repeating: 0,
             count: estimatedPoints * LidarCameraConstants.floatsPerPoint
         )
+        var pixelCoords = [UInt16](
+            repeating: 0,
+            count: estimatedPoints * 2
+        )
         let wantsColors = hasRgbColorSource || hasYuvColorSource
         var colors = wantsColors
             ? [UInt8](
@@ -929,6 +957,21 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
                 points[outBase + 0] = depth
                 points[outBase + 1] = -cameraX
                 points[outBase + 2] = -cameraY
+
+                let pixelX: Float
+                let pixelY: Float
+                if outputLayout.rotate {
+                    pixelX = Float(Int(imageResolution.height) - 1) - imageV
+                    pixelY = imageU
+                } else {
+                    pixelX = imageU
+                    pixelY = imageV
+                }
+                let mappedX = min(outputWidth - 1, max(0, Int(round(pixelX * outputScaleX))))
+                let mappedY = min(outputHeight - 1, max(0, Int(round(pixelY * outputScaleY))))
+                let pixelOutBase = pointCount * 2
+                pixelCoords[pixelOutBase + 0] = UInt16(mappedX)
+                pixelCoords[pixelOutBase + 1] = UInt16(mappedY)
                 pointCount += 1
 
                 if hasRgbColorSource, let colorSource = colorSource {
@@ -989,7 +1032,17 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             colors.removeLast(colors.count - usedColorCount)
         }
 
-        return PointCloudExportData(points: points, colors: colors, pointCount: pointCount)
+        let usedPixelCoordCount = pointCount * 2
+        if usedPixelCoordCount < pixelCoords.count {
+            pixelCoords.removeLast(pixelCoords.count - usedPixelCoordCount)
+        }
+
+        return PointCloudExportData(
+            points: points,
+            colors: colors,
+            pixelCoords: pixelCoords,
+            pointCount: pointCount
+        )
     }
 
     private func yCbCrToRgb(y: Float, cb: Float, cr: Float, fullRange: Bool) -> (UInt8, UInt8, UInt8) {
@@ -1138,10 +1191,32 @@ func init_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?)
     )
 }
 
+private func dequeueLatestLidarCameraData() -> LidarCameraData? {
+    let manager = AVManager.shared
+    manager.lock.lock()
+    guard manager.isDataDirty else {
+        manager.lock.unlock()
+        return nil
+    }
+    let data = manager.currentData
+    manager.isDataDirty = false
+    manager.lock.unlock()
+    return data
+}
+
+private func peekLatestLidarCameraData() -> LidarCameraData? {
+    let manager = AVManager.shared
+    manager.lock.lock()
+    let data = manager.currentData
+    manager.lock.unlock()
+    guard data.timestamp > 0 else {
+        return nil
+    }
+    return data
+}
+
 func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     guard let ptr = ptr, let exec_env = exec_env else { return }
-
-    let manager = AVManager.shared
 
     let basePtr = ptr.assumingMemoryBound(to: UInt8.self)
     guard let moduleInst = wasm_runtime_get_module_inst(exec_env) else {
@@ -1202,15 +1277,10 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
         }
     }
 
-    manager.lock.lock()
-    guard manager.isDataDirty else {
-        manager.lock.unlock()
+    guard let data = dequeueLatestLidarCameraData() else {
         clearFrame()
         return
     }
-    let data = manager.currentData
-    manager.isDataDirty = false
-    manager.lock.unlock()
 
     basePtr.withMemoryRebound(to: Double.self, capacity: 1) { rebounded in
         rebounded.pointee = data.timestamp
@@ -1264,5 +1334,148 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
 
     basePtr.advanced(by: imageFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
         rebounded.pointee = data.image_frame_id
+    }
+}
+
+func read_lidar_camera_v2_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+    guard let ptr = ptr, let exec_env = exec_env else { return }
+
+    let basePtr = ptr.assumingMemoryBound(to: UInt8.self)
+    guard let moduleInst = wasm_runtime_get_module_inst(exec_env) else {
+        return
+    }
+
+    var nativeStart: UnsafeMutablePointer<UInt8>?
+    var nativeEnd: UnsafeMutablePointer<UInt8>?
+    if !wasm_runtime_get_native_addr_range(moduleInst, basePtr, &nativeStart, &nativeEnd) {
+        return
+    }
+
+    let pointsOffset = MemoryLayout<Double>.size
+    let pointsMaxCount = LidarCameraConstants.maxPointsSize
+    let pointsByteCount = pointsMaxCount * MemoryLayout<Float32>.size
+    let pointsSizeOffset = pointsOffset + pointsByteCount
+
+    let colorsOffset = pointsSizeOffset + MemoryLayout<Int32>.size
+    let colorsMaxCount = LidarCameraConstants.maxColorsSize
+    let colorsByteCount = colorsMaxCount * MemoryLayout<UInt8>.size
+    let colorsSizeOffset = colorsOffset + colorsByteCount
+
+    let imageOffset = colorsSizeOffset + MemoryLayout<Int32>.size
+    let imageMaxCount = LidarCameraConstants.maxImageSize
+    let imageByteCount = imageMaxCount * MemoryLayout<UInt8>.size
+    let imageSizeOffset = imageOffset + imageByteCount
+
+    let pointsFrameIdOffset = imageSizeOffset + MemoryLayout<Int32>.size
+    let imageFrameIdOffset = pointsFrameIdOffset + MemoryLayout<Int32>.size
+    let pixelCoordsOffset = imageFrameIdOffset + MemoryLayout<Int32>.size
+    let pixelCoordsMaxCount = LidarCameraConstants.maxPointsPerScan * 2
+    let pixelCoordsByteCount = pixelCoordsMaxCount * MemoryLayout<UInt16>.size
+    let pixelCoordsSizeOffset = pixelCoordsOffset + pixelCoordsByteCount
+    let totalBytes = pixelCoordsSizeOffset + MemoryLayout<Int32>.size
+
+    if let nativeEnd = nativeEnd {
+        let baseAddr = UInt(bitPattern: basePtr)
+        let endAddr = UInt(bitPattern: nativeEnd)
+        if baseAddr + UInt(totalBytes) > endAddr {
+            return
+        }
+    }
+
+    func clearFrame() {
+        basePtr.withMemoryRebound(to: Double.self, capacity: 1) { rebounded in
+            rebounded.pointee = 0.0
+        }
+        basePtr.advanced(by: pointsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = 0
+        }
+        basePtr.advanced(by: colorsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = 0
+        }
+        basePtr.advanced(by: imageSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = 0
+        }
+        basePtr.advanced(by: pointsFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = CoordinateFrameId.FLU.rawValue
+        }
+        basePtr.advanced(by: imageFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = CoordinateFrameId.RDF.rawValue
+        }
+        basePtr.advanced(by: pixelCoordsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = 0
+        }
+    }
+
+    guard let data = peekLatestLidarCameraData() else {
+        clearFrame()
+        return
+    }
+
+    basePtr.withMemoryRebound(to: Double.self, capacity: 1) { rebounded in
+        rebounded.pointee = data.timestamp
+    }
+
+    let pointsCount = min(Int(data.points_size), pointsMaxCount)
+    if pointsCount > 0 {
+        data.points.withUnsafeBytes { src in
+            if let srcBase = src.baseAddress {
+                memcpy(basePtr.advanced(by: pointsOffset), srcBase, pointsCount * MemoryLayout<Float32>.size)
+            }
+        }
+    }
+
+    let pointsSizeValue = Int32(pointsCount)
+    basePtr.advanced(by: pointsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = pointsSizeValue
+    }
+
+    let colorsCount = min(Int(data.colors_size), colorsMaxCount)
+    if colorsCount > 0 {
+        data.colors.withUnsafeBytes { src in
+            if let srcBase = src.baseAddress {
+                memcpy(basePtr.advanced(by: colorsOffset), srcBase, colorsCount * MemoryLayout<UInt8>.size)
+            }
+        }
+    }
+
+    let colorsSizeValue = Int32(colorsCount)
+    basePtr.advanced(by: colorsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = colorsSizeValue
+    }
+
+    let imageCount = min(Int(data.image_size), imageMaxCount)
+    if imageCount > 0 {
+        data.image.withUnsafeBytes { src in
+            if let srcBase = src.baseAddress {
+                memcpy(basePtr.advanced(by: imageOffset), srcBase, imageCount * MemoryLayout<UInt8>.size)
+            }
+        }
+    }
+
+    let imageSizeValue = Int32(imageCount)
+    basePtr.advanced(by: imageSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = imageSizeValue
+    }
+
+    basePtr.advanced(by: pointsFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = data.points_frame_id
+    }
+
+    basePtr.advanced(by: imageFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = data.image_frame_id
+    }
+
+    let pixelCoordsCount = min(Int(data.pixel_coords_size), pixelCoordsMaxCount)
+    if pixelCoordsCount > 0 {
+        data.pixel_coords.withUnsafeBytes { src in
+            if let srcBase = src.baseAddress {
+                memcpy(basePtr.advanced(by: pixelCoordsOffset), srcBase, pixelCoordsCount * MemoryLayout<UInt16>.size)
+            }
+        }
+    }
+
+    let pixelCoordsSizeValue = Int32(pixelCoordsCount)
+    basePtr.advanced(by: pixelCoordsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = pixelCoordsSizeValue
     }
 }

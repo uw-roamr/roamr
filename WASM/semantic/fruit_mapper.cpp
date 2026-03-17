@@ -1,0 +1,349 @@
+#include "semantic/fruit_mapper.h"
+
+#include <algorithm>
+#include <cmath>
+#include <sstream>
+
+#include "core/telemetry.h"
+
+namespace semantic {
+namespace {
+
+constexpr int32_t kAppleClassId = 47;
+constexpr int32_t kOrangeClassId = 49;
+
+const char* detection_log_label(FruitLabel label) {
+  switch (label) {
+    case FruitLabel::kApple:
+      return "APPLE DETECTED";
+    case FruitLabel::kOrange:
+      return "ORANGE DETECTED";
+    case FruitLabel::kUnknown:
+    default:
+      return "FRUIT DETECTED";
+  }
+}
+
+FruitLabel fruit_label_from_class_id(int32_t class_id) {
+  switch (class_id) {
+    case kAppleClassId:
+      return FruitLabel::kApple;
+    case kOrangeClassId:
+      return FruitLabel::kOrange;
+    default:
+      return FruitLabel::kUnknown;
+  }
+}
+
+double planar_distance_squared(
+    const core::Vector3d& a,
+    const core::Vector3d& b) {
+  const double dx = a.x - b.x;
+  const double dy = a.y - b.y;
+  return dx * dx + dy * dy;
+}
+
+}  // namespace
+
+bool FruitMapper::initialize(const FruitMapperConfig& config) {
+  if (initialized_) {
+    return true;
+  }
+  config_ = config;
+
+  const int32_t open_status = ml::open_model(config_.manifest_path, &model_id_);
+  if (open_status != ml::kSuccess) {
+    std::ostringstream log;
+    log << "[fruit] failed to open model path=" << config_.manifest_path
+        << " status=" << ml::status_name(open_status)
+        << " code=" << open_status;
+    wasm_log_line(log.str());
+    model_id_ = 0;
+    initialized_ = false;
+    return false;
+  }
+
+  std::ostringstream log;
+  log << "[fruit] model ready id=" << model_id_
+      << " manifest=" << config_.manifest_path
+      << " apple_class=" << kAppleClassId
+      << " orange_class=" << kOrangeClassId;
+  wasm_log_line(log.str());
+  initialized_ = true;
+  return true;
+}
+
+bool FruitMapper::initialized() const {
+  return initialized_;
+}
+
+uint64_t FruitMapper::landmark_revision() const {
+  return landmark_revision_.load(std::memory_order_acquire);
+}
+
+void FruitMapper::copy_landmarks(std::vector<FruitLandmark>* out_landmarks) const {
+  if (!out_landmarks) {
+    return;
+  }
+  std::lock_guard<std::mutex> lk(landmarks_mutex_);
+  *out_landmarks = landmarks_;
+}
+
+void FruitMapper::copy_reportable_landmarks(
+    std::vector<FruitLandmark>* out_landmarks) const {
+  if (!out_landmarks) {
+    return;
+  }
+  std::lock_guard<std::mutex> lk(landmarks_mutex_);
+  out_landmarks->clear();
+  out_landmarks->reserve(landmarks_.size());
+  for (const FruitLandmark& landmark : landmarks_) {
+    if (landmark.observation_count < config_.min_reported_observations) {
+      continue;
+    }
+    out_landmarks->push_back(landmark);
+  }
+}
+
+const char* FruitMapper::label_name(FruitLabel label) {
+  switch (label) {
+    case FruitLabel::kApple:
+      return "apple";
+    case FruitLabel::kOrange:
+      return "orange";
+    case FruitLabel::kUnknown:
+    default:
+      return "unknown";
+  }
+}
+
+bool FruitMapper::ensure_initialized() const {
+  return initialized_ && model_id_ > 0;
+}
+
+float FruitMapper::score_threshold_for_label(FruitLabel label) const {
+  switch (label) {
+    case FruitLabel::kApple:
+      return config_.apple_score_threshold;
+    case FruitLabel::kOrange:
+      return config_.orange_score_threshold;
+    case FruitLabel::kUnknown:
+    default:
+      return 1.0f;
+  }
+}
+
+void FruitMapper::collect_candidate_detections(
+    const ml::RunLatestCameraFrameRequest& request,
+    std::vector<CandidateDetection>* out_candidates) const {
+  if (!out_candidates) {
+    return;
+  }
+  out_candidates->clear();
+  const int32_t detection_count = std::max<int32_t>(
+      0,
+      std::min<int32_t>(
+          request.detection_count,
+          static_cast<int32_t>(ml::kMaxDetections)));
+  for (int32_t i = 0; i < detection_count; ++i) {
+    const ml::Detection& detection = request.detections[i];
+    const FruitLabel label = fruit_label_from_class_id(detection.class_id);
+    if (label == FruitLabel::kUnknown) {
+      continue;
+    }
+    if (detection.score < score_threshold_for_label(label)) {
+      continue;
+    }
+    CandidateDetection candidate{};
+    candidate.label = label;
+    candidate.score = detection.score;
+    candidate.detection = detection;
+    out_candidates->push_back(candidate);
+  }
+  std::sort(
+      out_candidates->begin(),
+      out_candidates->end(),
+      [](const CandidateDetection& a, const CandidateDetection& b) {
+        return a.score > b.score;
+      });
+}
+
+void FruitMapper::log_detection_skip(
+    double frame_timestamp,
+    double lidar_timestamp) const {
+  if (frame_timestamp <= 0.0 || lidar_timestamp <= 0.0) {
+    return;
+  }
+  const double anchor_timestamp = std::max(frame_timestamp, lidar_timestamp);
+  if (last_timestamp_mismatch_log_timestamp_ > 0.0 &&
+      (anchor_timestamp - last_timestamp_mismatch_log_timestamp_) < 1.0) {
+    return;
+  }
+  std::ostringstream log;
+  log << "[fruit] skipping frame due to timestamp mismatch frame_t="
+      << frame_timestamp
+      << " lidar_t=" << lidar_timestamp
+      << " dt=" << std::fabs(frame_timestamp - lidar_timestamp);
+  wasm_log_line(log.str());
+  last_timestamp_mismatch_log_timestamp_ = anchor_timestamp;
+}
+
+void FruitMapper::process_lidar_frame(
+    const sensors::LidarCameraDataV2& lidar_data,
+    const sensors::PoseLog& pose) {
+  if (!ensure_initialized() ||
+      !pose_log_valid(pose) ||
+      lidar_data.timestamp <= 0.0 ||
+      lidar_data.points_size == 0 ||
+      lidar_data.pixel_coords_size == 0) {
+    return;
+  }
+  if (last_processed_lidar_timestamp_ > 0.0 &&
+      (lidar_data.timestamp - last_processed_lidar_timestamp_) <
+          config_.min_process_interval_sec) {
+    return;
+  }
+
+  ml::RunLatestCameraFrameRequest request{};
+  const int32_t status = ml::run_latest_camera_frame(model_id_, &request);
+  if (status == ml::kNoFrameAvailable) {
+    return;
+  }
+  if (status != ml::kSuccess) {
+    std::ostringstream log;
+    log << "[fruit] inference failed status=" << ml::status_name(status)
+        << " code=" << status;
+    wasm_log_line(log.str());
+    return;
+  }
+  if (request.frame_timestamp <= 0.0 ||
+      request.frame_timestamp == last_processed_frame_timestamp_) {
+    return;
+  }
+
+  last_processed_frame_timestamp_ = request.frame_timestamp;
+  last_processed_lidar_timestamp_ = lidar_data.timestamp;
+
+  const double frame_dt = std::fabs(request.frame_timestamp - lidar_data.timestamp);
+  if (frame_dt > config_.max_frame_lidar_dt_sec) {
+    log_detection_skip(request.frame_timestamp, lidar_data.timestamp);
+    return;
+  }
+
+  std::vector<CandidateDetection> candidates;
+  collect_candidate_detections(request, &candidates);
+  if (candidates.empty()) {
+    return;
+  }
+
+  for (const CandidateDetection& candidate : candidates) {
+    BoundingBoxPixels box{};
+    if (!detection_to_bounding_box_pixels(request, candidate.detection, &box)) {
+      continue;
+    }
+    LidarBoundingBoxQueryResult lidar_query{};
+    if (!query_lidar_bbox_coordinates(lidar_data, box, &lidar_query)) {
+      continue;
+    }
+
+    const core::Vector3d world_point =
+        body_point_to_world_point(lidar_query.body_point, pose);
+    {
+      std::ostringstream log;
+      log << detection_log_label(candidate.label)
+          << " score=" << candidate.score
+          << " world=(" << world_point.x << "," << world_point.y << ","
+          << world_point.z << ")"
+          << " bbox_points=" << lidar_query.matched_points
+          << " inliers=" << lidar_query.inlier_points;
+      wasm_log_line(log.str());
+    }
+    upsert_landmark(
+        candidate.label,
+        world_point,
+        candidate.score,
+        lidar_query.matched_points,
+        lidar_query.inlier_points,
+        request.frame_timestamp);
+  }
+}
+
+void FruitMapper::upsert_landmark(
+    FruitLabel label,
+    const core::Vector3d& world_point,
+    float score,
+    int32_t matched_points,
+    int32_t inlier_points,
+    double timestamp) {
+  const double merge_radius2 =
+      config_.landmark_merge_radius_m * config_.landmark_merge_radius_m;
+  std::lock_guard<std::mutex> lk(landmarks_mutex_);
+
+  FruitLandmark* best_landmark = nullptr;
+  double best_dist2 = merge_radius2;
+  for (FruitLandmark& landmark : landmarks_) {
+    if (landmark.label != label) {
+      continue;
+    }
+    const double dist2 = planar_distance_squared(landmark.world_point, world_point);
+    if (dist2 > best_dist2) {
+      continue;
+    }
+    best_dist2 = dist2;
+    best_landmark = &landmark;
+  }
+
+  if (!best_landmark) {
+    FruitLandmark landmark{};
+    landmark.id = next_landmark_id_++;
+    landmark.label = label;
+    landmark.world_point = world_point;
+    landmark.mean_score = score;
+    landmark.observation_count = 1;
+    landmark.last_bbox_match_count = matched_points;
+    landmark.last_inlier_count = inlier_points;
+    landmark.first_timestamp = timestamp;
+    landmark.last_timestamp = timestamp;
+    landmarks_.push_back(landmark);
+    landmark_revision_.fetch_add(1, std::memory_order_acq_rel);
+
+    std::ostringstream log;
+    log << "[fruit] new landmark id=" << landmark.id
+        << " label=" << label_name(label)
+        << " world=(" << world_point.x << "," << world_point.y << "," << world_point.z << ")"
+        << " score=" << score
+        << " bbox_points=" << matched_points
+        << " inliers=" << inlier_points;
+    wasm_log_line(log.str());
+    return;
+  }
+
+  const int32_t previous_count = best_landmark->observation_count;
+  const double next_count = static_cast<double>(previous_count + 1);
+  best_landmark->world_point = core::Vector3d{
+      ((best_landmark->world_point.x * previous_count) + world_point.x) / next_count,
+      ((best_landmark->world_point.y * previous_count) + world_point.y) / next_count,
+      ((best_landmark->world_point.z * previous_count) + world_point.z) / next_count};
+  best_landmark->mean_score =
+      ((best_landmark->mean_score * previous_count) + score) /
+      static_cast<float>(next_count);
+  best_landmark->observation_count = previous_count + 1;
+  best_landmark->last_bbox_match_count = matched_points;
+  best_landmark->last_inlier_count = inlier_points;
+  best_landmark->last_timestamp = timestamp;
+  landmark_revision_.fetch_add(1, std::memory_order_acq_rel);
+
+  if (previous_count + 1 == config_.min_reported_observations) {
+    std::ostringstream log;
+    log << "[fruit] landmark confirmed id=" << best_landmark->id
+        << " label=" << label_name(best_landmark->label)
+        << " world=(" << best_landmark->world_point.x << ","
+        << best_landmark->world_point.y << ","
+        << best_landmark->world_point.z << ")"
+        << " observations=" << best_landmark->observation_count
+        << " mean_score=" << best_landmark->mean_score;
+    wasm_log_line(log.str());
+  }
+}
+
+}  // namespace semantic
