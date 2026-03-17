@@ -170,7 +170,6 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     private let processingTargetFPS: Double = 20.0
     private let previewTargetFPS: Double = 12.0
     private let websocketPointCloudTargetFPS: Double = 4.0
-    private let inferenceTargetFPS: Double = 8.0
     private let rgbDownsampleFactor: Int = 2
     private let depthPixelSubsampleStride: Int = 2
     private let websocketPointCloudStride: Int = 16
@@ -210,7 +209,6 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     private var lastProcessedFrameTimestamp: TimeInterval = 0
     private var lastPreviewFrameTimestamp: TimeInterval = 0
     private var lastWebSocketPointCloudTimestamp: TimeInterval = 0
-    private var lastInferenceSubmissionTimestamp: TimeInterval = 0
     private var previewMode: AVPreviewMode = .none
     private var profileWindow = AVProfileWindow()
     private var fullResolutionARGBBytes: [UInt8] = []
@@ -275,7 +273,6 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         lastProcessedFrameTimestamp = 0
         lastPreviewFrameTimestamp = 0
         lastWebSocketPointCloudTimestamp = 0
-        lastInferenceSubmissionTimestamp = 0
         currentImageWidth = 0
         currentImageHeight = 0
         currentImageChannels = 0
@@ -988,20 +985,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let stateUpdateDuration = profileNow() - stateUpdateStartedAt
 
         let inferenceSubmitStartedAt = profileNow()
-        let shouldSubmitInference: Bool
-        if hasActiveModels, hasWebSocketClients, canonicalCameraFrame != nil {
-            if lastInferenceSubmissionTimestamp == 0 ||
-                frame.timestamp - lastInferenceSubmissionTimestamp >= (1.0 / inferenceTargetFPS) {
-                shouldSubmitInference = true
-                lastInferenceSubmissionTimestamp = frame.timestamp
-            } else {
-                shouldSubmitInference = false
-            }
-        } else {
-            shouldSubmitInference = false
-        }
-
-        if shouldSubmitInference, let canonicalCameraFrame {
+        if hasActiveModels, hasWebSocketClients, let canonicalCameraFrame {
             ModelRunner.shared.submitActiveModels(frame: canonicalCameraFrame) { frame, modelResults, _ in
                 WebSocketManager.shared.publishMlDetections(
                     frame: frame,
