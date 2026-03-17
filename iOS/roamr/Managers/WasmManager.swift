@@ -374,6 +374,11 @@ final class WasmManager: ObservableObject {
         DispatchQueue.main.async {
             self.isRunning = isRunning
             self.currentRunDisplayName = currentRunDisplayName
+            if isRunning {
+                AVManager.shared.startStreaming(fps: 15, quality: 0.5)
+            } else {
+                AVManager.shared.stopStreaming()
+            }
             WebSocketManager.shared.publishWasmControlState()
         }
     }

@@ -618,6 +618,9 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     // MARK: - Video Streaming
 
     func startStreaming(fps: Int = 15, quality: CGFloat = 0.5) {
+        guard !isStreaming || streamTargetFPS != fps || streamJpegQuality != quality else {
+            return
+        }
         streamTargetFPS = fps
         streamJpegQuality = quality
         lastStreamTime = 0
@@ -628,12 +631,17 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     func stopStreaming() {
+        guard isStreaming else { return }
         isStreaming = false
         streamFPS = 0
         print("Video streaming stopped")
     }
 
     func toggleStreaming() {
+        if WasmManager.shared.isRunning {
+            print("Video streaming is tied to the active WASM run")
+            return
+        }
         if isStreaming {
             stopStreaming()
         } else {
@@ -845,6 +853,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let needsPreviewPoint = shouldUpdatePreview && localPreviewMode == .point
         let hasWebSocketClients = WebSocketManager.shared.hasConnectedWebSocketClients()
         let hasActiveModels = ModelRunner.shared.hasActiveModels()
+        let isWasmRunning = WasmManager.shared.isRunning
         let profileContext = AVProfileContext(
             hasWebSocketClients: hasWebSocketClients,
             isStreaming: isStreaming,
@@ -869,9 +878,10 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let needsPointColors = includePointColorsForWasm
         let needsImagePayload = includeImageInWasmPayload
         let needsModelImage = hasActiveModels
-        let needsMonitoredStreamImage = isStreaming && hasWebSocketClients
+        let needsMonitoredStreamImage = isWasmRunning && isStreaming && hasWebSocketClients
         let needsUIImage = needsPreviewVideo
-        let needsCanonicalRGBFrame = needsImagePayload || needsModelImage || needsMonitoredStreamImage
+        let retainCanonicalFrameForWasm = isWasmRunning
+        let needsCanonicalRGBFrame = needsImagePayload || needsModelImage || needsMonitoredStreamImage || retainCanonicalFrameForWasm
         let needsRGBFrame = needsCanonicalRGBFrame || needsUIImage
 
         let imageResolution = frame.camera.imageResolution
@@ -983,7 +993,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         currentImageChannels = 3
 
         let imageBytes = needsImagePayload ? (rgbFrame?.portraitBytes ?? []) : []
-        latestCameraFrame = needsModelImage ? canonicalCameraFrame : nil
+        latestCameraFrame = retainCanonicalFrameForWasm || needsModelImage ? canonicalCameraFrame : nil
         currentData = LidarCameraData(
             timestamp: frame.timestamp,
             points: pointCloudData?.points ?? [],
@@ -1039,7 +1049,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             stateUpdateSeconds: stateUpdateDuration,
             inferenceSubmitSeconds: inferenceSubmitDuration,
             builtMonitoredImage: needsMonitoredStreamImage,
-            bypassedStreamImage: isStreaming && !hasWebSocketClients,
+            bypassedStreamImage: isWasmRunning && isStreaming && !hasWebSocketClients,
             context: profileContext
         )
     }
