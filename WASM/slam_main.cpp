@@ -676,7 +676,7 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
     constexpr int kTurnHoldMs = 150;
     constexpr int kPollSleepMs = 5;
     constexpr int kSegmentSettleMs = 500;
-   
+
     sensors::WheelOdometryData odom{};
     while (!read_scan_odom_sample(&odom)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(kPollSleepMs));

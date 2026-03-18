@@ -121,7 +121,9 @@ class IdentityDetectionAdapter(nn.Module):
         if raw.dim() == 3 and raw.shape[0] == 1:
             raw = raw[0]
         if raw.dim() != 2 or raw.shape[1] != 6:
-            raise RuntimeError("identity adapter requires output shape [N, 6] or [1, N, 6]")
+            raise RuntimeError(
+                "identity adapter requires output shape [N, 6] or [1, N, 6]"
+            )
 
         raw = raw.to(dtype=torch.float32)
         output = batched_rgb.new_zeros((self.max_detections, 6), dtype=torch.float32)
@@ -185,7 +187,9 @@ class SSDTorchvisionExportAdapter(nn.Module):
             iou = torch.where(union > 0, inter / union, torch.zeros_like(inter))
             same_label = labels[i + 1 :] == labels[i]
             should_suppress = keep_current & same_label & (iou > self.nms_threshold)
-            suppressed = torch.cat((suppressed[: i + 1], suppressed[i + 1 :] | should_suppress), dim=0)
+            suppressed = torch.cat(
+                (suppressed[: i + 1], suppressed[i + 1 :] | should_suppress), dim=0
+            )
 
         return selected
 
@@ -202,11 +206,15 @@ class SSDTorchvisionExportAdapter(nn.Module):
         head_outputs = self.detector.head(feature_list)
         anchors = self.detector.anchor_generator(images, feature_list)
 
-        boxes = self.detector.box_coder.decode_single(head_outputs["bbox_regression"][0], anchors[0])
+        boxes = self.detector.box_coder.decode_single(
+            head_outputs["bbox_regression"][0], anchors[0]
+        )
         boxes = box_ops.clip_boxes_to_image(boxes, images.image_sizes[0])
 
         scores = F.softmax(head_outputs["cls_logits"][0], dim=-1)[:, 1:]
-        scores = torch.where(scores >= self.score_threshold, scores, torch.zeros_like(scores))
+        scores = torch.where(
+            scores >= self.score_threshold, scores, torch.zeros_like(scores)
+        )
 
         flat_scores = scores.reshape(-1)
         top_scores, top_indices = torch.topk(
@@ -217,7 +225,9 @@ class SSDTorchvisionExportAdapter(nn.Module):
         )
 
         num_foreground_classes = scores.shape[1]
-        anchor_indices = torch.div(top_indices, num_foreground_classes, rounding_mode="floor")
+        anchor_indices = torch.div(
+            top_indices, num_foreground_classes, rounding_mode="floor"
+        )
         label_indices = torch.remainder(top_indices, num_foreground_classes) + 1
 
         top_boxes = boxes.index_select(0, anchor_indices)
@@ -231,7 +241,9 @@ class SSDTorchvisionExportAdapter(nn.Module):
             sorted=True,
         )
         final_boxes = top_boxes.index_select(0, final_order)
-        final_labels = label_indices.index_select(0, final_order).to(dtype=torch.float32)
+        final_labels = label_indices.index_select(0, final_order).to(
+            dtype=torch.float32
+        )
 
         valid = final_scores > 0
         final_scores = final_scores * valid.to(dtype=final_scores.dtype)
@@ -243,7 +255,9 @@ class SSDTorchvisionExportAdapter(nn.Module):
             dtype=final_boxes.dtype,
             device=final_boxes.device,
         )
-        final_boxes = (final_boxes / scale) * valid.unsqueeze(1).to(dtype=final_boxes.dtype)
+        final_boxes = (final_boxes / scale) * valid.unsqueeze(1).to(
+            dtype=final_boxes.dtype
+        )
 
         return torch.cat(
             (final_labels.unsqueeze(1), final_scores.unsqueeze(1), final_boxes),
@@ -263,7 +277,9 @@ def parse_args() -> argparse.Namespace:
         choices=sorted(SUPPORTED_TORCHVISION_MODELS.keys()),
         help="Built-in torchvision detection model constructor.",
     )
-    parser.add_argument("--checkpoint", help="Optional checkpoint to load into the model.")
+    parser.add_argument(
+        "--checkpoint", help="Optional checkpoint to load into the model."
+    )
     parser.add_argument(
         "--checkpoint-key",
         default="state_dict",
@@ -286,9 +302,20 @@ def parse_args() -> argparse.Namespace:
         default="none",
         help="Official torchvision backbone weights. Use 'default' for ImageNet-pretrained backbone weights.",
     )
-    parser.add_argument("--num-classes", type=int, help="Class count for torchvision model construction.")
-    parser.add_argument("--image-size", type=int, default=640, help="Square RGB input size.")
-    parser.add_argument("--max-detections", type=int, default=32, help="Rows in exported detection tensor.")
+    parser.add_argument(
+        "--num-classes",
+        type=int,
+        help="Class count for torchvision model construction.",
+    )
+    parser.add_argument(
+        "--image-size", type=int, default=640, help="Square RGB input size."
+    )
+    parser.add_argument(
+        "--max-detections",
+        type=int,
+        default=32,
+        help="Rows in exported detection tensor.",
+    )
     parser.add_argument(
         "--backend",
         choices=("xnnpack", "portable"),
@@ -318,8 +345,12 @@ def parse_args() -> argparse.Namespace:
         help="Export-friendly SSD adapter candidate count before greedy NMS.",
     )
     parser.add_argument("--method", default="forward")
-    parser.add_argument("--strict", action="store_true", help="Use strict torch.export mode.")
-    parser.add_argument("--verbose", action="store_true", help="Print ExecuTorch export verbosity.")
+    parser.add_argument(
+        "--strict", action="store_true", help="Use strict torch.export mode."
+    )
+    parser.add_argument(
+        "--verbose", action="store_true", help="Print ExecuTorch export verbosity."
+    )
     return parser.parse_args()
 
 
@@ -342,7 +373,9 @@ def build_model(args: argparse.Namespace) -> nn.Module:
             weights = SUPPORTED_TORCHVISION_WEIGHT_ENUMS[model_name].DEFAULT
         weights_backbone = None
         if args.torchvision_backbone_weights == "default":
-            weights_backbone = SUPPORTED_TORCHVISION_BACKBONE_WEIGHT_ENUMS[model_name].DEFAULT
+            weights_backbone = SUPPORTED_TORCHVISION_BACKBONE_WEIGHT_ENUMS[
+                model_name
+            ].DEFAULT
 
         if weights is not None and args.num_classes is not None:
             category_count = len(weights.meta.get("categories", []))
@@ -353,7 +386,10 @@ def build_model(args: argparse.Namespace) -> nn.Module:
                     "For custom class counts, use --torchvision-backbone-weights default with your checkpoint."
                 )
 
-        kwargs: dict[str, Any] = {"weights": weights, "weights_backbone": weights_backbone}
+        kwargs: dict[str, Any] = {
+            "weights": weights,
+            "weights_backbone": weights_backbone,
+        }
         if args.num_classes is not None:
             kwargs["num_classes"] = args.num_classes
         model = SUPPORTED_TORCHVISION_MODELS[model_name](**kwargs)
@@ -392,7 +428,9 @@ def load_checkpoint(model: nn.Module, args: argparse.Namespace) -> None:
     if missing:
         print(f"warning: missing checkpoint keys ({len(missing)}): {missing[:8]}")
     if unexpected:
-        print(f"warning: unexpected checkpoint keys ({len(unexpected)}): {unexpected[:8]}")
+        print(
+            f"warning: unexpected checkpoint keys ({len(unexpected)}): {unexpected[:8]}"
+        )
 
 
 def wrap_model(model: nn.Module, args: argparse.Namespace) -> nn.Module:
@@ -404,7 +442,9 @@ def wrap_model(model: nn.Module, args: argparse.Namespace) -> nn.Module:
             adapter = "torchvision-detection" if args.torchvision_model else "identity"
 
     if adapter == "torchvision-detection":
-        return TorchvisionDetectionAdapter(model, max_detections=args.max_detections).eval()
+        return TorchvisionDetectionAdapter(
+            model, max_detections=args.max_detections
+        ).eval()
     if adapter == "ssd-export-friendly":
         return SSDTorchvisionExportAdapter(
             model,
@@ -412,7 +452,9 @@ def wrap_model(model: nn.Module, args: argparse.Namespace) -> nn.Module:
             pre_nms_topk=args.pre_nms_topk,
         ).eval()
     if adapter == "identity":
-        return IdentityDetectionAdapter(model, max_detections=args.max_detections).eval()
+        return IdentityDetectionAdapter(
+            model, max_detections=args.max_detections
+        ).eval()
     raise ExportError(f"unsupported adapter {adapter}")
 
 
@@ -430,7 +472,9 @@ def ensure_flatc_available() -> None:
 def export_pte(model: nn.Module, args: argparse.Namespace, output_dir: Path) -> Path:
     ensure_flatc_available()
 
-    example_input = torch.rand(1, 3, args.image_size, args.image_size, dtype=torch.float32)
+    example_input = torch.rand(
+        1, 3, args.image_size, args.image_size, dtype=torch.float32
+    )
     edge_program = export_to_edge(
         model,
         (example_input,),
@@ -442,7 +486,11 @@ def export_pte(model: nn.Module, args: argparse.Namespace, output_dir: Path) -> 
         edge_program = edge_program.to_backend(XnnpackPartitioner())
 
     executorch_program = edge_program.to_executorch()
-    pte_path = Path(save_pte_program(executorch_program, args.model_name, output_dir=str(output_dir)))
+    pte_path = Path(
+        save_pte_program(
+            executorch_program, args.model_name, output_dir=str(output_dir)
+        )
+    )
     return pte_path
 
 

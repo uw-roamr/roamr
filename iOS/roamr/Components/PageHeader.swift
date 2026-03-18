@@ -13,7 +13,7 @@ struct PageHeader<TrailingContent: View>: View {
 	let statusColor: Color
 	var titleColor: Color = .primary
 	var statusTextColor: Color = .gray
-	var infoText: String? = nil
+	var infoText: String?
 	@ViewBuilder var trailingContent: () -> TrailingContent
 
 	@State private var showingInfo = false

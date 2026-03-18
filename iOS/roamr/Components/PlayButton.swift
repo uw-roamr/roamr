@@ -10,7 +10,7 @@ import SwiftUI
 struct PlayButton: View {
 	var color: Color = Color.AppColor.accent.color
 	var isActive: Bool = false
-	var iconName: String? = nil
+	var iconName: String?
 	var fontSize: CGFloat = 20
 	var size: CGFloat = 50
 

@@ -5,12 +5,12 @@
 ////  Created by Anders Tai on 2025-09-22.
 ////
 //
-//import SwiftUI
-//import RealityKit
-//import ARKit
-//import Foundation
+// import SwiftUI
+// import RealityKit
+// import ARKit
+// import Foundation
 //
-//struct UILiDARView: UIViewRepresentable {
+// struct UILiDARView: UIViewRepresentable {
 //	@EnvironmentObject var lidarManager: LiDARManager
 //
 //    func makeUIView(context: Context) -> ARView {
@@ -23,9 +23,9 @@
 //    }
 //
 //    func updateUIView(_ uiView: ARView, context: Context) {}
-//}
+// }
 //
-//struct LiDARView: View {
+// struct LiDARView: View {
 //	@Environment(\.safeAreaInsets) private var safeAreaInsets
 //	@EnvironmentObject var lidarManager: LiDARManager
 //	@State private var mapImage: UIImage?
@@ -133,4 +133,4 @@
 //		lidarManager.savedPointsSets.append(projected)
 //		print(String(format: "Saved pose & %d points (#%d)", projected.count, lidarManager.savedPoses.count))
 //	}
-//}
+// }

@@ -5,12 +5,12 @@
 ////  Created by Anders Tai on 2025-09-22.
 ////
 //
-//import Foundation
-//import ARKit
-//import Combine
-//import RealityKit
+// import Foundation
+// import ARKit
+// import Combine
+// import RealityKit
 //
-//final class LiDARManager: NSObject, ObservableObject, ARSessionDelegate {
+// final class LiDARManager: NSObject, ObservableObject, ARSessionDelegate {
 //	@Published var isActive = false
 //	@Published var showDataSheet = false
 //	@Published var pointsLog = [Int]()
@@ -92,4 +92,4 @@
 //			pointsLog.removeFirst()
 //		}
 //	}
-//}
+// }

@@ -32,7 +32,7 @@ struct ModelDetection {
     var yMin: Float
     var xMax: Float
     var yMax: Float
-    var labelName: String? = nil
+    var labelName: String?
 }
 
 struct ModelFrameDetections {
@@ -1164,7 +1164,7 @@ private final class ExecuTorchObjectDetectionBackend: ObjectDetectionBackend {
             return [
                 max(values[0], 1e-6),
                 max(values[1], 1e-6),
-                max(values[2], 1e-6),
+                max(values[2], 1e-6)
             ]
         }
         return [1, 1, 1]
