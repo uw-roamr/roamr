@@ -7,6 +7,9 @@ iOS/roamr.xcodeproj/project.xcworkspace/xcshareddata/WorkspaceSettings.xcsetting
 embedded/ble-test/build/
 .vscode/
 
+hw/**/*.lck
+hw/**/*backups*
+hw/**/*auto*
 # WASM Hub
 wasm-hub/node_modules/
 wasm-hub/dist/
