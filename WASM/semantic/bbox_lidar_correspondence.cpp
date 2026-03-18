@@ -10,6 +10,8 @@
 namespace semantic {
 namespace {
 
+constexpr size_t kMaxInlierBodyPoints = 32;
+
 struct MatchedPoint {
   core::Vector3d body_point{};
   int32_t pixel_x = 0;
@@ -162,12 +164,18 @@ bool query_lidar_bbox_coordinates(
   float best_inlier_center_dist2 = std::numeric_limits<float>::infinity();
   int32_t best_pixel_x = matches.front().pixel_x;
   int32_t best_pixel_y = matches.front().pixel_y;
+  out_result->inlier_body_points.clear();
+  out_result->inlier_body_points.reserve(
+      std::min(matches.size(), kMaxInlierBodyPoints));
   for (const MatchedPoint& match : matches) {
     if (std::fabs(match.range_m - median_range_m) > inlier_range_threshold_m) {
       continue;
     }
     inlier_sum += match.body_point;
     ++inlier_count;
+    if (out_result->inlier_body_points.size() < kMaxInlierBodyPoints) {
+      out_result->inlier_body_points.push_back(match.body_point);
+    }
     if (match.center_dist2 < best_inlier_center_dist2) {
       best_inlier_center_dist2 = match.center_dist2;
       best_pixel_x = match.pixel_x;

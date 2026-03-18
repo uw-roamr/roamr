@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 #include "core/pose/se3.h"
 #include "ml/model.h"
@@ -20,6 +21,7 @@ struct BoundingBoxPixels {
 
 struct LidarBoundingBoxQueryResult {
   core::Vector3d body_point{};
+  std::vector<core::Vector3d> inlier_body_points;
   int32_t pixel_x = 0;
   int32_t pixel_y = 0;
   int32_t matched_points = 0;
