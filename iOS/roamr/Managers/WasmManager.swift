@@ -13,41 +13,15 @@ typealias CFunction = @convention(c) (wasm_exec_env_t?, UnsafeMutableRawPointer?
 private let wasmTextLogMaxBytes = 255
 private let wasmTextLogPayloadSize = MemoryLayout<UInt32>.size + wasmTextLogMaxBytes + 1
 
-struct WasmSensorConfig: Equatable {
-    var imuEnabled: Bool
-    var wheelOdometryEnabled: Bool
-    var lidarPointsEnabled: Bool
-    var pointColorsEnabled: Bool
-    var cameraImageEnabled: Bool
-
-    static let `default` = WasmSensorConfig(
-        imuEnabled: true,
-        wheelOdometryEnabled: true,
-        lidarPointsEnabled: true,
-        pointColorsEnabled: false,
-        cameraImageEnabled: false
-    )
-}
-
 final class WasmManager: ObservableObject {
     static let shared = WasmManager()
-    private static let maxWasmThreads: UInt32 = 8
+    private static let maxWasmThreads: UInt32 = 12
     private static let maxLogLines = 200
-    private static let sensorImuEnabledDefaultsKey = "com.roamr.wasm.sensor.imuEnabled"
-    private static let sensorWheelOdometryEnabledDefaultsKey = "com.roamr.wasm.sensor.wheelOdometryEnabled"
-    private static let sensorLidarPointsEnabledDefaultsKey = "com.roamr.wasm.sensor.lidarPointsEnabled"
-    private static let sensorPointColorsEnabledDefaultsKey = "com.roamr.wasm.sensor.pointColorsEnabled"
-    private static let sensorCameraImageEnabledDefaultsKey = "com.roamr.wasm.sensor.cameraImageEnabled"
     private static let recordingEnabledDefaultsKey = "com.roamr.wasm.recordingEnabled"
     private static let recordingPathDefaultsKey = "com.roamr.wasm.recordingPath"
     private static let recordingFolderBookmarkDefaultsKey = "com.roamr.wasm.recordingFolderBookmark"
     private static let recordingGuestDirectory = "/data"
     private static let defaultRecordingPath = "WasmRecordings"
-    private static let sensorImuEnabledEnvKey = "ROAMR_SENSOR_ENABLE_IMU"
-    private static let sensorWheelOdometryEnabledEnvKey = "ROAMR_SENSOR_ENABLE_WHEEL_ODOMETRY"
-    private static let sensorLidarPointsEnabledEnvKey = "ROAMR_SENSOR_ENABLE_LIDAR_POINTS"
-    private static let sensorPointColorsEnabledEnvKey = "ROAMR_SENSOR_ENABLE_POINT_COLORS"
-    private static let sensorCameraImageEnabledEnvKey = "ROAMR_SENSOR_ENABLE_CAMERA_IMAGE"
     private static let recordingEnabledEnvKey = "ROAMR_RECORDING_ENABLED"
     private static let recordingDirectoryEnvKey = "ROAMR_RECORDING_DIR"
 
@@ -56,6 +30,7 @@ final class WasmManager: ObservableObject {
     private var globalModuleNamePtr: UnsafeMutablePointer<CChar>?
 
     private var currentModuleInstance: OpaquePointer?
+    private var currentRuntimeBundleURL: URL?
     private var shouldStop = false
     private var activeRecordingSecurityScopeURL: URL?
     private let lock = NSLock()
@@ -65,19 +40,11 @@ final class WasmManager: ObservableObject {
     @Published var latestMapJPEGData: Data?
     @Published var latestMapTimestamp: Double = 0
     @Published var latestMapFrameCount: Int = 0
-    @Published private(set) var sensorConfig: WasmSensorConfig
     @Published private(set) var recordingEnabled: Bool
     @Published private(set) var recordingPath: String
     @Published private(set) var selectedRecordingFolderPath: String?
 
     private init() {
-        self.sensorConfig = WasmSensorConfig(
-            imuEnabled: UserDefaults.standard.object(forKey: Self.sensorImuEnabledDefaultsKey) as? Bool ?? WasmSensorConfig.default.imuEnabled,
-            wheelOdometryEnabled: UserDefaults.standard.object(forKey: Self.sensorWheelOdometryEnabledDefaultsKey) as? Bool ?? WasmSensorConfig.default.wheelOdometryEnabled,
-            lidarPointsEnabled: UserDefaults.standard.object(forKey: Self.sensorLidarPointsEnabledDefaultsKey) as? Bool ?? WasmSensorConfig.default.lidarPointsEnabled,
-            pointColorsEnabled: UserDefaults.standard.object(forKey: Self.sensorPointColorsEnabledDefaultsKey) as? Bool ?? WasmSensorConfig.default.pointColorsEnabled,
-            cameraImageEnabled: UserDefaults.standard.object(forKey: Self.sensorCameraImageEnabledDefaultsKey) as? Bool ?? WasmSensorConfig.default.cameraImageEnabled
-        )
         self.recordingEnabled =
             UserDefaults.standard.object(forKey: Self.recordingEnabledDefaultsKey) as? Bool ?? false
         let storedRecordingPath =
@@ -86,42 +53,10 @@ final class WasmManager: ObservableObject {
         self.selectedRecordingFolderPath = Self.resolveStoredRecordingFolderURL()?.path
     }
 
-    func effectiveSensorConfig() -> WasmSensorConfig {
-        var config = sensorConfig
-        config.pointColorsEnabled = false
-        config.cameraImageEnabled = false
-        // The current slam_main runtime still relies on these streams.
-        config.imuEnabled = true
-        config.wheelOdometryEnabled = true
-        config.lidarPointsEnabled = true
-        return config
-    }
-
-    func setSensorConfig(_ updatedConfig: WasmSensorConfig) {
-        UserDefaults.standard.set(updatedConfig.imuEnabled, forKey: Self.sensorImuEnabledDefaultsKey)
-        UserDefaults.standard.set(updatedConfig.wheelOdometryEnabled, forKey: Self.sensorWheelOdometryEnabledDefaultsKey)
-        UserDefaults.standard.set(updatedConfig.lidarPointsEnabled, forKey: Self.sensorLidarPointsEnabledDefaultsKey)
-        UserDefaults.standard.set(updatedConfig.pointColorsEnabled, forKey: Self.sensorPointColorsEnabledDefaultsKey)
-        UserDefaults.standard.set(updatedConfig.cameraImageEnabled, forKey: Self.sensorCameraImageEnabledDefaultsKey)
-        DispatchQueue.main.async {
-            self.sensorConfig = updatedConfig
-        }
-    }
-
     func startConfiguredHostSensors() {
-        let config = effectiveSensorConfig()
-        appendLogLine(
-            "[host][sensors] imu=\(config.imuEnabled ? 1 : 0) wheel=\(config.wheelOdometryEnabled ? 1 : 0) points=\(config.lidarPointsEnabled ? 1 : 0) point_colors=\(config.pointColorsEnabled ? 1 : 0) rgb=\(config.cameraImageEnabled ? 1 : 0)"
-        )
-        if config.wheelOdometryEnabled {
-            BluetoothManager.shared.prepareWheelOdometryForNewWasmRun()
-        }
-        if config.imuEnabled {
-            IMUManager.shared.start()
-        }
-        if config.lidarPointsEnabled || config.cameraImageEnabled {
-            AVManager.shared.start()
-        }
+        BluetoothManager.shared.prepareWheelOdometryForNewWasmRun()
+        IMUManager.shared.start()
+        AVManager.shared.start()
     }
 
     func stopConfiguredHostSensors() {
@@ -229,6 +164,10 @@ final class WasmManager: ObservableObject {
             NativeFunction(name: "read_wheel_odometry", signature: "(*)", impl: read_wheel_odometry_impl),
             NativeFunction(name: "init_camera", signature: "(*)", impl: init_camera_impl),
             NativeFunction(name: "read_lidar_camera", signature: "(*)", impl: read_lidar_camera_impl),
+            NativeFunction(name: "read_lidar_camera_v2", signature: "(*)", impl: read_lidar_camera_v2_impl),
+            NativeFunction(name: "ml_open_model", signature: "(*)", impl: ml_open_model_impl),
+            NativeFunction(name: "ml_run_latest_camera_frame", signature: "(*)", impl: ml_run_latest_camera_frame_impl),
+            NativeFunction(name: "ml_close_model", signature: "(*)", impl: ml_close_model_impl),
             NativeFunction(name: "wasm_log_text", signature: "(*)", impl: wasm_log_text_impl),
             NativeFunction(name: "rerun_log_lidar_frame", signature: "(*)", impl: rerun_log_lidar_frame_impl),
             NativeFunction(name: "rerun_log_map_frame", signature: "(*)", impl: rerun_log_map_frame_impl),
@@ -307,9 +246,12 @@ final class WasmManager: ObservableObject {
 
         lock.lock()
         shouldStop = false
+        currentRuntimeBundleURL = fileURL.deletingLastPathComponent()
         lock.unlock()
+        ModelRunner.shared.beginRun(bundleBaseURL: fileURL.deletingLastPathComponent())
         clearLogs()
         clearMapPreview()
+        clearMlDetections()
         appendLogLine("Running \(fileURL.lastPathComponent)")
         updateRunningState(true, currentRunDisplayName: fileURL.lastPathComponent)
 
@@ -317,6 +259,16 @@ final class WasmManager: ObservableObject {
             let wasmBytes = try Data(contentsOf: fileURL)
 
             wasmBytes.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
+                defer {
+                    releaseRecordingSecurityScope()
+                    ModelRunner.shared.endRun()
+                    WebSocketManager.shared.publishMlDetectionsReset()
+                    lock.lock()
+                    currentRuntimeBundleURL = nil
+                    lock.unlock()
+                    updateRunningState(false, currentRunDisplayName: nil)
+                }
+
                 guard let baseAddress = buffer.baseAddress else { return }
                 let wasmBuffer = UnsafeMutablePointer(mutating: baseAddress.assumingMemoryBound(to: UInt8.self))
                 let wasmBufferSize = UInt32(buffer.count)
@@ -327,7 +279,6 @@ final class WasmManager: ObservableObject {
                 guard let wasmModule = wasm_runtime_load(wasmBuffer, wasmBufferSize, &errorBuf, UInt32(errorBuf.count)) else {
                     let message = "Error loading WASM module: \(String(cString: errorBuf))"
                     appendLogLine(message)
-                    updateRunningState(false, currentRunDisplayName: nil)
                     return
                 }
 
@@ -345,8 +296,6 @@ final class WasmManager: ObservableObject {
                 ) else {
                     let message = "Error instantiating WASM module: \(String(cString: errorBuf))"
                     appendLogLine(message)
-                    updateRunningState(false, currentRunDisplayName: nil)
-                    releaseRecordingSecurityScope()
                     wasm_runtime_unload(wasmModule)
                     return
                 }
@@ -360,8 +309,6 @@ final class WasmManager: ObservableObject {
                 guard let execEnv = wasm_runtime_create_exec_env(moduleInstance, stackSize) else {
                     let message = "Error creating execution environment"
                     appendLogLine(message)
-                    updateRunningState(false, currentRunDisplayName: nil)
-                    releaseRecordingSecurityScope()
                     lock.lock()
                     currentModuleInstance = nil
                     lock.unlock()
@@ -394,22 +341,44 @@ final class WasmManager: ObservableObject {
                 wasm_runtime_destroy_exec_env(execEnv)
                 wasm_runtime_deinstantiate(moduleInstance)
                 wasm_runtime_unload(wasmModule)
-                releaseRecordingSecurityScope()
 
                 appendLogLine("WASM execution finished.")
-                updateRunningState(false, currentRunDisplayName: nil)
             }
         } catch {
             releaseRecordingSecurityScope()
+            ModelRunner.shared.endRun()
+            WebSocketManager.shared.publishMlDetectionsReset()
+            lock.lock()
+            currentRuntimeBundleURL = nil
+            lock.unlock()
             appendLogLine("Error reading WASM file: \(error.localizedDescription)")
             updateRunningState(false, currentRunDisplayName: nil)
         }
+    }
+
+    func runtimeAssetURL(for path: String) -> URL? {
+        let trimmedPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPath.isEmpty else { return nil }
+
+        if trimmedPath.hasPrefix("/") {
+            return URL(fileURLWithPath: trimmedPath, isDirectory: false)
+        }
+
+        lock.lock()
+        let bundleURL = currentRuntimeBundleURL
+        lock.unlock()
+        return bundleURL?.appendingPathComponent(trimmedPath, isDirectory: false)
     }
 
     private func updateRunningState(_ isRunning: Bool, currentRunDisplayName: String?) {
         DispatchQueue.main.async {
             self.isRunning = isRunning
             self.currentRunDisplayName = currentRunDisplayName
+            if isRunning {
+                AVManager.shared.startStreaming(fps: 15, quality: 0.5)
+            } else {
+                AVManager.shared.stopStreaming()
+            }
             WebSocketManager.shared.publishWasmControlState()
         }
     }
@@ -428,6 +397,10 @@ final class WasmManager: ObservableObject {
             self.latestMapTimestamp = 0
             self.latestMapFrameCount = 0
         }
+    }
+
+    func clearMlDetections() {
+        WebSocketManager.shared.publishMlDetectionsReset()
     }
 
     func appendLogLine(_ line: String) {
@@ -458,13 +431,7 @@ final class WasmManager: ObservableObject {
     }
 
     private func prepareWASIRuntimeOptions() -> WASIRuntimeOptions {
-        let sensorConfig = effectiveSensorConfig()
         var env = [
-            "\(Self.sensorImuEnabledEnvKey)=\(sensorConfig.imuEnabled ? 1 : 0)",
-            "\(Self.sensorWheelOdometryEnabledEnvKey)=\(sensorConfig.wheelOdometryEnabled ? 1 : 0)",
-            "\(Self.sensorLidarPointsEnabledEnvKey)=\(sensorConfig.lidarPointsEnabled ? 1 : 0)",
-            "\(Self.sensorPointColorsEnabledEnvKey)=\(sensorConfig.pointColorsEnabled ? 1 : 0)",
-            "\(Self.sensorCameraImageEnabledEnvKey)=\(sensorConfig.cameraImageEnabled ? 1 : 0)",
             "\(Self.recordingEnabledEnvKey)=0",
             "\(Self.recordingDirectoryEnvKey)=\(Self.recordingGuestDirectory)"
         ]
@@ -479,7 +446,7 @@ final class WasmManager: ObservableObject {
 
         do {
             let directoryURL = try ensureRecordingsDirectory()
-            env[5] = "\(Self.recordingEnabledEnvKey)=1"
+            env[0] = "\(Self.recordingEnabledEnvKey)=1"
             return WASIRuntimeOptions(
                 env: env,
                 preopenedHostDirectories: [directoryURL.path],

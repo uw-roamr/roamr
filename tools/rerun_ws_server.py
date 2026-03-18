@@ -78,10 +78,14 @@ class PipelinePerfWindow:
             return
 
         decode_avg_ms = (
-            (self.decode_total_s / self.decode_count) * 1000.0 if self.decode_count > 0 else 0.0
+            (self.decode_total_s / self.decode_count) * 1000.0
+            if self.decode_count > 0
+            else 0.0
         )
         route_avg_ms = (
-            (self.route_total_s / self.route_count) * 1000.0 if self.route_count > 0 else 0.0
+            (self.route_total_s / self.route_count) * 1000.0
+            if self.route_count > 0
+            else 0.0
         )
         ingress_rate = self.decode_count / max(elapsed_s, 1e-6)
         route_rate = self.route_count / max(elapsed_s, 1e-6)
@@ -170,7 +174,9 @@ def decode_points_binary_message(message: bytes) -> Optional[dict]:
                 offset=colors_offset,
             ).reshape((-1, 3))
     else:
-        flat_points = struct.unpack_from(f"<{points_float_count}f", message, points_offset)
+        flat_points = struct.unpack_from(
+            f"<{points_float_count}f", message, points_offset
+        )
         points = points_from_flat(flat_points)
         colors = None
         if has_colors:
@@ -336,7 +342,10 @@ class RerunBridge:
                 payload = self._next_payload()
                 if payload is None:
                     self._work_event.clear()
-                    if self._control_queue.empty() and self._latest_points_payload is None:
+                    if (
+                        self._control_queue.empty()
+                        and self._latest_points_payload is None
+                    ):
                         break
                     self._work_event.set()
                     continue
@@ -532,7 +541,9 @@ class RerunBridge:
             self.history.clear()
             self.history.append(msg)
             set_rerun_time(msg.timestamp)
-            final_colors = msg.colors if msg.colors is not None else colors_from_z(msg.points)
+            final_colors = (
+                msg.colors if msg.colors is not None else colors_from_z(msg.points)
+            )
             rr.log(
                 points_path,
                 rr.Points3D(msg.points, colors=final_colors),
@@ -544,7 +555,9 @@ class RerunBridge:
         if np is not None and all(
             isinstance(item.points, np.ndarray) for item in self.history
         ):
-            merged_points = np.concatenate([item.points for item in self.history], axis=0)
+            merged_points = np.concatenate(
+                [item.points for item in self.history], axis=0
+            )
             if any(item.colors is not None for item in self.history):
                 color_parts = []
                 for item in self.history:

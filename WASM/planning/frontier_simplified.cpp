@@ -677,7 +677,7 @@ FrontierPlanResult plan_to_largest_frontier(
       << " selected_cluster_size=" << result.selected_cluster_size
       << " path_length_m=" << result.selected_path_length_m
       << " selected_seed=(" << result.selected_seed.x << "," << result.selected_seed.y << ")";
-  wasm_log_line(log.str());
+  // wasm_log_line(log.str());
 
   return result;
 }

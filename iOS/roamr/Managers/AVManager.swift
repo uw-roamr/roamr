@@ -8,6 +8,7 @@
 import Foundation
 import ARKit
 import AVFoundation
+import Accelerate
 import Combine
 import UIKit
 
@@ -32,6 +33,9 @@ struct LidarCameraData {
 
     var points_frame_id: FrameId
     var image_frame_id: FrameId
+
+    var pixel_coords: [UInt16]
+    var pixel_coords_size: Int32
 }
 
 struct PointCloudData {
@@ -50,7 +54,89 @@ struct DepthPixelData {
 struct PointCloudExportData {
     var points: [Float32]  // FLU frame packed as xyzxyz...
     var colors: [UInt8]    // RGB per point
+    var pixelCoords: [UInt16]  // image-space xyxy...
     var pointCount: Int
+}
+
+struct CameraImageFrame {
+    var timestamp: Double
+    var width: Int
+    var height: Int
+    var channels: Int
+    var rgbBytes: [UInt8]
+}
+
+private struct RollingTimingStat {
+    private(set) var totalSeconds: Double = 0
+    private(set) var maxSeconds: Double = 0
+    private(set) var sampleCount: Int = 0
+
+    mutating func record(_ seconds: Double) {
+        guard seconds.isFinite, seconds >= 0 else { return }
+        totalSeconds += seconds
+        maxSeconds = max(maxSeconds, seconds)
+        sampleCount += 1
+    }
+
+    var averageMilliseconds: Double {
+        guard sampleCount > 0 else { return 0 }
+        return (totalSeconds / Double(sampleCount)) * 1000.0
+    }
+
+    var maxMilliseconds: Double {
+        maxSeconds * 1000.0
+    }
+}
+
+private struct AVProfileContext {
+    let hasWebSocketClients: Bool
+    let isStreaming: Bool
+    let previewMode: AVPreviewMode
+    let hasActiveModels: Bool
+}
+
+private struct AVProfileWindow {
+    var windowStartTime: CFTimeInterval = 0
+    var receivedFrames: Int = 0
+    var processedFrames: Int = 0
+    var overwrittenFrames: Int = 0
+    var throttledFrames: Int = 0
+    var monitoredImageFrames: Int = 0
+    var streamBypassedFrames: Int = 0
+
+    var totalProcess = RollingTimingStat()
+    var rgbConversion = RollingTimingStat()
+    var rgbFormatDetect = RollingTimingStat()
+    var rgbPixelBufferLock = RollingTimingStat()
+    var rgbYCbCrConvert = RollingTimingStat()
+    var rgbScaleRotate = RollingTimingStat()
+    var rgbPack = RollingTimingStat()
+    var rgbUIImage = RollingTimingStat()
+    var wasmPointCloud = RollingTimingStat()
+    var webSocketPointCloud = RollingTimingStat()
+    var preview = RollingTimingStat()
+    var jpegStream = RollingTimingStat()
+    var stateUpdate = RollingTimingStat()
+    var inferenceSubmit = RollingTimingStat()
+    var rgbFallbackFrames: Int = 0
+
+    mutating func reset(startTime: CFTimeInterval) {
+        self = AVProfileWindow(windowStartTime: startTime)
+    }
+}
+
+private struct RGBProfilingSample {
+    var formatDetectSeconds: Double = 0
+    var pixelBufferLockSeconds: Double = 0
+    var yCbCrConvertSeconds: Double = 0
+    var scaleRotateSeconds: Double = 0
+    var packSeconds: Double = 0
+    var uiImageSeconds: Double = 0
+    var usedFallback = false
+}
+
+private struct StreamFrameRequest {
+    let frame: CameraImageFrame
 }
 
 enum AVPreviewMode {
@@ -78,6 +164,12 @@ enum LidarCameraConstants {
 final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     static let shared = AVManager()
 
+    private struct StreamWorkerState {
+        var generation: UInt64 = 0
+        var pendingRequest: StreamFrameRequest?
+        var isRunning = false
+    }
+
     // Keep compute cost bounded for WASM/Rerun telemetry.
     private let processingTargetFPS: Double = 20.0
     private let previewTargetFPS: Double = 12.0
@@ -86,6 +178,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     private let depthPixelSubsampleStride: Int = 2
     private let websocketPointCloudStride: Int = 16
     private let websocketPointCloudMaxPoints: Int = 6000
+    private let enableAVProfiling = true
+    private let profilingSummaryInterval: TimeInterval = 3.0
     private let includePointColorsForWasm: Bool = false
     private let includeImageInWasmPayload: Bool = false
 
@@ -107,7 +201,11 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     private let session = ARSession()
     private let sessionQueue = DispatchQueue(label: "com.roamr.arkit.session", qos: .userInitiated)
     private let processingQueue = DispatchQueue(label: "com.roamr.arkit.processing", qos: .userInitiated)
+    private let streamStateQueue = DispatchQueue(label: "com.roamr.arkit.stream.state", qos: .userInitiated)
+    private let streamExecutionQueue = DispatchQueue(label: "com.roamr.arkit.stream.execution", qos: .userInitiated)
     private let ciContext = CIContext(options: nil)
+    private let profileLock = NSLock()
+    private let renderColorSpace = CGColorSpaceCreateDeviceRGB()
 
     private var currentFrame: ARFrame?
     private var hasNewFrame = false
@@ -116,6 +214,17 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     private var lastPreviewFrameTimestamp: TimeInterval = 0
     private var lastWebSocketPointCloudTimestamp: TimeInterval = 0
     private var previewMode: AVPreviewMode = .none
+    private var profileWindow = AVProfileWindow()
+    private var fullResolutionARGBBytes: [UInt8] = []
+    private var scaledARGBBytes: [UInt8] = []
+    private var renderARGBBytes: [UInt8] = []
+    private var packedRGBBytes: [UInt8] = []
+    private var fallbackRGBABytes: [UInt8] = []
+    private var streamWorkerState = StreamWorkerState()
+    private var fullRangeYpCbCrToARGB = vImage_YpCbCrToARGB()
+    private var videoRangeYpCbCrToARGB = vImage_YpCbCrToARGB()
+    private var hasFullRangeYpCbCrToARGB = false
+    private var hasVideoRangeYpCbCrToARGB = false
 
     var isDataDirty = false
 
@@ -134,8 +243,11 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         image: [UInt8](),
         image_size: 0,
         points_frame_id: CoordinateFrameId.FLU.rawValue,
-        image_frame_id: CoordinateFrameId.RDF.rawValue
+        image_frame_id: CoordinateFrameId.RDF.rawValue,
+        pixel_coords: [UInt16](),
+        pixel_coords_size: 0
     )
+    private var latestCameraFrame: CameraImageFrame?
 
     private struct RGBFrameData {
         let rawBytes: [UInt8]
@@ -179,9 +291,162 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             image: [],
             image_size: 0,
             points_frame_id: CoordinateFrameId.FLU.rawValue,
-            image_frame_id: CoordinateFrameId.RDF.rawValue
+            image_frame_id: CoordinateFrameId.RDF.rawValue,
+            pixel_coords: [],
+            pixel_coords_size: 0
         )
+        latestCameraFrame = nil
         isDataDirty = false
+    }
+
+    private func resetStreamWorkerState() {
+        streamStateQueue.sync {
+            streamWorkerState.generation &+= 1
+            streamWorkerState.pendingRequest = nil
+            streamWorkerState.isRunning = false
+        }
+    }
+
+    private func profileNow() -> CFTimeInterval {
+        CACurrentMediaTime()
+    }
+
+    private func recordReceivedFrame(overwrotePending: Bool) {
+        guard enableAVProfiling else { return }
+        let now = profileNow()
+        profileLock.lock()
+        if profileWindow.windowStartTime == 0 {
+            profileWindow.windowStartTime = now
+        }
+        profileWindow.receivedFrames += 1
+        if overwrotePending {
+            profileWindow.overwrittenFrames += 1
+        }
+        profileLock.unlock()
+    }
+
+    private func recordThrottledFrame(context: AVProfileContext) {
+        guard enableAVProfiling else { return }
+        let now = profileNow()
+        profileLock.lock()
+        if profileWindow.windowStartTime == 0 {
+            profileWindow.windowStartTime = now
+        }
+        profileWindow.throttledFrames += 1
+        let summary = makeProfileSummaryIfNeededLocked(now: now, context: context)
+        profileLock.unlock()
+        if let summary {
+            print(summary)
+        }
+    }
+
+    private func recordProcessedFrame(
+        totalSeconds: Double,
+        rgbConversionSeconds: Double,
+        rgbProfile: RGBProfilingSample,
+        wasmPointCloudSeconds: Double,
+        webSocketPointCloudSeconds: Double,
+        previewSeconds: Double,
+        jpegStreamSeconds: Double,
+        stateUpdateSeconds: Double,
+        inferenceSubmitSeconds: Double,
+        builtMonitoredImage: Bool,
+        bypassedStreamImage: Bool,
+        context: AVProfileContext
+    ) {
+        guard enableAVProfiling else { return }
+        let now = profileNow()
+        profileLock.lock()
+        if profileWindow.windowStartTime == 0 {
+            profileWindow.windowStartTime = now
+        }
+        profileWindow.processedFrames += 1
+        profileWindow.totalProcess.record(totalSeconds)
+        profileWindow.rgbConversion.record(rgbConversionSeconds)
+        profileWindow.rgbFormatDetect.record(rgbProfile.formatDetectSeconds)
+        profileWindow.rgbPixelBufferLock.record(rgbProfile.pixelBufferLockSeconds)
+        profileWindow.rgbYCbCrConvert.record(rgbProfile.yCbCrConvertSeconds)
+        profileWindow.rgbScaleRotate.record(rgbProfile.scaleRotateSeconds)
+        profileWindow.rgbPack.record(rgbProfile.packSeconds)
+        profileWindow.rgbUIImage.record(rgbProfile.uiImageSeconds)
+        profileWindow.wasmPointCloud.record(wasmPointCloudSeconds)
+        profileWindow.webSocketPointCloud.record(webSocketPointCloudSeconds)
+        profileWindow.preview.record(previewSeconds)
+        profileWindow.jpegStream.record(jpegStreamSeconds)
+        profileWindow.stateUpdate.record(stateUpdateSeconds)
+        profileWindow.inferenceSubmit.record(inferenceSubmitSeconds)
+        if rgbProfile.usedFallback {
+            profileWindow.rgbFallbackFrames += 1
+        }
+        if builtMonitoredImage {
+            profileWindow.monitoredImageFrames += 1
+        }
+        if bypassedStreamImage {
+            profileWindow.streamBypassedFrames += 1
+        }
+        let summary = makeProfileSummaryIfNeededLocked(now: now, context: context)
+        profileLock.unlock()
+        if let summary {
+            print(summary)
+        }
+    }
+
+    private func makeProfileSummaryIfNeededLocked(
+        now: CFTimeInterval,
+        context: AVProfileContext
+    ) -> String? {
+        guard profileWindow.windowStartTime > 0 else { return nil }
+        let elapsed = now - profileWindow.windowStartTime
+        guard elapsed >= profilingSummaryInterval else { return nil }
+
+        let fps = elapsed > 0 ? Double(profileWindow.processedFrames) / elapsed : 0
+        let summary = String(
+            format: "[av][profile] window=%.1fs recv=%d proc=%d overwrite=%d throttle=%d monitored_img=%d bypassed_stream=%d rgb_fb=%d fps=%.1f total=%.1f/%.1fms rgb=%.1f/%.1fms rgb_fmt=%.3f rgb_lock=%.3f rgb_conv=%.1f rgb_sr=%.1f rgb_pack=%.1f rgb_ui=%.1f wasm_pc=%.1f/%.1fms ws_pc=%.1f/%.1fms preview=%.1f/%.1fms jpeg=%.1f/%.1fms state=%.1f/%.1fms submit=%.3f/%.3fms clients=%d stream=%d preview=%@ models=%d",
+            elapsed,
+            profileWindow.receivedFrames,
+            profileWindow.processedFrames,
+            profileWindow.overwrittenFrames,
+            profileWindow.throttledFrames,
+            profileWindow.monitoredImageFrames,
+            profileWindow.streamBypassedFrames,
+            profileWindow.rgbFallbackFrames,
+            fps,
+            profileWindow.totalProcess.averageMilliseconds,
+            profileWindow.totalProcess.maxMilliseconds,
+            profileWindow.rgbConversion.averageMilliseconds,
+            profileWindow.rgbConversion.maxMilliseconds,
+            profileWindow.rgbFormatDetect.averageMilliseconds,
+            profileWindow.rgbPixelBufferLock.averageMilliseconds,
+            profileWindow.rgbYCbCrConvert.averageMilliseconds,
+            profileWindow.rgbScaleRotate.averageMilliseconds,
+            profileWindow.rgbPack.averageMilliseconds,
+            profileWindow.rgbUIImage.averageMilliseconds,
+            profileWindow.wasmPointCloud.averageMilliseconds,
+            profileWindow.wasmPointCloud.maxMilliseconds,
+            profileWindow.webSocketPointCloud.averageMilliseconds,
+            profileWindow.webSocketPointCloud.maxMilliseconds,
+            profileWindow.preview.averageMilliseconds,
+            profileWindow.preview.maxMilliseconds,
+            profileWindow.jpegStream.averageMilliseconds,
+            profileWindow.jpegStream.maxMilliseconds,
+            profileWindow.stateUpdate.averageMilliseconds,
+            profileWindow.stateUpdate.maxMilliseconds,
+            profileWindow.inferenceSubmit.averageMilliseconds,
+            profileWindow.inferenceSubmit.maxMilliseconds,
+            context.hasWebSocketClients ? 1 : 0,
+            context.isStreaming ? 1 : 0,
+            String(describing: context.previewMode),
+            context.hasActiveModels ? 1 : 0
+        )
+        profileWindow.reset(startTime: now)
+        return summary
+    }
+
+    func latestCameraFrameSnapshot() -> CameraImageFrame? {
+        lock.lock()
+        let frame = latestCameraFrame
+        lock.unlock()
+        return frame
     }
 
     func setPreviewMode(_ mode: AVPreviewMode) {
@@ -223,12 +488,46 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         return dst
     }
 
+    private func submitStreamFrame(frame: CameraImageFrame) {
+        let request = StreamFrameRequest(frame: frame)
+        streamStateQueue.async {
+            self.streamWorkerState.pendingRequest = request
+            guard !self.streamWorkerState.isRunning else {
+                return
+            }
+
+            self.streamWorkerState.isRunning = true
+            let generation = self.streamWorkerState.generation
+            self.startNextStreamWork(generation: generation)
+        }
+    }
+
+    private func startNextStreamWork(generation: UInt64) {
+        streamStateQueue.async {
+            guard self.streamWorkerState.generation == generation else {
+                return
+            }
+
+            guard let request = self.streamWorkerState.pendingRequest else {
+                self.streamWorkerState.isRunning = false
+                return
+            }
+            self.streamWorkerState.pendingRequest = nil
+
+            self.streamExecutionQueue.async {
+                _ = self.streamFrame(frame: request.frame)
+                self.startNextStreamWork(generation: generation)
+            }
+        }
+    }
+
     // MARK: - Session Control
 
     func start() {
         lock.lock()
         resetWasmFrameStateLocked()
         lock.unlock()
+        resetStreamWorkerState()
 
         guard ARWorldTrackingConfiguration.isSupported else {
             DispatchQueue.main.async {
@@ -272,6 +571,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             self.lock.lock()
             self.resetWasmFrameStateLocked()
             self.lock.unlock()
+            self.resetStreamWorkerState()
 
             DispatchQueue.main.async {
                 self.isActive = false
@@ -318,6 +618,9 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     // MARK: - Video Streaming
 
     func startStreaming(fps: Int = 15, quality: CGFloat = 0.5) {
+        guard !isStreaming || streamTargetFPS != fps || streamJpegQuality != quality else {
+            return
+        }
         streamTargetFPS = fps
         streamJpegQuality = quality
         lastStreamTime = 0
@@ -328,12 +631,17 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     func stopStreaming() {
+        guard isStreaming else { return }
         isStreaming = false
         streamFPS = 0
         print("Video streaming stopped")
     }
 
     func toggleStreaming() {
+        if WasmManager.shared.isRunning {
+            print("Video streaming is tied to the active WASM run")
+            return
+        }
         if isStreaming {
             stopStreaming()
         } else {
@@ -341,15 +649,15 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
-    private func streamFrame(image: UIImage) {
-        guard isStreaming else { return }
+    private func streamFrame(image: UIImage) -> Bool {
+        guard isStreaming else { return false }
 
         let currentTime = CACurrentMediaTime()
         let frameInterval = 1.0 / Double(streamTargetFPS)
 
         // Throttle frame rate.
         if currentTime - lastStreamTime < frameInterval {
-            return
+            return false
         }
         lastStreamTime = currentTime
 
@@ -366,13 +674,76 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         // Encode to JPEG and broadcast.
         if let jpegData = image.jpegData(compressionQuality: streamJpegQuality) {
             WebSocketManager.shared.broadcastBinaryData(jpegData)
+            return true
         }
+        return false
+    }
+
+    private func streamFrame(frame: CameraImageFrame) -> Bool {
+        guard isStreaming else { return false }
+
+        let currentTime = CACurrentMediaTime()
+        let frameInterval = 1.0 / Double(streamTargetFPS)
+        if currentTime - lastStreamTime < frameInterval {
+            return false
+        }
+
+        guard let jpegData = jpegData(for: frame) else {
+            return false
+        }
+
+        lastStreamTime = currentTime
+        streamFrameCount += 1
+        if currentTime - lastFPSUpdateTime >= 1.0 {
+            DispatchQueue.main.async {
+                self.streamFPS = Double(self.streamFrameCount)
+            }
+            streamFrameCount = 0
+            lastFPSUpdateTime = currentTime
+        }
+
+        WebSocketManager.shared.broadcastBinaryData(jpegData)
+        return true
+    }
+
+    private func jpegData(for frame: CameraImageFrame) -> Data? {
+        guard frame.width > 0, frame.height > 0, frame.channels == 3 else {
+            return nil
+        }
+
+        var rgbaBytes = [UInt8](repeating: 0, count: frame.width * frame.height * 4)
+        var srcIndex = 0
+        var dstIndex = 0
+        while srcIndex + 2 < frame.rgbBytes.count, dstIndex + 3 < rgbaBytes.count {
+            rgbaBytes[dstIndex] = frame.rgbBytes[srcIndex]
+            rgbaBytes[dstIndex + 1] = frame.rgbBytes[srcIndex + 1]
+            rgbaBytes[dstIndex + 2] = frame.rgbBytes[srcIndex + 2]
+            rgbaBytes[dstIndex + 3] = 255
+            srcIndex += 3
+            dstIndex += 4
+        }
+
+        guard let context = CGContext(
+            data: &rgbaBytes,
+            width: frame.width,
+            height: frame.height,
+            bitsPerComponent: 8,
+            bytesPerRow: frame.width * 4,
+            space: renderColorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ), let cgImage = context.makeImage() else {
+            return nil
+        }
+
+        return UIImage(cgImage: cgImage, scale: 1.0, orientation: .up)
+            .jpegData(compressionQuality: streamJpegQuality)
     }
 
     // MARK: - ARSessionDelegate
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         lock.lock()
+        let overwrotePendingFrame = isProcessingFrame && currentFrame != nil
         currentFrame = frame
         hasNewFrame = true
         let shouldStartProcessing = !isProcessingFrame
@@ -380,6 +751,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             isProcessingFrame = true
         }
         lock.unlock()
+        recordReceivedFrame(overwrotePending: overwrotePendingFrame)
 
         guard shouldStartProcessing else { return }
 
@@ -439,9 +811,17 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
     // MARK: - Frame Processing
 
     private func processFrame(_ frame: ARFrame) {
+        let processStartedAt = profileNow()
         let processInterval = 1.0 / processingTargetFPS
         if lastProcessedFrameTimestamp > 0,
            frame.timestamp - lastProcessedFrameTimestamp < processInterval {
+            let context = AVProfileContext(
+                hasWebSocketClients: WebSocketManager.shared.hasConnectedWebSocketClients(),
+                isStreaming: isStreaming,
+                previewMode: previewMode,
+                hasActiveModels: ModelRunner.shared.hasActiveModels()
+            )
+            recordThrottledFrame(context: context)
             return
         }
         lastProcessedFrameTimestamp = frame.timestamp
@@ -471,8 +851,18 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let needsPreviewVideo = shouldUpdatePreview && localPreviewMode == .video
         let needsPreviewDepth = shouldUpdatePreview && localPreviewMode == .depth
         let needsPreviewPoint = shouldUpdatePreview && localPreviewMode == .point
+        let hasWebSocketClients = WebSocketManager.shared.hasConnectedWebSocketClients()
+        let hasActiveModels = ModelRunner.shared.hasActiveModels()
+        let isWasmRunning = WasmManager.shared.isRunning
+        let profileContext = AVProfileContext(
+            hasWebSocketClients: hasWebSocketClients,
+            isStreaming: isStreaming,
+            previewMode: localPreviewMode,
+            hasActiveModels: hasActiveModels
+        )
+
         let shouldPublishWebSocketPointCloud: Bool
-        if WebSocketManager.shared.hasConnectedWebSocketClients() {
+        if hasWebSocketClients {
             if lastWebSocketPointCloudTimestamp == 0 {
                 shouldPublishWebSocketPointCloud = true
                 lastWebSocketPointCloudTimestamp = frame.timestamp
@@ -485,12 +875,14 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         } else {
             shouldPublishWebSocketPointCloud = false
         }
-        let sensorConfig = WasmManager.shared.effectiveSensorConfig()
-        let needsPointCloud = sensorConfig.lidarPointsEnabled
-        let needsPointColors = needsPointCloud && includePointColorsForWasm && sensorConfig.pointColorsEnabled
-        let needsImagePayload = includeImageInWasmPayload && sensorConfig.cameraImageEnabled
-        let needsUIImage = needsPreviewVideo || isStreaming
-        let needsRGBFrame = needsImagePayload || needsUIImage
+        let needsPointColors = includePointColorsForWasm
+        let needsImagePayload = includeImageInWasmPayload
+        let needsModelImage = hasActiveModels
+        let needsMonitoredStreamImage = isWasmRunning && isStreaming && hasWebSocketClients
+        let needsUIImage = needsPreviewVideo
+        let retainCanonicalFrameForWasm = isWasmRunning
+        let needsCanonicalRGBFrame = needsImagePayload || needsModelImage || needsMonitoredStreamImage || retainCanonicalFrameForWasm
+        let needsRGBFrame = needsCanonicalRGBFrame || needsUIImage
 
         let imageResolution = frame.camera.imageResolution
         let fallbackLayout = portraitLayout(
@@ -499,36 +891,47 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         )
 
         let rgbFrame: RGBFrameData?
+        let rgbProfile: RGBProfilingSample
+        let rgbStartedAt = profileNow()
         if needsRGBFrame {
-            rgbFrame = rgbFrameData(
+            let rgbResult = rgbFrameData(
                 from: frame.capturedImage,
                 downsampleFactor: rgbDownsampleFactor,
                 includeUIImage: needsUIImage,
-                includePortraitBytes: needsImagePayload
+                includePortraitBytes: needsCanonicalRGBFrame
             )
+            rgbFrame = rgbResult.frame
+            rgbProfile = rgbResult.profile
         } else {
             rgbFrame = nil
+            rgbProfile = RGBProfilingSample()
         }
+        let wasmOutputWidth = rgbFrame?.portraitWidth ?? fallbackLayout.width
+        let wasmOutputHeight = rgbFrame?.portraitHeight ?? fallbackLayout.height
 
-        let pointCloudData: PointCloudExportData?
-        if needsPointCloud {
-            pointCloudData = depthDataToPointCloud(
-                depthMap: depthData.depthMap,
-                confidenceMap: depthData.confidenceMap,
-                frame: frame,
-                colorSource: nil,
-                colorPixelBuffer: needsPointColors ? frame.capturedImage : nil
-            )
-        } else {
-            pointCloudData = nil
-        }
+        let rgbDuration = profileNow() - rgbStartedAt
+
+        let wasmPointCloudStartedAt = profileNow()
+        let pointCloudData = depthDataToPointCloud(
+            depthMap: depthData.depthMap,
+            confidenceMap: depthData.confidenceMap,
+            frame: frame,
+            outputWidth: wasmOutputWidth,
+            outputHeight: wasmOutputHeight,
+            colorSource: nil,
+            colorPixelBuffer: needsPointColors ? frame.capturedImage : nil
+        )
+        let wasmPointCloudDuration = profileNow() - wasmPointCloudStartedAt
 
         let webSocketPointCloudData: PointCloudExportData?
+        let webSocketPointCloudStartedAt = profileNow()
         if shouldPublishWebSocketPointCloud {
             webSocketPointCloudData = depthDataToPointCloud(
                 depthMap: depthData.depthMap,
                 confidenceMap: depthData.confidenceMap,
                 frame: frame,
+                outputWidth: wasmOutputWidth,
+                outputHeight: wasmOutputHeight,
                 colorSource: nil,
                 colorPixelBuffer: frame.capturedImage,
                 pointStride: websocketPointCloudStride,
@@ -537,11 +940,30 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         } else {
             webSocketPointCloudData = nil
         }
+        let webSocketPointCloudDuration = profileNow() - webSocketPointCloudStartedAt
 
-        if let image = rgbFrame?.uiImage {
-            streamFrame(image: image)
+        let canonicalCameraFrame: CameraImageFrame? = {
+            guard needsCanonicalRGBFrame,
+                  let rgbFrame,
+                  !rgbFrame.portraitBytes.isEmpty else {
+                return nil
+            }
+            return CameraImageFrame(
+                timestamp: frame.timestamp,
+                width: rgbFrame.portraitWidth,
+                height: rgbFrame.portraitHeight,
+                channels: 3,
+                rgbBytes: rgbFrame.portraitBytes
+            )
+        }()
+
+        let jpegStreamStartedAt = profileNow()
+        if needsMonitoredStreamImage, let canonicalCameraFrame {
+            submitStreamFrame(frame: canonicalCameraFrame)
         }
+        let jpegStreamDuration = profileNow() - jpegStreamStartedAt
 
+        let previewStartedAt = profileNow()
         if shouldUpdatePreview {
             let previewWidth = rgbFrame?.portraitWidth ?? fallbackLayout.width
             let previewHeight = rgbFrame?.portraitHeight ?? fallbackLayout.height
@@ -562,13 +984,16 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
                 self.depthPixels = depthPixelData
             }
         }
+        let previewDuration = profileNow() - previewStartedAt
 
+        let stateUpdateStartedAt = profileNow()
         lock.lock()
-        currentImageWidth = Int32(rgbFrame?.portraitWidth ?? fallbackLayout.width)
-        currentImageHeight = Int32(rgbFrame?.portraitHeight ?? fallbackLayout.height)
+        currentImageWidth = Int32(wasmOutputWidth)
+        currentImageHeight = Int32(wasmOutputHeight)
         currentImageChannels = 3
 
         let imageBytes = needsImagePayload ? (rgbFrame?.portraitBytes ?? []) : []
+        latestCameraFrame = retainCanonicalFrameForWasm || needsModelImage ? canonicalCameraFrame : nil
         currentData = LidarCameraData(
             timestamp: frame.timestamp,
             points: pointCloudData?.points ?? [],
@@ -578,10 +1003,24 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             image: imageBytes,
             image_size: Int32(imageBytes.count),
             points_frame_id: CoordinateFrameId.FLU.rawValue,
-            image_frame_id: CoordinateFrameId.RDF.rawValue
+            image_frame_id: CoordinateFrameId.RDF.rawValue,
+            pixel_coords: pointCloudData?.pixelCoords ?? [],
+            pixel_coords_size: Int32(pointCloudData?.pixelCoords.count ?? 0)
         )
         isDataDirty = true
         lock.unlock()
+        let stateUpdateDuration = profileNow() - stateUpdateStartedAt
+
+        let inferenceSubmitStartedAt = profileNow()
+        if hasActiveModels, hasWebSocketClients, let canonicalCameraFrame {
+            ModelRunner.shared.submitActiveModels(frame: canonicalCameraFrame) { frame, modelResults, _ in
+                WebSocketManager.shared.publishMlDetections(
+                    frame: frame,
+                    modelResults: modelResults
+                )
+            }
+        }
+        let inferenceSubmitDuration = profileNow() - inferenceSubmitStartedAt
 
         if let webSocketPointCloudData,
            webSocketPointCloudData.pointCount > 0 {
@@ -598,6 +1037,21 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
                 }
             }
         }
+
+        recordProcessedFrame(
+            totalSeconds: profileNow() - processStartedAt,
+            rgbConversionSeconds: rgbDuration,
+            rgbProfile: rgbProfile,
+            wasmPointCloudSeconds: wasmPointCloudDuration,
+            webSocketPointCloudSeconds: webSocketPointCloudDuration,
+            previewSeconds: previewDuration,
+            jpegStreamSeconds: jpegStreamDuration,
+            stateUpdateSeconds: stateUpdateDuration,
+            inferenceSubmitSeconds: inferenceSubmitDuration,
+            builtMonitoredImage: needsMonitoredStreamImage,
+            bypassedStreamImage: isWasmRunning && isStreaming && !hasWebSocketClients,
+            context: profileContext
+        )
     }
 
     // MARK: - Camera / Image Conversion
@@ -607,73 +1061,524 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         downsampleFactor: Int,
         includeUIImage: Bool,
         includePortraitBytes: Bool
-    ) -> RGBFrameData? {
+    ) -> (frame: RGBFrameData?, profile: RGBProfilingSample) {
         let sourceWidth = CVPixelBufferGetWidth(pixelBuffer)
         let sourceHeight = CVPixelBufferGetHeight(pixelBuffer)
         let factor = max(1, downsampleFactor)
         let width = max(1, sourceWidth / factor)
         let height = max(1, sourceHeight / factor)
+        let layout = portraitLayout(width: width, height: height)
 
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let sourceRect = CGRect(x: 0, y: 0, width: sourceWidth, height: sourceHeight)
-        let outputRect = CGRect(x: 0, y: 0, width: width, height: height)
+        var profile = RGBProfilingSample()
+        let formatDetectStartedAt = profileNow()
+        let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
+        let planeCount = CVPixelBufferGetPlaneCount(pixelBuffer)
+        profile.formatDetectSeconds = profileNow() - formatDetectStartedAt
 
-        guard let cgImage = ciContext.createCGImage(ciImage, from: sourceRect) else {
+        let lowerLevelFormats: Set<OSType> = [
+            kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
+            kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        ]
+        if lowerLevelFormats.contains(pixelFormat), planeCount >= 2 {
+            if let frame = rgbFrameDataFromBiPlanarPixelBuffer(
+                pixelBuffer,
+                pixelFormat: pixelFormat,
+                sourceWidth: sourceWidth,
+                sourceHeight: sourceHeight,
+                scaledWidth: width,
+                scaledHeight: height,
+                layout: layout,
+                includeUIImage: includeUIImage,
+                includePortraitBytes: includePortraitBytes,
+                profile: &profile
+            ) {
+                return (frame, profile)
+            }
+            profile.usedFallback = true
+        } else {
+            profile.usedFallback = true
+        }
+
+        let fallbackFrame = rgbFrameDataUsingCoreImage(
+            from: pixelBuffer,
+            scaledWidth: width,
+            scaledHeight: height,
+            layout: layout,
+            includeUIImage: includeUIImage,
+            includePortraitBytes: includePortraitBytes,
+            profile: &profile
+        )
+        return (fallbackFrame, profile)
+    }
+
+    private func ensureByteBuffer(_ buffer: inout [UInt8], count: Int) {
+        guard buffer.count != count else { return }
+        buffer = [UInt8](repeating: 0, count: count)
+    }
+
+    private func clampToByte(_ value: Int) -> UInt8 {
+        if value < 0 {
+            return 0
+        }
+        if value > 255 {
+            return 255
+        }
+        return UInt8(value)
+    }
+
+    private func yCbCrMatrixForPixelBuffer(_ pixelBuffer: CVPixelBuffer) -> UnsafePointer<vImage_YpCbCrToARGBMatrix> {
+        guard let attachment = CVBufferGetAttachment(
+            pixelBuffer,
+            kCVImageBufferYCbCrMatrixKey,
+            nil
+        )?.takeUnretainedValue() else {
+            return kvImage_YpCbCrToARGBMatrix_ITU_R_709_2
+        }
+
+        if CFEqual(attachment, kCVImageBufferYCbCrMatrix_ITU_R_601_4) {
+            return kvImage_YpCbCrToARGBMatrix_ITU_R_601_4
+        }
+        return kvImage_YpCbCrToARGBMatrix_ITU_R_709_2
+    }
+
+    private func pixelRangeForFormat(_ pixelFormat: OSType) -> vImage_YpCbCrPixelRange {
+        if pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange {
+            return vImage_YpCbCrPixelRange(
+                Yp_bias: 16,
+                CbCr_bias: 128,
+                YpRangeMax: 235,
+                CbCrRangeMax: 240,
+                YpMax: 255,
+                YpMin: 0,
+                CbCrMax: 255,
+                CbCrMin: 1
+            )
+        }
+
+        return vImage_YpCbCrPixelRange(
+            Yp_bias: 0,
+            CbCr_bias: 128,
+            YpRangeMax: 255,
+            CbCrRangeMax: 255,
+            YpMax: 255,
+            YpMin: 1,
+            CbCrMax: 255,
+            CbCrMin: 0
+        )
+    }
+
+    private func withYpCbCrConversionInfo<T>(
+        for pixelBuffer: CVPixelBuffer,
+        pixelFormat: OSType,
+        body: (UnsafePointer<vImage_YpCbCrToARGB>) -> T?
+    ) -> T? {
+        let matrix = yCbCrMatrixForPixelBuffer(pixelBuffer)
+        var pixelRange = pixelRangeForFormat(pixelFormat)
+
+        if pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange {
+            if !hasVideoRangeYpCbCrToARGB {
+                let error = vImageConvert_YpCbCrToARGB_GenerateConversion(
+                    matrix,
+                    &pixelRange,
+                    &videoRangeYpCbCrToARGB,
+                    kvImage420Yp8_CbCr8,
+                    kvImageARGB8888,
+                    vImage_Flags(kvImageNoFlags)
+                )
+                guard error == kvImageNoError else {
+                    return nil
+                }
+                hasVideoRangeYpCbCrToARGB = true
+            }
+            return withUnsafePointer(to: &videoRangeYpCbCrToARGB, body)
+        }
+
+        if !hasFullRangeYpCbCrToARGB {
+            let error = vImageConvert_YpCbCrToARGB_GenerateConversion(
+                matrix,
+                &pixelRange,
+                &fullRangeYpCbCrToARGB,
+                kvImage420Yp8_CbCr8,
+                kvImageARGB8888,
+                vImage_Flags(kvImageNoFlags)
+            )
+            guard error == kvImageNoError else {
+                return nil
+            }
+            hasFullRangeYpCbCrToARGB = true
+        }
+        return withUnsafePointer(to: &fullRangeYpCbCrToARGB, body)
+    }
+
+    private func makeUIImageFromRGBBytes(
+        _ rgbBytes: [UInt8],
+        width: Int,
+        height: Int
+    ) -> UIImage? {
+        guard width > 0, height > 0, rgbBytes.count == width * height * 3 else {
             return nil
         }
 
         var rgbaBytes = [UInt8](repeating: 0, count: width * height * 4)
+        var srcIndex = 0
+        var dstIndex = 0
+        while srcIndex + 2 < rgbBytes.count, dstIndex + 3 < rgbaBytes.count {
+            rgbaBytes[dstIndex] = rgbBytes[srcIndex]
+            rgbaBytes[dstIndex + 1] = rgbBytes[srcIndex + 1]
+            rgbaBytes[dstIndex + 2] = rgbBytes[srcIndex + 2]
+            rgbaBytes[dstIndex + 3] = 255
+            srcIndex += 3
+            dstIndex += 4
+        }
+
         guard let context = CGContext(
             data: &rgbaBytes,
             width: width,
             height: height,
             bitsPerComponent: 8,
             bytesPerRow: width * 4,
-            space: CGColorSpaceCreateDeviceRGB(),
+            space: renderColorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
+        ), let cgImage = context.makeImage() else {
             return nil
         }
 
-        context.draw(cgImage, in: outputRect)
+        return UIImage(cgImage: cgImage, scale: 1.0, orientation: .up)
+    }
 
-        var rgbBytes = [UInt8](repeating: 0, count: width * height * 3)
-        var srcIndex = 0
-        var dstIndex = 0
-        while srcIndex + 3 < rgbaBytes.count {
-            rgbBytes[dstIndex] = rgbaBytes[srcIndex]
-            rgbBytes[dstIndex + 1] = rgbaBytes[srcIndex + 1]
-            rgbBytes[dstIndex + 2] = rgbaBytes[srcIndex + 2]
-            srcIndex += 4
-            dstIndex += 3
+    private func packedRGBBytesFromARGB(
+        _ argbBytes: [UInt8],
+        width: Int,
+        height: Int,
+        reuseBuffer: inout [UInt8]
+    ) -> [UInt8]? {
+        guard width > 0,
+              height > 0,
+              argbBytes.count == width * height * 4 else {
+            return nil
         }
 
-        let layout = portraitLayout(width: width, height: height)
+        ensureByteBuffer(&reuseBuffer, count: width * height * 3)
+        var sourceBytes = argbBytes
+        let conversionError = sourceBytes.withUnsafeMutableBytes { srcRawBuffer -> vImage_Error in
+            reuseBuffer.withUnsafeMutableBytes { dstRawBuffer -> vImage_Error in
+                guard let srcBaseAddress = srcRawBuffer.baseAddress,
+                      let dstBaseAddress = dstRawBuffer.baseAddress else {
+                    return kvImageNullPointerArgument
+                }
+
+                var srcBuffer = vImage_Buffer(
+                    data: srcBaseAddress,
+                    height: vImagePixelCount(height),
+                    width: vImagePixelCount(width),
+                    rowBytes: width * 4
+                )
+                var dstBuffer = vImage_Buffer(
+                    data: dstBaseAddress,
+                    height: vImagePixelCount(height),
+                    width: vImagePixelCount(width),
+                    rowBytes: width * 3
+                )
+                return vImageConvert_ARGB8888toRGB888(
+                    &srcBuffer,
+                    &dstBuffer,
+                    vImage_Flags(kvImageNoFlags)
+                )
+            }
+        }
+
+        guard conversionError == kvImageNoError else {
+            return nil
+        }
+        return reuseBuffer
+    }
+
+    private func rgbFrameDataFromBiPlanarPixelBuffer(
+        _ pixelBuffer: CVPixelBuffer,
+        pixelFormat: OSType,
+        sourceWidth: Int,
+        sourceHeight: Int,
+        scaledWidth: Int,
+        scaledHeight: Int,
+        layout: (width: Int, height: Int, rotate: Bool),
+        includeUIImage: Bool,
+        includePortraitBytes: Bool,
+        profile: inout RGBProfilingSample
+    ) -> RGBFrameData? {
+        let lockStartedAt = profileNow()
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        let lockAcquiredAt = profileNow()
+        profile.pixelBufferLockSeconds += lockAcquiredAt - lockStartedAt
+
+        guard let yBaseAddress = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0),
+              let uvBaseAddress = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1) else {
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+            profile.pixelBufferLockSeconds += profileNow() - lockAcquiredAt
+            return nil
+        }
+
+        let yBytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
+        let uvBytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1)
+        let targetWidth = layout.width
+        let targetHeight = layout.height
+
+        ensureByteBuffer(&fullResolutionARGBBytes, count: sourceWidth * sourceHeight * 4)
+        if layout.rotate {
+            ensureByteBuffer(&scaledARGBBytes, count: scaledWidth * scaledHeight * 4)
+        } else {
+            scaledARGBBytes.removeAll(keepingCapacity: true)
+        }
+        ensureByteBuffer(&renderARGBBytes, count: targetWidth * targetHeight * 4)
+
+        let convertStartedAt = profileNow()
+        var yBuffer = vImage_Buffer(
+            data: yBaseAddress,
+            height: vImagePixelCount(sourceHeight),
+            width: vImagePixelCount(sourceWidth),
+            rowBytes: yBytesPerRow
+        )
+        var cbCrBuffer = vImage_Buffer(
+            data: uvBaseAddress,
+            height: vImagePixelCount(sourceHeight / 2),
+            width: vImagePixelCount(sourceWidth / 2),
+            rowBytes: uvBytesPerRow
+        )
+        var fullBuffer = vImage_Buffer(
+            data: &fullResolutionARGBBytes,
+            height: vImagePixelCount(sourceHeight),
+            width: vImagePixelCount(sourceWidth),
+            rowBytes: sourceWidth * 4
+        )
+        let permuteMap: [UInt8] = [0, 1, 2, 3]
+        let convertSucceeded = withYpCbCrConversionInfo(for: pixelBuffer, pixelFormat: pixelFormat) { conversionInfo in
+            vImageConvert_420Yp8_CbCr8ToARGB8888(
+                &yBuffer,
+                &cbCrBuffer,
+                &fullBuffer,
+                conversionInfo,
+                permuteMap,
+                255,
+                vImage_Flags(kvImageNoFlags)
+            ) == kvImageNoError
+        } ?? false
+        guard convertSucceeded else {
+            CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+            profile.pixelBufferLockSeconds += profileNow() - lockAcquiredAt
+            return nil
+        }
+        profile.yCbCrConvertSeconds = profileNow() - convertStartedAt
+
+        let scaleRotateStartedAt = profileNow()
+        let scaleFlags = vImage_Flags(kvImageHighQualityResampling)
+        let scaleError: vImage_Error
+        if layout.rotate {
+            var scaledBuffer = vImage_Buffer(
+                data: &scaledARGBBytes,
+                height: vImagePixelCount(scaledHeight),
+                width: vImagePixelCount(scaledWidth),
+                rowBytes: scaledWidth * 4
+            )
+            scaleError = vImageScale_ARGB8888(&fullBuffer, &scaledBuffer, nil, scaleFlags)
+            guard scaleError == kvImageNoError else {
+                CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+                profile.pixelBufferLockSeconds += profileNow() - lockAcquiredAt
+                return nil
+            }
+
+            var renderBuffer = vImage_Buffer(
+                data: &renderARGBBytes,
+                height: vImagePixelCount(targetHeight),
+                width: vImagePixelCount(targetWidth),
+                rowBytes: targetWidth * 4
+            )
+            var backgroundColor: [UInt8] = [255, 0, 0, 0]
+            let rotateError = vImageRotate90_ARGB8888(
+                &scaledBuffer,
+                &renderBuffer,
+                UInt8(kRotate90DegreesClockwise),
+                &backgroundColor,
+                vImage_Flags(kvImageNoFlags)
+            )
+            guard rotateError == kvImageNoError else {
+                CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+                profile.pixelBufferLockSeconds += profileNow() - lockAcquiredAt
+                return nil
+            }
+        } else {
+            var renderBuffer = vImage_Buffer(
+                data: &renderARGBBytes,
+                height: vImagePixelCount(targetHeight),
+                width: vImagePixelCount(targetWidth),
+                rowBytes: targetWidth * 4
+            )
+            scaleError = vImageScale_ARGB8888(&fullBuffer, &renderBuffer, nil, scaleFlags)
+            guard scaleError == kvImageNoError else {
+                CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+                profile.pixelBufferLockSeconds += profileNow() - lockAcquiredAt
+                return nil
+            }
+        }
+        profile.scaleRotateSeconds = profileNow() - scaleRotateStartedAt
+
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+        profile.pixelBufferLockSeconds += profileNow() - lockAcquiredAt
+
+        let packStartedAt = profileNow()
         let portraitBytes: [UInt8]
         if includePortraitBytes {
-            if layout.rotate {
-                portraitBytes = rotateBytes90CW(rgbBytes, width: width, height: height, channels: 3)
-            } else {
-                portraitBytes = rgbBytes
+            guard let rgbBytes = packedRGBBytesFromARGB(
+                renderARGBBytes,
+                width: targetWidth,
+                height: targetHeight,
+                reuseBuffer: &packedRGBBytes
+            ) else {
+                return nil
             }
+            portraitBytes = rgbBytes
         } else {
             portraitBytes = []
         }
+        profile.packSeconds = profileNow() - packStartedAt
 
         let uiImage: UIImage?
-        if includeUIImage, let scaledCGImage = context.makeImage() {
-            uiImage = UIImage(cgImage: scaledCGImage, scale: 1.0, orientation: layout.rotate ? .right : .up)
+        if includeUIImage {
+            let uiStartedAt = profileNow()
+            let previewRGBBytes: [UInt8]
+            if includePortraitBytes {
+                previewRGBBytes = portraitBytes
+            } else {
+                guard let rgbBytes = packedRGBBytesFromARGB(
+                    renderARGBBytes,
+                    width: targetWidth,
+                    height: targetHeight,
+                    reuseBuffer: &packedRGBBytes
+                ) else {
+                    return nil
+                }
+                previewRGBBytes = rgbBytes
+            }
+            uiImage = makeUIImageFromRGBBytes(previewRGBBytes, width: targetWidth, height: targetHeight)
+            profile.uiImageSeconds = profileNow() - uiStartedAt
         } else {
             uiImage = nil
         }
 
         return RGBFrameData(
-            rawBytes: rgbBytes,
-            rawWidth: width,
-            rawHeight: height,
+            rawBytes: portraitBytes,
+            rawWidth: targetWidth,
+            rawHeight: targetHeight,
             portraitBytes: portraitBytes,
-            portraitWidth: layout.width,
-            portraitHeight: layout.height,
+            portraitWidth: targetWidth,
+            portraitHeight: targetHeight,
+            uiImage: uiImage
+        )
+    }
+
+    private func rgbFrameDataUsingCoreImage(
+        from pixelBuffer: CVPixelBuffer,
+        scaledWidth: Int,
+        scaledHeight: Int,
+        layout: (width: Int, height: Int, rotate: Bool),
+        includeUIImage: Bool,
+        includePortraitBytes: Bool,
+        profile: inout RGBProfilingSample
+    ) -> RGBFrameData? {
+        let targetWidth = layout.width
+        let targetHeight = layout.height
+        let renderBounds = CGRect(x: 0, y: 0, width: targetWidth, height: targetHeight)
+        let rgbaByteCount = targetWidth * targetHeight * 4
+        ensureByteBuffer(&fallbackRGBABytes, count: rgbaByteCount)
+
+        var ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        if layout.rotate {
+            ciImage = ciImage.oriented(.right)
+        }
+
+        let orientedExtent = ciImage.extent.integral
+        let scaleX = CGFloat(targetWidth) / max(orientedExtent.width, 1)
+        let scaleY = CGFloat(targetHeight) / max(orientedExtent.height, 1)
+        ciImage = ciImage.transformed(by: CGAffineTransform(scaleX: scaleX, y: scaleY))
+
+        let scaledExtent = ciImage.extent.integral
+        if scaledExtent.origin != .zero {
+            ciImage = ciImage.transformed(
+                by: CGAffineTransform(
+                    translationX: -scaledExtent.origin.x,
+                    y: -scaledExtent.origin.y
+                )
+            )
+        }
+
+        let rowBytes = targetWidth * 4
+        let rendered = fallbackRGBABytes.withUnsafeMutableBytes { buffer -> Bool in
+            guard let baseAddress = buffer.baseAddress else {
+                return false
+            }
+            let renderStartedAt = profileNow()
+            ciContext.render(
+                ciImage,
+                toBitmap: baseAddress,
+                rowBytes: rowBytes,
+                bounds: renderBounds,
+                format: .RGBA8,
+                colorSpace: renderColorSpace
+            )
+            profile.scaleRotateSeconds += profileNow() - renderStartedAt
+            return true
+        }
+        guard rendered else { return nil }
+
+        let portraitBytes: [UInt8]
+        if includePortraitBytes {
+            let packStartedAt = profileNow()
+            var rgbBytes = [UInt8](repeating: 0, count: targetWidth * targetHeight * 3)
+            var srcIndex = 0
+            var dstIndex = 0
+            while srcIndex + 3 < fallbackRGBABytes.count {
+                rgbBytes[dstIndex] = fallbackRGBABytes[srcIndex]
+                rgbBytes[dstIndex + 1] = fallbackRGBABytes[srcIndex + 1]
+                rgbBytes[dstIndex + 2] = fallbackRGBABytes[srcIndex + 2]
+                srcIndex += 4
+                dstIndex += 3
+            }
+            portraitBytes = rgbBytes
+            profile.packSeconds += profileNow() - packStartedAt
+        } else {
+            portraitBytes = []
+        }
+
+        let uiImage: UIImage?
+        if includeUIImage {
+            let uiStartedAt = profileNow()
+            let previewRGBBytes: [UInt8]
+            if includePortraitBytes {
+                previewRGBBytes = portraitBytes
+            } else {
+                var rgbBytes = [UInt8](repeating: 0, count: targetWidth * targetHeight * 3)
+                var srcIndex = 0
+                var dstIndex = 0
+                while srcIndex + 3 < fallbackRGBABytes.count {
+                    rgbBytes[dstIndex] = fallbackRGBABytes[srcIndex]
+                    rgbBytes[dstIndex + 1] = fallbackRGBABytes[srcIndex + 1]
+                    rgbBytes[dstIndex + 2] = fallbackRGBABytes[srcIndex + 2]
+                    srcIndex += 4
+                    dstIndex += 3
+                }
+                previewRGBBytes = rgbBytes
+            }
+            uiImage = makeUIImageFromRGBBytes(previewRGBBytes, width: targetWidth, height: targetHeight)
+            profile.uiImageSeconds += profileNow() - uiStartedAt
+        } else {
+            uiImage = nil
+        }
+
+        return RGBFrameData(
+            rawBytes: portraitBytes,
+            rawWidth: targetWidth,
+            rawHeight: targetHeight,
+            portraitBytes: portraitBytes,
+            portraitWidth: targetWidth,
+            portraitHeight: targetHeight,
             uiImage: uiImage
         )
     }
@@ -744,6 +1649,8 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         depthMap: CVPixelBuffer,
         confidenceMap: CVPixelBuffer?,
         frame: ARFrame,
+        outputWidth: Int,
+        outputHeight: Int,
         colorSource: RGBColorSource?,
         colorPixelBuffer: CVPixelBuffer?,
         pointStride: Int? = nil,
@@ -775,7 +1682,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             confidencePointer = CVPixelBufferGetBaseAddress(confidenceMap)?.assumingMemoryBound(to: UInt8.self)
             confidenceStride = CVPixelBufferGetBytesPerRow(confidenceMap)
         }
-        let minimumConfidence = UInt8(ARConfidenceLevel.medium.rawValue)
+        let minimumConfidence = UInt8(ARConfidenceLevel.high.rawValue)
 
         let intrinsics = frame.camera.intrinsics
         let fx = intrinsics.columns.0.x
@@ -784,8 +1691,14 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         let cy = intrinsics.columns.2.y
 
         let imageResolution = frame.camera.imageResolution
+        let outputLayout = portraitLayout(
+            width: Int(imageResolution.width),
+            height: Int(imageResolution.height)
+        )
         let intrinsicsScaleX = Float(imageResolution.width) / Float(max(1, depthWidth))
         let intrinsicsScaleY = Float(imageResolution.height) / Float(max(1, depthHeight))
+        let outputScaleX = Float(outputWidth) / Float(max(1, outputLayout.width))
+        let outputScaleY = Float(outputHeight) / Float(max(1, outputLayout.height))
 
         let colorScaleX: Float
         let colorScaleY: Float
@@ -839,6 +1752,10 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             repeating: 0,
             count: estimatedPoints * LidarCameraConstants.floatsPerPoint
         )
+        var pixelCoords = [UInt16](
+            repeating: 0,
+            count: estimatedPoints * 2
+        )
         let wantsColors = hasRgbColorSource || hasYuvColorSource
         var colors = wantsColors
             ? [UInt8](
@@ -884,6 +1801,21 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
                 points[outBase + 0] = depth
                 points[outBase + 1] = -cameraX
                 points[outBase + 2] = -cameraY
+
+                let pixelX: Float
+                let pixelY: Float
+                if outputLayout.rotate {
+                    pixelX = Float(Int(imageResolution.height) - 1) - imageV
+                    pixelY = imageU
+                } else {
+                    pixelX = imageU
+                    pixelY = imageV
+                }
+                let mappedX = min(outputWidth - 1, max(0, Int(round(pixelX * outputScaleX))))
+                let mappedY = min(outputHeight - 1, max(0, Int(round(pixelY * outputScaleY))))
+                let pixelOutBase = pointCount * 2
+                pixelCoords[pixelOutBase + 0] = UInt16(mappedX)
+                pixelCoords[pixelOutBase + 1] = UInt16(mappedY)
                 pointCount += 1
 
                 if hasRgbColorSource, let colorSource = colorSource {
@@ -944,7 +1876,17 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             colors.removeLast(colors.count - usedColorCount)
         }
 
-        return PointCloudExportData(points: points, colors: colors, pointCount: pointCount)
+        let usedPixelCoordCount = pointCount * 2
+        if usedPixelCoordCount < pixelCoords.count {
+            pixelCoords.removeLast(pixelCoords.count - usedPixelCoordCount)
+        }
+
+        return PointCloudExportData(
+            points: points,
+            colors: colors,
+            pixelCoords: pixelCoords,
+            pointCount: pointCount
+        )
     }
 
     private func yCbCrToRgb(y: Float, cb: Float, cr: Float, fullRange: Bool) -> (UInt8, UInt8, UInt8) {
@@ -1093,10 +2035,32 @@ func init_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?)
     )
 }
 
+private func dequeueLatestLidarCameraData() -> LidarCameraData? {
+    let manager = AVManager.shared
+    manager.lock.lock()
+    guard manager.isDataDirty else {
+        manager.lock.unlock()
+        return nil
+    }
+    let data = manager.currentData
+    manager.isDataDirty = false
+    manager.lock.unlock()
+    return data
+}
+
+private func peekLatestLidarCameraData() -> LidarCameraData? {
+    let manager = AVManager.shared
+    manager.lock.lock()
+    let data = manager.currentData
+    manager.lock.unlock()
+    guard data.timestamp > 0 else {
+        return nil
+    }
+    return data
+}
+
 func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     guard let ptr = ptr, let exec_env = exec_env else { return }
-
-    let manager = AVManager.shared
 
     let basePtr = ptr.assumingMemoryBound(to: UInt8.self)
     guard let moduleInst = wasm_runtime_get_module_inst(exec_env) else {
@@ -1157,15 +2121,10 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
         }
     }
 
-    manager.lock.lock()
-    guard manager.isDataDirty else {
-        manager.lock.unlock()
+    guard let data = dequeueLatestLidarCameraData() else {
         clearFrame()
         return
     }
-    let data = manager.currentData
-    manager.isDataDirty = false
-    manager.lock.unlock()
 
     basePtr.withMemoryRebound(to: Double.self, capacity: 1) { rebounded in
         rebounded.pointee = data.timestamp
@@ -1219,5 +2178,148 @@ func read_lidar_camera_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPoi
 
     basePtr.advanced(by: imageFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
         rebounded.pointee = data.image_frame_id
+    }
+}
+
+func read_lidar_camera_v2_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+    guard let ptr = ptr, let exec_env = exec_env else { return }
+
+    let basePtr = ptr.assumingMemoryBound(to: UInt8.self)
+    guard let moduleInst = wasm_runtime_get_module_inst(exec_env) else {
+        return
+    }
+
+    var nativeStart: UnsafeMutablePointer<UInt8>?
+    var nativeEnd: UnsafeMutablePointer<UInt8>?
+    if !wasm_runtime_get_native_addr_range(moduleInst, basePtr, &nativeStart, &nativeEnd) {
+        return
+    }
+
+    let pointsOffset = MemoryLayout<Double>.size
+    let pointsMaxCount = LidarCameraConstants.maxPointsSize
+    let pointsByteCount = pointsMaxCount * MemoryLayout<Float32>.size
+    let pointsSizeOffset = pointsOffset + pointsByteCount
+
+    let colorsOffset = pointsSizeOffset + MemoryLayout<Int32>.size
+    let colorsMaxCount = LidarCameraConstants.maxColorsSize
+    let colorsByteCount = colorsMaxCount * MemoryLayout<UInt8>.size
+    let colorsSizeOffset = colorsOffset + colorsByteCount
+
+    let imageOffset = colorsSizeOffset + MemoryLayout<Int32>.size
+    let imageMaxCount = LidarCameraConstants.maxImageSize
+    let imageByteCount = imageMaxCount * MemoryLayout<UInt8>.size
+    let imageSizeOffset = imageOffset + imageByteCount
+
+    let pointsFrameIdOffset = imageSizeOffset + MemoryLayout<Int32>.size
+    let imageFrameIdOffset = pointsFrameIdOffset + MemoryLayout<Int32>.size
+    let pixelCoordsOffset = imageFrameIdOffset + MemoryLayout<Int32>.size
+    let pixelCoordsMaxCount = LidarCameraConstants.maxPointsPerScan * 2
+    let pixelCoordsByteCount = pixelCoordsMaxCount * MemoryLayout<UInt16>.size
+    let pixelCoordsSizeOffset = pixelCoordsOffset + pixelCoordsByteCount
+    let totalBytes = pixelCoordsSizeOffset + MemoryLayout<Int32>.size
+
+    if let nativeEnd = nativeEnd {
+        let baseAddr = UInt(bitPattern: basePtr)
+        let endAddr = UInt(bitPattern: nativeEnd)
+        if baseAddr + UInt(totalBytes) > endAddr {
+            return
+        }
+    }
+
+    func clearFrame() {
+        basePtr.withMemoryRebound(to: Double.self, capacity: 1) { rebounded in
+            rebounded.pointee = 0.0
+        }
+        basePtr.advanced(by: pointsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = 0
+        }
+        basePtr.advanced(by: colorsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = 0
+        }
+        basePtr.advanced(by: imageSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = 0
+        }
+        basePtr.advanced(by: pointsFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = CoordinateFrameId.FLU.rawValue
+        }
+        basePtr.advanced(by: imageFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = CoordinateFrameId.RDF.rawValue
+        }
+        basePtr.advanced(by: pixelCoordsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+            rebounded.pointee = 0
+        }
+    }
+
+    guard let data = peekLatestLidarCameraData() else {
+        clearFrame()
+        return
+    }
+
+    basePtr.withMemoryRebound(to: Double.self, capacity: 1) { rebounded in
+        rebounded.pointee = data.timestamp
+    }
+
+    let pointsCount = min(Int(data.points_size), pointsMaxCount)
+    if pointsCount > 0 {
+        data.points.withUnsafeBytes { src in
+            if let srcBase = src.baseAddress {
+                memcpy(basePtr.advanced(by: pointsOffset), srcBase, pointsCount * MemoryLayout<Float32>.size)
+            }
+        }
+    }
+
+    let pointsSizeValue = Int32(pointsCount)
+    basePtr.advanced(by: pointsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = pointsSizeValue
+    }
+
+    let colorsCount = min(Int(data.colors_size), colorsMaxCount)
+    if colorsCount > 0 {
+        data.colors.withUnsafeBytes { src in
+            if let srcBase = src.baseAddress {
+                memcpy(basePtr.advanced(by: colorsOffset), srcBase, colorsCount * MemoryLayout<UInt8>.size)
+            }
+        }
+    }
+
+    let colorsSizeValue = Int32(colorsCount)
+    basePtr.advanced(by: colorsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = colorsSizeValue
+    }
+
+    let imageCount = min(Int(data.image_size), imageMaxCount)
+    if imageCount > 0 {
+        data.image.withUnsafeBytes { src in
+            if let srcBase = src.baseAddress {
+                memcpy(basePtr.advanced(by: imageOffset), srcBase, imageCount * MemoryLayout<UInt8>.size)
+            }
+        }
+    }
+
+    let imageSizeValue = Int32(imageCount)
+    basePtr.advanced(by: imageSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = imageSizeValue
+    }
+
+    basePtr.advanced(by: pointsFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = data.points_frame_id
+    }
+
+    basePtr.advanced(by: imageFrameIdOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = data.image_frame_id
+    }
+
+    let pixelCoordsCount = min(Int(data.pixel_coords_size), pixelCoordsMaxCount)
+    if pixelCoordsCount > 0 {
+        data.pixel_coords.withUnsafeBytes { src in
+            if let srcBase = src.baseAddress {
+                memcpy(basePtr.advanced(by: pixelCoordsOffset), srcBase, pixelCoordsCount * MemoryLayout<UInt16>.size)
+            }
+        }
+    }
+
+    let pixelCoordsSizeValue = Int32(pixelCoordsCount)
+    basePtr.advanced(by: pixelCoordsSizeOffset).withMemoryRebound(to: Int32.self, capacity: 1) { rebounded in
+        rebounded.pointee = pixelCoordsSizeValue
     }
 }

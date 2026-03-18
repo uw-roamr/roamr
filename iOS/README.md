@@ -10,6 +10,12 @@
 
 Core components:
 
+## ExecuTorch
+
+The dynamic model bridge in `Managers/ModelRunner.swift` is written to use the
+official ExecuTorch Swift package when it is linked into the app. Until that
+package is added in Xcode, `ml_open_model` will return `runtime_unavailable`.
+
 ## How build new WAMR
 - Clone WAMR (https://github.com/bytecodealliance/wasm-micro-runtime)
 - Navigate to `/wasm-micro-runtime/product-mini/platforms`

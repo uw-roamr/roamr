@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct LocalWasmFile: Identifiable, Codable {
+struct LocalWasmFile: Identifiable, Codable, Equatable {
     let id: String
     let remoteId: String
     let name: String

@@ -11,6 +11,7 @@ namespace mapping{
     Odometry = 2,
     Planning = 3,
     Frontiers = 4,
+    Semantic = 5,
   };
 
   struct MapImage {

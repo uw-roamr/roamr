@@ -15,7 +15,7 @@ namespace {
 
 constexpr int32_t kMaxPixels = Map::kMaxImageWidth * Map::kMaxImageHeight;
 constexpr int32_t kPoseLineLength = 10;
-constexpr bool kEmitCompositeMapFrame = false;
+constexpr bool kEmitCompositeMapFrame = true;
 
 static std::array<uint8_t, kMaxPixels * 4> s_image_buf{};
 static std::array<uint8_t, kMaxPixels * 4> s_base_layer_buf{};
@@ -55,6 +55,113 @@ inline void paint_pixel(
   s_image_buf[off + 1] = g;
   s_image_buf[off + 2] = b;
   s_image_buf[off + 3] = a;
+}
+
+void paint_rect(
+    int32_t x_min,
+    int32_t y_min,
+    int32_t x_max,
+    int32_t y_max,
+    uint8_t r,
+    uint8_t g,
+    uint8_t b,
+    uint8_t a) {
+  const int32_t clamped_x_min = std::max(0, x_min);
+  const int32_t clamped_y_min = std::max(0, y_min);
+  const int32_t clamped_x_max = std::min(s_cur_w - 1, x_max);
+  const int32_t clamped_y_max = std::min(s_cur_h - 1, y_max);
+  if (clamped_x_min > clamped_x_max || clamped_y_min > clamped_y_max) {
+    return;
+  }
+  for (int32_t y = clamped_y_min; y <= clamped_y_max; ++y) {
+    for (int32_t x = clamped_x_min; x <= clamped_x_max; ++x) {
+      paint_pixel(x, y, r, g, b, a);
+    }
+  }
+}
+
+bool world_point_to_grid_cell(
+    const MapSnapshot& snapshot,
+    const core::Vector3d& world_point,
+    int32_t* gx,
+    int32_t* gy) {
+  if (!gx || !gy) {
+    return false;
+  }
+  const int32_t cell_x = static_cast<int32_t>(
+      std::floor(
+          (world_point.x - snapshot.meta.origin_x_m) /
+          snapshot.meta.resolution_m));
+  const int32_t cell_y = static_cast<int32_t>(
+      std::floor(
+          (world_point.y - snapshot.meta.origin_y_m) /
+          snapshot.meta.resolution_m));
+  if (cell_x < 0 || cell_x >= snapshot.meta.width ||
+      cell_y < 0 || cell_y >= snapshot.meta.height) {
+    return false;
+  }
+  *gx = cell_x;
+  *gy = cell_y;
+  return true;
+}
+
+bool snapshot_cell_is_occupied(
+    const MapSnapshot& snapshot,
+    int32_t gx,
+    int32_t gy) {
+  if (gx < 0 || gx >= snapshot.meta.width ||
+      gy < 0 || gy >= snapshot.meta.height) {
+    return false;
+  }
+  const int32_t idx = gx + gy * snapshot.meta.width;
+  return snapshot.occupancy[static_cast<size_t>(idx)] >= 50;
+}
+
+void paint_grid_cell(
+    const MapSnapshot& snapshot,
+    int32_t gx,
+    int32_t gy,
+    float scale,
+    float off_x,
+    float off_y,
+    uint8_t r,
+    uint8_t g,
+    uint8_t b,
+    uint8_t a) {
+  if (gx < 0 || gx >= snapshot.meta.width ||
+      gy < 0 || gy >= snapshot.meta.height) {
+    return;
+  }
+
+  const int32_t x_min = static_cast<int32_t>(
+      std::floor(off_x + static_cast<float>(gx) * scale));
+  const int32_t x_max = static_cast<int32_t>(
+      std::ceil(off_x + static_cast<float>(gx + 1) * scale)) - 1;
+  const int32_t y_min = static_cast<int32_t>(
+      std::floor(off_y + static_cast<float>(snapshot.meta.height - 1 - gy) * scale));
+  const int32_t y_max = static_cast<int32_t>(
+      std::ceil(off_y + static_cast<float>(snapshot.meta.height - gy) * scale)) - 1;
+
+  if (x_min <= x_max && y_min <= y_max) {
+    paint_rect(x_min, y_min, x_max, y_max, r, g, b, a);
+    return;
+  }
+
+  int32_t ppx = 0;
+  int32_t ppy = 0;
+  if (snapshot_grid_to_pixel(
+          snapshot.meta,
+          gx,
+          gy,
+          s_cur_w,
+          s_cur_h,
+          scale,
+          off_x,
+          off_y,
+          &ppx,
+          &ppy)) {
+    paint_pixel(ppx, ppy, r, g, b, a);
+  }
 }
 
 void draw_line(
@@ -356,6 +463,95 @@ void draw_frontiers(
   }
 }
 
+void draw_semantic_landmarks(
+    const MapSnapshot& snapshot,
+    const std::vector<semantic::SemanticLandmark>& semantic_landmarks,
+    float scale,
+    float off_x,
+    float off_y) {
+  constexpr int32_t kSemanticSnapRadiusCells = 1;
+
+  for (const semantic::SemanticLandmark& landmark : semantic_landmarks) {
+    uint8_t r = 255;
+    uint8_t g = 255;
+    uint8_t b = 255;
+    switch (landmark.label) {
+      case semantic::SemanticLabel::kApple:
+        r = 255;
+        g = 0;
+        b = 0;
+        break;
+      case semantic::SemanticLabel::kOrange:
+        r = 255;
+        g = 165;
+        b = 0;
+        break;
+      case semantic::SemanticLabel::kUnknown:
+      default:
+        break;
+    }
+
+    std::vector<int32_t> footprint_cell_keys;
+    footprint_cell_keys.reserve(landmark.footprint_world_points.size() + 1);
+    auto append_unique_footprint_cell = [&](const core::Vector3d& world_point) {
+      int32_t gx = 0;
+      int32_t gy = 0;
+      if (!world_point_to_grid_cell(snapshot, world_point, &gx, &gy)) {
+        return;
+      }
+      const int32_t key = gy * snapshot.meta.width + gx;
+      if (std::find(
+              footprint_cell_keys.begin(),
+              footprint_cell_keys.end(),
+              key) != footprint_cell_keys.end()) {
+        return;
+      }
+      footprint_cell_keys.push_back(key);
+    };
+
+    append_unique_footprint_cell(landmark.world_point);
+    for (const core::Vector3d& world_point : landmark.footprint_world_points) {
+      append_unique_footprint_cell(world_point);
+    }
+
+    std::vector<int32_t> occupied_cell_keys;
+    occupied_cell_keys.reserve(footprint_cell_keys.size());
+    for (const int32_t key : footprint_cell_keys) {
+      const int32_t base_gx = key % snapshot.meta.width;
+      const int32_t base_gy = key / snapshot.meta.width;
+      for (int32_t dy = -kSemanticSnapRadiusCells;
+           dy <= kSemanticSnapRadiusCells;
+           ++dy) {
+        for (int32_t dx = -kSemanticSnapRadiusCells;
+             dx <= kSemanticSnapRadiusCells;
+             ++dx) {
+          const int32_t gx = base_gx + dx;
+          const int32_t gy = base_gy + dy;
+          if (!snapshot_cell_is_occupied(snapshot, gx, gy)) {
+            continue;
+          }
+          const int32_t occupied_key = gy * snapshot.meta.width + gx;
+          if (std::find(
+                  occupied_cell_keys.begin(),
+                  occupied_cell_keys.end(),
+                  occupied_key) != occupied_cell_keys.end()) {
+            continue;
+          }
+          occupied_cell_keys.push_back(occupied_key);
+        }
+      }
+    }
+
+    const std::vector<int32_t>& cells_to_paint =
+        occupied_cell_keys.empty() ? footprint_cell_keys : occupied_cell_keys;
+    for (const int32_t key : cells_to_paint) {
+      const int32_t gx = key % snapshot.meta.width;
+      const int32_t gy = key / snapshot.meta.width;
+      paint_grid_cell(snapshot, gx, gy, scale, off_x, off_y, r, g, b, 255);
+    }
+  }
+}
+
 void cache_static_layers(
     const MapSnapshot& snapshot,
     const planning::bridge::PlanningOverlay& overlay,
@@ -433,6 +629,8 @@ void render_map_frame(
     const MapSnapshot& snapshot,
     const PoseTrailState& pose_trail,
     const planning::bridge::PlanningOverlay& overlay,
+    const std::vector<semantic::SemanticLandmark>& semantic_landmarks,
+    uint64_t semantic_revision,
     uint64_t overlay_revision,
     int32_t width,
     int32_t height,
@@ -490,6 +688,10 @@ void render_map_frame(
   draw_pose_trail(snapshot, pose_trail, scale, off_x, off_y);
   draw_pose(snapshot, scale, off_x, off_y);
   emit_frame(MapRenderLayerId::Odometry, snapshot.timestamp, out_frame);
+
+  clear_image(0, 0, 0, 0);
+  draw_semantic_landmarks(snapshot, semantic_landmarks, scale, off_x, off_y);
+  emit_frame(MapRenderLayerId::Semantic, snapshot.timestamp, out_frame);
 
   if (!kEmitCompositeMapFrame) {
     return;

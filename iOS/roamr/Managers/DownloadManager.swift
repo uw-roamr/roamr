@@ -11,6 +11,8 @@ import Foundation
 class DownloadManager {
     static let shared = DownloadManager()
 
+    private static let wasmMagic = Data([0x00, 0x61, 0x73, 0x6D])
+
     private let fileManager = FileManager.default
     private let wasmFolderName = "WasmFiles"
     private let indexFileName = "downloaded_files.json"
@@ -147,9 +149,53 @@ class DownloadManager {
         loadIndex()
     }
 
+    func importUploadedWasm(data: Data, fileName: String) throws -> LocalWasmFile {
+        createWasmFolderIfNeeded()
+
+        let trimmedName = fileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let proposedName = trimmedName.isEmpty ? "uploaded.wasm" : trimmedName
+        let sanitizedFileName = sanitizeUploadedFileName(proposedName)
+        guard sanitizedFileName.lowercased().hasSuffix(".wasm") else {
+            throw DownloadError.invalidUploadedFile("Uploaded file must have a .wasm extension.")
+        }
+        guard data.count >= Self.wasmMagic.count, data.prefix(Self.wasmMagic.count) == Self.wasmMagic else {
+            throw DownloadError.invalidUploadedFile("Uploaded file is not a valid WebAssembly module.")
+        }
+
+        let uploadId = UUID().uuidString
+        let localFileURL = wasmFolderURL.appendingPathComponent("\(uploadId)_\(sanitizedFileName)")
+        try data.write(to: localFileURL, options: .atomic)
+
+        let displayName = URL(fileURLWithPath: sanitizedFileName).deletingPathExtension().lastPathComponent
+        let localFile = LocalWasmFile(
+            id: UUID().uuidString,
+            remoteId: "upload:\(uploadId)",
+            name: displayName,
+            fileName: sanitizedFileName,
+            description: "Uploaded from web UI",
+            uploaderName: "Web Upload",
+            fileSize: data.count,
+            downloadedAt: Date(),
+            localPath: localFileURL.path
+        )
+
+        downloadedFiles.append(localFile)
+        downloadedFiles.sort { $0.downloadedAt > $1.downloadedAt }
+        saveIndex()
+        loadIndex()
+        return downloadedFiles.first(where: { $0.remoteId == localFile.remoteId }) ?? localFile
+    }
+
+    private func sanitizeUploadedFileName(_ fileName: String) -> String {
+        let lastPathComponent = URL(fileURLWithPath: fileName).lastPathComponent
+        let sanitized = lastPathComponent.replacingOccurrences(of: "/", with: "_")
+        return sanitized.isEmpty ? "uploaded.wasm" : sanitized
+    }
+
     enum DownloadError: LocalizedError {
         case invalidFile
         case downloadFailed
+        case invalidUploadedFile(String)
 
         var errorDescription: String? {
             switch self {
@@ -157,6 +203,8 @@ class DownloadManager {
                 return "Invalid file ID"
             case .downloadFailed:
                 return "Download failed"
+            case .invalidUploadedFile(let message):
+                return message
             }
         }
     }

@@ -1,5 +1,5 @@
 {
-  "originHash" : "7ed78cec4688813732ed048994a6c24c5c081e333197fce4007040cea0ee7d0c",
+  "originHash" : "4305e60d5aa854849d41df56f63e6c097f64657a2b55ab172d00761806e2b9cf",
   "pins" : [
     {
       "identity" : "abseil-cpp-binary",
@@ -26,6 +26,15 @@
       "state" : {
         "revision" : "2781038865a80e2c425a1da12cc1327bcd56501f",
         "version" : "1.7.6"
+      }
+    },
+    {
+      "identity" : "executorch",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/pytorch/executorch.git",
+      "state" : {
+        "branch" : "swiftpm-1.1.0",
+        "revision" : "e26187330ab28e76f6427783ce6e3664bac63484"
       }
     },
     {
