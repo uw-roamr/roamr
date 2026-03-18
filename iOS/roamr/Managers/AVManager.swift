@@ -1682,7 +1682,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
             confidencePointer = CVPixelBufferGetBaseAddress(confidenceMap)?.assumingMemoryBound(to: UInt8.self)
             confidenceStride = CVPixelBufferGetBytesPerRow(confidenceMap)
         }
-        let minimumConfidence = UInt8(ARConfidenceLevel.medium.rawValue)
+        let minimumConfidence = UInt8(ARConfidenceLevel.high.rawValue)
 
         let intrinsics = frame.camera.intrinsics
         let fx = intrinsics.columns.0.x
