@@ -19,7 +19,7 @@ int16_t clamp_cell_score(int value) {
   return static_cast<int16_t>(value);
 }
 
-void maybe_record_cell_change(
+void maybe_append_newly_occupied_cell(
     int32_t x,
     int32_t y,
     int32_t width,
@@ -30,13 +30,9 @@ void maybe_record_cell_change(
     std::vector<planning::GridCoord>* newly_occupied_cells,
     std::vector<uint32_t>* newly_occupied_mask,
     uint32_t newly_occupied_stamp) {
+  const size_t idx = static_cast<size_t>(x + y * width);
   const bool old_occupied = old_visited && old_confirmed;
   const bool new_occupied = new_visited && new_confirmed;
-  if (old_visited == new_visited && old_confirmed == new_confirmed) {
-    return;
-  }
-
-  const size_t idx = static_cast<size_t>(x + y * width);
   if (!old_occupied && new_occupied && newly_occupied_cells) {
     bool should_append = true;
     if (newly_occupied_mask && idx < newly_occupied_mask->size()) {
@@ -199,17 +195,16 @@ void Map::integrate_ray(
   int y = y0;
   while (true) {
     const int32_t idx = grid_index(x, y);
-    const bool old_visited = visited_[idx] != 0;
-    const bool old_confirmed = confirmed_[idx] != 0;
-    visited_[idx] = 1;
-
     if (x == x1 && y == y1) {
+      const bool old_visited = visited_[idx] != 0;
+      const bool old_confirmed = confirmed_[idx] != 0;
+      visited_[idx] = 1;
       const int16_t count = clamp_cell_score(scan_count_[idx] + kHitIncrement);
       scan_count_[idx] = count;
       if (count >= kOccupiedThreshold) {
         confirmed_[idx] = 1;
       }
-      maybe_record_cell_change(
+      maybe_append_newly_occupied_cell(
           x,
           y,
           kMapSizeX,
@@ -223,22 +218,12 @@ void Map::integrate_ray(
       break;
     }
 
+    visited_[idx] = 1;
     const int16_t count = clamp_cell_score(scan_count_[idx] - kFreeDecrement);
     scan_count_[idx] = count;
     if (confirmed_[idx] && count <= kClearThreshold) {
       confirmed_[idx] = 0;
     }
-    maybe_record_cell_change(
-        x,
-        y,
-        kMapSizeX,
-        old_visited,
-        old_confirmed,
-        visited_[idx] != 0,
-        confirmed_[idx] != 0,
-        newly_occupied_cells,
-        newly_occupied_mask,
-        newly_occupied_stamp);
 
     const int e2 = 2 * err;
     if (e2 >= dy) {
@@ -267,25 +252,12 @@ void Map::integrate_free_ray(
   int y = y0;
   while (true) {
     const int32_t idx = grid_index(x, y);
-    const bool old_visited = visited_[idx] != 0;
-    const bool old_confirmed = confirmed_[idx] != 0;
     visited_[idx] = 1;
     const int16_t count = clamp_cell_score(scan_count_[idx] - kFreeDecrement);
     scan_count_[idx] = count;
     if (confirmed_[idx] && count <= kClearThreshold) {
       confirmed_[idx] = 0;
     }
-    maybe_record_cell_change(
-        x,
-        y,
-        kMapSizeX,
-        old_visited,
-        old_confirmed,
-        visited_[idx] != 0,
-        confirmed_[idx] != 0,
-        nullptr,
-        nullptr,
-        0);
     if (x == x1 && y == y1) {
       break;
     }

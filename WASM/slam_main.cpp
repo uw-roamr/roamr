@@ -1597,6 +1597,7 @@ int main(){
             const bool have_active_overlay_path =
                 current_overlay.source_map_revision > 0 &&
                 !current_overlay.path_grid.empty();
+            const bool manual_goal_active = planning::bridge::has_active_goal();
             const bool new_occupancy_hits_path =
                 !goal_changed &&
                 !start_cell_changed &&
@@ -1619,6 +1620,7 @@ int main(){
                             << " last_start_cell=(" << last_start_cell.x << "," << last_start_cell.y << ")"
                             << " map_changed=" << (map_changed ? 1 : 0)
                             << " goal_changed=" << (goal_changed ? 1 : 0)
+                            << " manual_goal_active=" << (manual_goal_active ? 1 : 0)
                             << " start_cell_changed=" << (start_cell_changed ? 1 : 0)
                             << " have_active_overlay_path=" << (have_active_overlay_path ? 1 : 0)
                             << " delta_events=" << pending_delta_events.size()
@@ -1653,6 +1655,7 @@ int main(){
             }
             if (map_changed &&
                 !goal_changed &&
+                manual_goal_active &&
                 !start_cell_changed &&
                 have_active_overlay_path &&
                 !delta_overflowed &&
@@ -1683,7 +1686,6 @@ int main(){
                     kRenderHeight);
             const bool published_path = !overlay.path_grid.empty();
             const bool have_frontier_candidates = !overlay.frontier_candidates.empty();
-            const bool manual_goal_active = planning::bridge::has_active_goal();
             const bool no_reachable_frontiers =
                 !manual_goal_active && !have_frontier_candidates;
             const bool frontier_confirmation_scan_complete =
