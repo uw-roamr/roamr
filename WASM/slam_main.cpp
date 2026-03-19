@@ -110,6 +110,12 @@ struct MappingStats {
     uint64_t window_lidar_frames = 0;
     double total_integrate_seconds = 0.0;
     double max_integrate_seconds = 0.0;
+    double total_classify_seconds = 0.0;
+    double max_classify_seconds = 0.0;
+    double total_hit_integrate_seconds = 0.0;
+    double max_hit_integrate_seconds = 0.0;
+    double total_free_integrate_seconds = 0.0;
+    double max_free_integrate_seconds = 0.0;
     double total_snapshot_seconds = 0.0;
     double max_snapshot_seconds = 0.0;
     double total_map_lock_seconds = 0.0;
@@ -120,8 +126,18 @@ struct MappingStats {
     double max_frame_seconds = 0.0;
     size_t total_points = 0;
     size_t max_points = 0;
+    size_t total_selected_hit_bins = 0;
+    size_t max_selected_hit_bins = 0;
+    size_t total_selected_free_bins = 0;
+    size_t max_selected_free_bins = 0;
     double window_total_integrate_seconds = 0.0;
     double window_max_integrate_seconds = 0.0;
+    double window_total_classify_seconds = 0.0;
+    double window_max_classify_seconds = 0.0;
+    double window_total_hit_integrate_seconds = 0.0;
+    double window_max_hit_integrate_seconds = 0.0;
+    double window_total_free_integrate_seconds = 0.0;
+    double window_max_free_integrate_seconds = 0.0;
     double window_total_snapshot_seconds = 0.0;
     double window_max_snapshot_seconds = 0.0;
     double window_total_map_lock_seconds = 0.0;
@@ -132,6 +148,10 @@ struct MappingStats {
     double window_max_frame_seconds = 0.0;
     size_t window_total_points = 0;
     size_t window_max_points = 0;
+    size_t window_total_selected_hit_bins = 0;
+    size_t window_max_selected_hit_bins = 0;
+    size_t window_total_selected_free_bins = 0;
+    size_t window_max_selected_free_bins = 0;
     std::chrono::steady_clock::time_point start_time{};
     std::chrono::steady_clock::time_point last_summary_time{};
     bool started = false;
@@ -294,11 +314,16 @@ static void record_snapshot_consumer_render(
 
 static void record_mapping_frame(
     double integrate_seconds,
+    double classify_seconds,
+    double hit_integrate_seconds,
+    double free_integrate_seconds,
     double snapshot_seconds,
     double map_lock_seconds,
     double publish_seconds,
     double total_seconds,
-    size_t point_count) {
+    size_t point_count,
+    size_t selected_hit_bins,
+    size_t selected_free_bins) {
     const auto now = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lk(g_mapping_stats_mutex);
     if (!g_mapping_stats.started) {
@@ -311,6 +336,15 @@ static void record_mapping_frame(
     g_mapping_stats.total_integrate_seconds += integrate_seconds;
     g_mapping_stats.max_integrate_seconds =
         std::max(g_mapping_stats.max_integrate_seconds, integrate_seconds);
+    g_mapping_stats.total_classify_seconds += classify_seconds;
+    g_mapping_stats.max_classify_seconds =
+        std::max(g_mapping_stats.max_classify_seconds, classify_seconds);
+    g_mapping_stats.total_hit_integrate_seconds += hit_integrate_seconds;
+    g_mapping_stats.max_hit_integrate_seconds =
+        std::max(g_mapping_stats.max_hit_integrate_seconds, hit_integrate_seconds);
+    g_mapping_stats.total_free_integrate_seconds += free_integrate_seconds;
+    g_mapping_stats.max_free_integrate_seconds =
+        std::max(g_mapping_stats.max_free_integrate_seconds, free_integrate_seconds);
     g_mapping_stats.total_snapshot_seconds += snapshot_seconds;
     g_mapping_stats.max_snapshot_seconds =
         std::max(g_mapping_stats.max_snapshot_seconds, snapshot_seconds);
@@ -325,9 +359,24 @@ static void record_mapping_frame(
         std::max(g_mapping_stats.max_frame_seconds, total_seconds);
     g_mapping_stats.total_points += point_count;
     g_mapping_stats.max_points = std::max(g_mapping_stats.max_points, point_count);
+    g_mapping_stats.total_selected_hit_bins += selected_hit_bins;
+    g_mapping_stats.max_selected_hit_bins =
+        std::max(g_mapping_stats.max_selected_hit_bins, selected_hit_bins);
+    g_mapping_stats.total_selected_free_bins += selected_free_bins;
+    g_mapping_stats.max_selected_free_bins =
+        std::max(g_mapping_stats.max_selected_free_bins, selected_free_bins);
     g_mapping_stats.window_total_integrate_seconds += integrate_seconds;
     g_mapping_stats.window_max_integrate_seconds =
         std::max(g_mapping_stats.window_max_integrate_seconds, integrate_seconds);
+    g_mapping_stats.window_total_classify_seconds += classify_seconds;
+    g_mapping_stats.window_max_classify_seconds =
+        std::max(g_mapping_stats.window_max_classify_seconds, classify_seconds);
+    g_mapping_stats.window_total_hit_integrate_seconds += hit_integrate_seconds;
+    g_mapping_stats.window_max_hit_integrate_seconds =
+        std::max(g_mapping_stats.window_max_hit_integrate_seconds, hit_integrate_seconds);
+    g_mapping_stats.window_total_free_integrate_seconds += free_integrate_seconds;
+    g_mapping_stats.window_max_free_integrate_seconds =
+        std::max(g_mapping_stats.window_max_free_integrate_seconds, free_integrate_seconds);
     g_mapping_stats.window_total_snapshot_seconds += snapshot_seconds;
     g_mapping_stats.window_max_snapshot_seconds =
         std::max(g_mapping_stats.window_max_snapshot_seconds, snapshot_seconds);
@@ -342,6 +391,12 @@ static void record_mapping_frame(
         std::max(g_mapping_stats.window_max_frame_seconds, total_seconds);
     g_mapping_stats.window_total_points += point_count;
     g_mapping_stats.window_max_points = std::max(g_mapping_stats.window_max_points, point_count);
+    g_mapping_stats.window_total_selected_hit_bins += selected_hit_bins;
+    g_mapping_stats.window_max_selected_hit_bins =
+        std::max(g_mapping_stats.window_max_selected_hit_bins, selected_hit_bins);
+    g_mapping_stats.window_total_selected_free_bins += selected_free_bins;
+    g_mapping_stats.window_max_selected_free_bins =
+        std::max(g_mapping_stats.window_max_selected_free_bins, selected_free_bins);
     const double summary_interval_seconds = 3.0;
     const double elapsed_since_summary =
         std::chrono::duration<double>(now - g_mapping_stats.last_summary_time).count();
@@ -360,6 +415,26 @@ static void record_mapping_frame(
                static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
             : 0.0;
     const double max_integrate_ms = g_mapping_stats.window_max_integrate_seconds * 1000.0;
+    const double avg_classify_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_classify_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_classify_ms = g_mapping_stats.window_max_classify_seconds * 1000.0;
+    const double avg_hit_integrate_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_hit_integrate_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_hit_integrate_ms =
+        g_mapping_stats.window_max_hit_integrate_seconds * 1000.0;
+    const double avg_free_integrate_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_free_integrate_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_free_integrate_ms =
+        g_mapping_stats.window_max_free_integrate_seconds * 1000.0;
     const double avg_snapshot_ms =
         (g_mapping_stats.window_lidar_frames > 0)
             ? (g_mapping_stats.window_total_snapshot_seconds /
@@ -389,21 +464,42 @@ static void record_mapping_frame(
             ? (static_cast<double>(g_mapping_stats.window_total_points) /
                static_cast<double>(g_mapping_stats.window_lidar_frames))
             : 0.0;
+    const double avg_selected_hit_bins =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (static_cast<double>(g_mapping_stats.window_total_selected_hit_bins) /
+               static_cast<double>(g_mapping_stats.window_lidar_frames))
+            : 0.0;
+    const double avg_selected_free_bins =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (static_cast<double>(g_mapping_stats.window_total_selected_free_bins) /
+               static_cast<double>(g_mapping_stats.window_lidar_frames))
+            : 0.0;
     std::ostringstream log;
     log << "[mapping][profile]"
         << " window=" << elapsed_since_summary << "s"
         << " frames=" << g_mapping_stats.window_lidar_frames
         << " hz=" << hz
         << " integrate_ms=" << avg_integrate_ms << "/" << max_integrate_ms
+        << " classify_ms=" << avg_classify_ms << "/" << max_classify_ms
+        << " hit_integrate_ms=" << avg_hit_integrate_ms << "/" << max_hit_integrate_ms
+        << " free_integrate_ms=" << avg_free_integrate_ms << "/" << max_free_integrate_ms
         << " snapshot_ms=" << avg_snapshot_ms << "/" << max_snapshot_ms
         << " map_lock_ms=" << avg_map_lock_ms << "/" << max_map_lock_ms
         << " publish_ms=" << avg_publish_ms << "/" << max_publish_ms
         << " total_ms=" << avg_total_ms << "/" << max_total_ms
-        << " pts=" << avg_points << "/" << g_mapping_stats.window_max_points;
+        << " pts=" << avg_points << "/" << g_mapping_stats.window_max_points
+        << " hit_bins=" << avg_selected_hit_bins << "/" << g_mapping_stats.window_max_selected_hit_bins
+        << " free_bins=" << avg_selected_free_bins << "/" << g_mapping_stats.window_max_selected_free_bins;
     g_mapping_stats.last_summary_time = now;
     g_mapping_stats.window_lidar_frames = 0;
     g_mapping_stats.window_total_integrate_seconds = 0.0;
     g_mapping_stats.window_max_integrate_seconds = 0.0;
+    g_mapping_stats.window_total_classify_seconds = 0.0;
+    g_mapping_stats.window_max_classify_seconds = 0.0;
+    g_mapping_stats.window_total_hit_integrate_seconds = 0.0;
+    g_mapping_stats.window_max_hit_integrate_seconds = 0.0;
+    g_mapping_stats.window_total_free_integrate_seconds = 0.0;
+    g_mapping_stats.window_max_free_integrate_seconds = 0.0;
     g_mapping_stats.window_total_snapshot_seconds = 0.0;
     g_mapping_stats.window_max_snapshot_seconds = 0.0;
     g_mapping_stats.window_total_map_lock_seconds = 0.0;
@@ -414,6 +510,10 @@ static void record_mapping_frame(
     g_mapping_stats.window_max_frame_seconds = 0.0;
     g_mapping_stats.window_total_points = 0;
     g_mapping_stats.window_max_points = 0;
+    g_mapping_stats.window_total_selected_hit_bins = 0;
+    g_mapping_stats.window_max_selected_hit_bins = 0;
+    g_mapping_stats.window_total_selected_free_bins = 0;
+    g_mapping_stats.window_max_selected_free_bins = 0;
     wasm_log_line(log.str());
 }
 
@@ -808,10 +908,10 @@ static constexpr bool kEnablePlannerWakeLogs = false;
 static constexpr int32_t kPlannerPollMs = 50;
 static constexpr double kPlannerMinIntervalSec = 0.35;
 static constexpr int32_t kTelemetryRenderIntervalMs = 33;
-static constexpr double kTelemetryPoseRenderMinIntervalSec = 0.15;
-static constexpr double kPoseTrailMinDistanceM = 0.05;
-static constexpr double kPoseTrailMinYawDeltaRad = 10.0 * core::pi / 180.0;
-static constexpr double kPoseTrailMinIntervalSec = 0.05;
+static constexpr double kTelemetryPoseRenderMinIntervalSec = 0.03;
+static constexpr double kPoseTrailMinDistanceM = 0.015;
+static constexpr double kPoseTrailMinYawDeltaRad = 3.0 * core::pi / 180.0;
+static constexpr double kPoseTrailMinIntervalSec = 0.03;
 static constexpr int32_t kSemanticMappingLoopSleepMs = 125;
 
 struct OuterLoopTurnPidConfig {
@@ -1404,6 +1504,7 @@ int main(){
         const auto frame_started_at = std::chrono::steady_clock::now();
         uint64_t map_revision = 0;
         double integrate_seconds = 0.0;
+        mapping::MapUpdatePerf map_update_perf{};
         double snapshot_seconds = 0.0;
         double map_lock_seconds = 0.0;
         double publish_seconds = 0.0;
@@ -1418,7 +1519,8 @@ int main(){
                 g_map,
                 lc_data,
                 body_to_world,
-                &newly_occupied_cells
+                &newly_occupied_cells,
+                &map_update_perf
             );
             integrate_seconds =
                 std::chrono::duration<double>(
@@ -1469,11 +1571,16 @@ int main(){
                 std::chrono::steady_clock::now() - frame_started_at).count();
         record_mapping_frame(
             integrate_seconds,
+            map_update_perf.classify_seconds,
+            map_update_perf.hit_integrate_seconds,
+            map_update_perf.free_integrate_seconds,
             snapshot_seconds,
             map_lock_seconds,
             publish_seconds,
             total_seconds,
-            lc_data.points_size / sensors::float_per_point);
+            lc_data.points_size / sensors::float_per_point,
+            map_update_perf.selected_hit_bins,
+            map_update_perf.selected_free_bins);
 
         // wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
 

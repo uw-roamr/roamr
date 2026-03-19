@@ -29,6 +29,7 @@ namespace mapping {
   constexpr double kMapLogIntervalSec = 0.1;
   constexpr int kOccupancyRayBins = 512;
   constexpr int kMaxRawPointsPerScan = 12000;
+  constexpr int kMapPreprocessSlices = 1;
 
 
   struct MapPerfWindow {
@@ -43,7 +44,11 @@ namespace mapping {
 
   static MapPerfWindow g_map_perf_window;
 
-  struct RayBinSample {
+  struct DirectionalBinSample {
+    bool has_hit = false;
+    double hit_range2 = std::numeric_limits<double>::infinity();
+    double hit_world_x = 0.0;
+    double hit_world_y = 0.0;
     bool has_free = false;
     double free_range2 = std::numeric_limits<double>::infinity();
     double free_world_x = 0.0;
@@ -66,6 +71,106 @@ namespace mapping {
       bin = kOccupancyRayBins - 1;
     }
     return bin;
+  }
+
+  inline void reset_directional_bins(
+      std::array<DirectionalBinSample, kOccupancyRayBins>* bins) {
+    if (!bins) {
+      return;
+    }
+    for (DirectionalBinSample& bin : *bins) {
+      bin = DirectionalBinSample{};
+    }
+  }
+
+  inline void merge_directional_bins(
+      const std::array<DirectionalBinSample, kOccupancyRayBins>& src,
+      std::array<DirectionalBinSample, kOccupancyRayBins>* dst) {
+    if (!dst) {
+      return;
+    }
+    for (int i = 0; i < kOccupancyRayBins; ++i) {
+      const DirectionalBinSample& src_bin = src[i];
+      DirectionalBinSample& dst_bin = (*dst)[i];
+      if (src_bin.has_hit &&
+          (!dst_bin.has_hit || src_bin.hit_range2 < dst_bin.hit_range2)) {
+        dst_bin.has_hit = true;
+        dst_bin.hit_range2 = src_bin.hit_range2;
+        dst_bin.hit_world_x = src_bin.hit_world_x;
+        dst_bin.hit_world_y = src_bin.hit_world_y;
+      }
+      if (dst_bin.has_hit) {
+        continue;
+      }
+      if (src_bin.has_free &&
+          (!dst_bin.has_free || src_bin.free_range2 < dst_bin.free_range2)) {
+        dst_bin.has_free = true;
+        dst_bin.free_range2 = src_bin.free_range2;
+        dst_bin.free_world_x = src_bin.free_world_x;
+        dst_bin.free_world_y = src_bin.free_world_y;
+      }
+    }
+  }
+
+  void classify_lidar_points_into_directional_bins(
+      const sensors::LidarCameraData& lc_data,
+      int point_begin,
+      int point_end,
+      int point_stride,
+      const core::Vector3d& t_lidar_to_world,
+      double r00,
+      double r01,
+      double r02,
+      double r10,
+      double r11,
+      double r12,
+      double r20,
+      double r21,
+      double r22,
+      std::array<DirectionalBinSample, kOccupancyRayBins>* bins) {
+    if (!bins) {
+      return;
+    }
+    for (int point_idx = point_begin; point_idx < point_end; point_idx += point_stride) {
+      const int i = point_idx * 3;
+      const double lidar_x = lc_data.points[i + 0];
+      const double lidar_y = -lc_data.points[i + 2];
+      const double lidar_z = lc_data.points[i + 1];
+      const double rel_x = r00 * lidar_x + r01 * lidar_y + r02 * lidar_z;
+      const double rel_y = r10 * lidar_x + r11 * lidar_y + r12 * lidar_z;
+      const double world_z =
+          r20 * lidar_x + r21 * lidar_y + r22 * lidar_z + t_lidar_to_world.z;
+      const double z_world = world_z + sensorHeightMeters;
+      if (z_world < mapMinZ || z_world > mapMaxZ) {
+        continue;
+      }
+
+      const int ray_bin = ray_bin_from_angle(std::atan2(lidar_y, lidar_x));
+      DirectionalBinSample& bin = (*bins)[ray_bin];
+      const double planar_range2 = lidar_x * lidar_x + lidar_y * lidar_y;
+      const double r2 = rel_x * rel_x + rel_y * rel_y;
+      if (r2 <= static_cast<double>(mapMaxRangeMeters * mapMaxRangeMeters)) {
+        if (!bin.has_hit || planar_range2 < bin.hit_range2) {
+          bin.has_hit = true;
+          bin.hit_range2 = planar_range2;
+          bin.hit_world_x = rel_x + t_lidar_to_world.x;
+          bin.hit_world_y = rel_y + t_lidar_to_world.y;
+        }
+        continue;
+      }
+
+      if (r2 <= 1e-9 || bin.has_hit) {
+        continue;
+      }
+
+      const double r = std::sqrt(r2);
+      if (!bin.has_free || planar_range2 < bin.free_range2) {
+        bin.has_free = true;
+        bin.free_range2 = planar_range2;
+        bin.free_world_x = t_lidar_to_world.x + rel_x / r * mapMaxRangeMeters;
+        bin.free_world_y = t_lidar_to_world.y + rel_y / r * mapMaxRangeMeters;
+      }
+    }
   }
 
   void initialize_map(Map& map){
@@ -113,9 +218,13 @@ namespace mapping {
   void update_map_from_lidar(Map& map,
                              const sensors::LidarCameraData& lc_data,
                              const core::PoseSE3d& world_T_base_link,
-                             std::vector<planning::GridCoord>* out_newly_occupied_cells
+                             std::vector<planning::GridCoord>* out_newly_occupied_cells,
+                             MapUpdatePerf* out_perf
                             ) {
     const int total_points = static_cast<int>(lc_data.points_size / 3);
+    if (out_perf) {
+      *out_perf = MapUpdatePerf{};
+    }
     if (total_points <= 0) return;
     if (out_newly_occupied_cells) {
       out_newly_occupied_cells->clear();
@@ -172,7 +281,8 @@ namespace mapping {
     constexpr float max_range2 = mapMaxRangeMeters * mapMaxRangeMeters;
     int used_points = 0;
     int free_points = 0;
-    std::array<RayBinSample, kOccupancyRayBins> ray_bins{};
+    std::array<DirectionalBinSample, kOccupancyRayBins> ray_bins{};
+    reset_directional_bins(&ray_bins);
     int32_t start_x = 0;
     int32_t start_y = 0;
     bool scan_ready = false;
@@ -188,59 +298,88 @@ namespace mapping {
     const int point_stride =
         std::max(1, (total_points + kMaxRawPointsPerScan - 1) / kMaxRawPointsPerScan);
 
-    for (int point_idx = 0; point_idx < total_points; point_idx += point_stride) {
-      const int i = point_idx * 3;
-      // LiDAR points are already FLU here, but they still need the fixed
-      // camera-to-body mounting correction: (x, y, z) -> (x, -z, y).
-      const double lidar_x = lc_data.points[i + 0];
-      const double lidar_y = -lc_data.points[i + 2];
-      const double lidar_z = lc_data.points[i + 1];
-      const double rel_x = r00 * lidar_x + r01 * lidar_y + r02 * lidar_z;
-      const double rel_y = r10 * lidar_x + r11 * lidar_y + r12 * lidar_z;
-      const double world_z = r20 * lidar_x + r21 * lidar_y + r22 * lidar_z +
-          t_lidar_to_world.z;
-
-      // only use points that meet certain criteria in world frame (not too low/high, not too far)
-      const double z_world = world_z + sensorHeightMeters;
-      if (z_world < mapMinZ || z_world > mapMaxZ) {
-        continue;
+    const auto classify_started_at = std::chrono::steady_clock::now();
+    if constexpr (kMapPreprocessSlices == 1) {
+      classify_lidar_points_into_directional_bins(
+          lc_data,
+          0,
+          total_points,
+          point_stride,
+          t_lidar_to_world,
+          r00,
+          r01,
+          r02,
+          r10,
+          r11,
+          r12,
+          r20,
+          r21,
+          r22,
+          &ray_bins);
+    } else {
+      std::array<std::array<DirectionalBinSample, kOccupancyRayBins>, kMapPreprocessSlices>
+          slice_bins{};
+      const int slice_span =
+          (total_points + kMapPreprocessSlices - 1) / kMapPreprocessSlices;
+      for (int slice_idx = 0; slice_idx < kMapPreprocessSlices; ++slice_idx) {
+        reset_directional_bins(&slice_bins[slice_idx]);
+        const int point_begin = slice_idx * slice_span;
+        const int point_end = std::min(total_points, point_begin + slice_span);
+        if (point_begin >= point_end) {
+          continue;
+        }
+        classify_lidar_points_into_directional_bins(
+            lc_data,
+            point_begin,
+            point_end,
+            point_stride,
+            t_lidar_to_world,
+            r00,
+            r01,
+            r02,
+            r10,
+            r11,
+            r12,
+            r20,
+            r21,
+            r22,
+            &slice_bins[slice_idx]);
       }
-
-      // Filter range relative to the robot (sensor) position, not the world origin.
-      const double r2 = rel_x * rel_x + rel_y * rel_y;
-
-      if (r2 <= max_range2) {
-        if (used_points < kMaxMapPoints && ensure_scan_ready()) {
-          map.integrate_hit_world(
-              start_x,
-              start_y,
-              map_pose,
-              rel_x + t_lidar_to_world.x,
-              rel_y + t_lidar_to_world.y,
-              out_newly_occupied_cells,
-              out_newly_occupied_cells ? &s_newly_occupied_mask : nullptr,
-              s_newly_occupied_stamp);
-          ++used_points;
-        }
-      } else if (r2 > 1e-9) {
-        // Clip the ray to the max-range radius and register it as free-space
-        // evidence. No occupancy hit will be recorded at the endpoint.
-        const double r = std::sqrt(static_cast<double>(r2));
-        const double clip_x = t_lidar_to_world.x + rel_x / r * mapMaxRangeMeters;
-        const double clip_y = t_lidar_to_world.y + rel_y / r * mapMaxRangeMeters;
-        const double planar_range2 = lidar_x * lidar_x + lidar_y * lidar_y;
-        const int ray_bin = ray_bin_from_angle(std::atan2(lidar_y, lidar_x));
-        RayBinSample& bin = ray_bins[ray_bin];
-        if (!bin.has_free || planar_range2 < bin.free_range2) {
-          bin.has_free = true;
-          bin.free_range2 = planar_range2;
-          bin.free_world_x = clip_x;
-          bin.free_world_y = clip_y;
-        }
+      for (int slice_idx = 0; slice_idx < kMapPreprocessSlices; ++slice_idx) {
+        merge_directional_bins(slice_bins[slice_idx], &ray_bins);
       }
     }
+    const double classify_seconds =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - classify_started_at)
+            .count();
 
-    for (const RayBinSample& bin : ray_bins) {
+    const auto hit_integrate_started_at = std::chrono::steady_clock::now();
+    for (const DirectionalBinSample& bin : ray_bins) {
+      if (!bin.has_hit || used_points >= kMaxMapPoints || !ensure_scan_ready()) {
+        continue;
+      }
+      map.integrate_hit_world(
+          start_x,
+          start_y,
+          map_pose,
+          bin.hit_world_x,
+          bin.hit_world_y,
+          out_newly_occupied_cells,
+          out_newly_occupied_cells ? &s_newly_occupied_mask : nullptr,
+          s_newly_occupied_stamp);
+      ++used_points;
+    }
+    const double hit_integrate_seconds =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - hit_integrate_started_at)
+            .count();
+
+    const auto free_integrate_started_at = std::chrono::steady_clock::now();
+    for (const DirectionalBinSample& bin : ray_bins) {
+      if (bin.has_hit) {
+        continue;
+      }
       if (bin.has_free && free_points < kMaxFreeRays && ensure_scan_ready()) {
         map.integrate_free_world(
             start_x,
@@ -249,6 +388,17 @@ namespace mapping {
             bin.free_world_y);
         ++free_points;
       }
+    }
+    const double free_integrate_seconds =
+        std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - free_integrate_started_at)
+            .count();
+    if (out_perf) {
+      out_perf->classify_seconds = classify_seconds;
+      out_perf->hit_integrate_seconds = hit_integrate_seconds;
+      out_perf->free_integrate_seconds = free_integrate_seconds;
+      out_perf->selected_hit_bins = static_cast<size_t>(used_points);
+      out_perf->selected_free_bins = static_cast<size_t>(free_points);
     }
   }
 }//namespace mapping

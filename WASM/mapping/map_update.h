@@ -6,6 +6,14 @@
 #include "sensors/lidar_camera.h"
 
 namespace mapping{
+    struct MapUpdatePerf {
+      double classify_seconds = 0.0;
+      double hit_integrate_seconds = 0.0;
+      double free_integrate_seconds = 0.0;
+      size_t selected_hit_bins = 0;
+      size_t selected_free_bins = 0;
+    };
+
     void build_rerun_frame_from_lidar(const sensors::LidarCameraData& lc_data,
                                       sensors::LidarCameraData& rerun_out,
                                       const core::PoseSE3d& body_to_world);
@@ -21,5 +29,6 @@ namespace mapping{
   void update_map_from_lidar(Map& map,
                              const sensors::LidarCameraData& lc_data,
                              const core::PoseSE3d& body_to_world,
-                             std::vector<planning::GridCoord>* out_newly_occupied_cells = nullptr);
+                             std::vector<planning::GridCoord>* out_newly_occupied_cells = nullptr,
+                             MapUpdatePerf* out_perf = nullptr);
 };
