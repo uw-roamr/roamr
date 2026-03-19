@@ -1,6 +1,7 @@
 #include "mapping/map_update.h"
 
 #include "mapping/map_metadata.h"
+#include "sensors/calibration.h"
 
 #include <algorithm>
 #include <array>
@@ -75,7 +76,7 @@ namespace mapping {
   }
 
   bool build_map_snapshot(const Map& map,
-                          const core::PoseSE3d& body_to_world,
+                          const core::PoseSE3d& world_T_base_link,
                           double timestamp,
                           uint64_t map_revision,
                           MapSnapshot* out_snapshot) {
@@ -92,9 +93,9 @@ namespace mapping {
     out_snapshot->timestamp = timestamp;
     out_snapshot->map_revision = map_revision;
     out_snapshot->pose = core::PoseSE2d{
-        body_to_world.translation.x,
-        body_to_world.translation.y,
-        core::quat_to_euler_yaw(core::quat_normalize(body_to_world.quaternion))};
+        world_T_base_link.translation.x,
+        world_T_base_link.translation.y,
+        core::quat_to_euler_yaw(core::quat_normalize(world_T_base_link.quaternion))};
     const size_t occupancy_size =
         static_cast<size_t>(meta.width * meta.height);
     if (out_snapshot->occupancy.size() != occupancy_size) {
@@ -111,7 +112,7 @@ namespace mapping {
 
   void update_map_from_lidar(Map& map,
                              const sensors::LidarCameraData& lc_data,
-                             const core::PoseSE3d& body_to_world,
+                             const core::PoseSE3d& world_T_base_link,
                              std::vector<planning::GridCoord>* out_newly_occupied_cells
                             ) {
     const int total_points = static_cast<int>(lc_data.points_size / 3);
@@ -136,15 +137,15 @@ namespace mapping {
       }
     }
 
-    const core::Vector4d q_body_to_world = core::quat_normalize(body_to_world.quaternion);
-    const core::Vector3d& t_body_to_world = body_to_world.translation;
-    const double yaw = core::quat_to_euler_yaw(q_body_to_world);
+    const core::PoseSE3d world_T_lidar =
+        world_T_base_link * sensors::calibration::base_link_T_lidar;
+    const core::Vector4d quat_world_T_lidar = core::quat_normalize(world_T_lidar.quaternion);
+    const core::Vector3d& t_lidar_to_world = world_T_lidar.translation;
+    const double yaw = core::quat_to_euler_yaw(quat_world_T_lidar);
     const core::PoseSE2d map_pose{
-        t_body_to_world.x,
-        t_body_to_world.y,
+        t_lidar_to_world.x,
+        t_lidar_to_world.y,
         yaw};
-    const double cos_yaw = std::cos(yaw);
-    const double sin_yaw = std::sin(yaw);
 
     constexpr float max_range2 = mapMaxRangeMeters * mapMaxRangeMeters;
     int used_points = 0;
@@ -169,24 +170,23 @@ namespace mapping {
       const int i = point_idx * 3;
       // LiDAR points are already FLU here, but they still need the fixed
       // camera-to-body mounting correction: (x, y, z) -> (x, -z, y).
-      const core::Vector3d body_point{
+      const core::Vector3d lidar_point{
           lc_data.points[i + 0],
           -lc_data.points[i + 2],
           lc_data.points[i + 1]};
       const double planar_range2 =
-          body_point.x * body_point.x + body_point.y * body_point.y;
-      const int ray_bin = ray_bin_from_angle(std::atan2(body_point.y, body_point.x));
+          lidar_point.x * lidar_point.x + lidar_point.y * lidar_point.y;
+      const int ray_bin = ray_bin_from_angle(std::atan2(lidar_point.y, lidar_point.x));
 
-      core::Vector3d world_point = core::quat_rotate(q_body_to_world, body_point);
-      world_point += t_body_to_world;
+      const core::Vector3d world_point = world_T_lidar * lidar_point;
       const core::Vector3d& wp = world_point;
 
       // only use points that meet certain criteria in world frame (not too low/high, not too far)
       const float z_world = world_point.z + sensorHeightMeters;
       const bool keep = !(z_world < mapMinZ || z_world > mapMaxZ);
       // Filter range relative to the robot (sensor) position, not the world origin.
-      const double rdx = wp.x - t_body_to_world.x;
-      const double rdy = wp.y - t_body_to_world.y;
+      const double rdx = wp.x - t_lidar_to_world.x;
+      const double rdy = wp.y - t_lidar_to_world.y;
       const double r2 = rdx * rdx + rdy * rdy;
       const bool in_range = (r2 <= max_range2);
       const bool filtered = keep && in_range;
@@ -194,8 +194,8 @@ namespace mapping {
       if (filtered) {
         if (used_points < kMaxMapPoints && ensure_scan_ready()) {
           const core::Vector3d map_point{
-              t_body_to_world.x + cos_yaw * body_point.x - sin_yaw * body_point.y,
-              t_body_to_world.y + sin_yaw * body_point.x + cos_yaw * body_point.y,
+              world_point.x,
+              world_point.y,
               0.0};
           map.integrate_hit_world(
               start_x,
@@ -212,8 +212,8 @@ namespace mapping {
         // Clip the ray to the max-range radius and register it as free-space
         // evidence. No occupancy hit will be recorded at the endpoint.
         const double r = std::sqrt(static_cast<double>(r2));
-        const double clip_x = t_body_to_world.x + rdx / r * mapMaxRangeMeters;
-        const double clip_y = t_body_to_world.y + rdy / r * mapMaxRangeMeters;
+        const double clip_x = t_lidar_to_world.x + rdx / r * mapMaxRangeMeters;
+        const double clip_y = t_lidar_to_world.y + rdy / r * mapMaxRangeMeters;
         RayBinSample& bin = ray_bins[ray_bin];
         if (!bin.has_free || planar_range2 < bin.free_range2) {
           bin.has_free = true;

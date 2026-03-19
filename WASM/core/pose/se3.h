@@ -4,14 +4,31 @@
 namespace core{
 
     struct PoseSE3d{
-        Vector3d translation;
+    Vector3d translation;
     Vector4d quaternion;
-    CoordinateFrameId_t frame_id;
 
     PoseSE3d(){
       translation = {};
       quaternion = quat_identity();
-      frame_id = static_cast<CoordinateFrameId_t>(CoordinateFrameId::kFLU);
+    }
+    PoseSE3d(const Vector3d &translation, const Vector4d &quaternion)
+        : translation(translation),
+          quaternion(quat_normalize(quaternion)) {
+    }
+
+    PoseSE3d operator*(const PoseSE3d& rhs) const noexcept {
+      return PoseSE3d{
+          translation + quat_rotate(quaternion, rhs.translation),
+          quat_normalize(quat_mul(quaternion, rhs.quaternion))};
+    }
+
+    Vector3d operator*(const Vector3d& point) const noexcept {
+      return quat_rotate(quaternion, point) + translation;
+    }
+
+    PoseSE3d& operator*=(const PoseSE3d& rhs) noexcept {
+      *this = *this * rhs;
+      return *this;
     }
   };
 
