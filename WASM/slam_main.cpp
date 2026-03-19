@@ -920,6 +920,7 @@ static void log_sensor_config(const RuntimeSensorConfig& config) {
 static constexpr PoseSource pose_source = PoseSource::fused_IMU_wheel_odom;
 static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
+static constexpr double kStartupWaitLogIntervalSec = 1.0;
 static constexpr int32_t kPathFollowHoldMs = 120;
 static constexpr double kGoalCheckLogIntervalSec = 0.5;
 static constexpr double kHostPoseLogIntervalSec = 1.0 / 30.0;
@@ -961,6 +962,95 @@ static constexpr int kScan4x90SettleSamplesRequired = 3;
 
 static bool read_scan_odom_sample(sensors::WheelOdometryData* out) {
     return read_latest_wheel_odom_snapshot(out);
+}
+
+struct StartupReadiness {
+    bool imu_required = false;
+    bool wheel_required = false;
+    bool lidar_required = false;
+    bool map_required = true;
+    bool imu_ready = false;
+    bool wheel_ready = false;
+    bool lidar_ready = false;
+    bool map_ready = false;
+};
+
+static bool imu_required() {
+    if (!g_sensor_config.imu_enabled) {
+        return false;
+    }
+    return pose_source == PoseSource::IMU ||
+           pose_source == PoseSource::fused_IMU_wheel_odom;
+}
+
+static bool wheel_required() {
+    if (!g_sensor_config.wheel_odometry_enabled) {
+        return false;
+    }
+    return pose_source == PoseSource::wheel_odom ||
+           pose_source == PoseSource::fused_IMU_wheel_odom;
+}
+
+static bool lidar_required() {
+    return g_sensor_config.lidar_points_enabled;
+}
+
+static bool map_snapshot_ready() {
+    return g_first_map_update_done.load(std::memory_order_acquire);
+}
+
+static StartupReadiness read_startup_readiness() {
+    StartupReadiness readiness;
+    readiness.imu_required = imu_required();
+    readiness.wheel_required = wheel_required();
+    readiness.lidar_required = lidar_required();
+    readiness.imu_ready = g_imu_ready.load(std::memory_order_acquire);
+    readiness.wheel_ready = g_wheel_odom_ready.load(std::memory_order_acquire);
+    readiness.lidar_ready = g_lc_ready.load(std::memory_order_acquire);
+    readiness.map_ready = map_snapshot_ready();
+    return readiness;
+}
+
+static bool autonomy_init_ready() {
+    const StartupReadiness readiness = read_startup_readiness();
+    return (!readiness.imu_required || readiness.imu_ready) &&
+           (!readiness.wheel_required || readiness.wheel_ready) &&
+           (!readiness.lidar_required || readiness.lidar_ready) &&
+           (!readiness.map_required || readiness.map_ready);
+}
+
+static bool autonomy_engaged_ready() {
+    return autonomy_init_ready();
+}
+
+static void maybe_log_startup_waiting(
+    std::chrono::steady_clock::time_point* last_log_at,
+    const StartupReadiness& readiness) {
+    if (!last_log_at) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (*last_log_at != std::chrono::steady_clock::time_point::min()) {
+        const double elapsed =
+            std::chrono::duration<double>(now - *last_log_at).count();
+        if (elapsed < kStartupWaitLogIntervalSec) {
+            return;
+        }
+    }
+    if ((!readiness.imu_required || readiness.imu_ready) &&
+        (!readiness.wheel_required || readiness.wheel_ready) &&
+        (!readiness.lidar_required || readiness.lidar_ready) &&
+        readiness.map_ready) {
+        return;
+    }
+    std::ostringstream log;
+    log << "[startup] waiting"
+        << " imu=" << ((!readiness.imu_required || readiness.imu_ready) ? 1 : 0)
+        << " wheel=" << ((!readiness.wheel_required || readiness.wheel_ready) ? 1 : 0)
+        << " lidar=" << ((!readiness.lidar_required || readiness.lidar_ready) ? 1 : 0)
+        << " map=" << (readiness.map_ready ? 1 : 0);
+    wasm_log_line(log.str());
+    *last_log_at = now;
 }
 
 void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
@@ -1111,21 +1201,21 @@ int main(){
 
     std::thread autonomy_thread([&motors, &m_pose](){
         constexpr int kAutonomyFSMSleepMs = 100;
+        auto last_startup_wait_log_at = std::chrono::steady_clock::time_point::min();
 
         // the main high level thread
-        while(!g_imu_ready.load(std::memory_order_acquire) ||
-              !g_lc_ready.load(std::memory_order_acquire)
-        ){
+        while (!autonomy_init_ready()) {
+            maybe_log_startup_waiting(
+                &last_startup_wait_log_at,
+                read_startup_readiness());
             std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
-        }
-        if (pose_source == PoseSource::wheel_odom || pose_source == PoseSource::fused_IMU_wheel_odom){
-            while(!g_wheel_odom_ready.load(std::memory_order_acquire)){
-                std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
-            }
         }
         wasm_log_line("SENSOR_INIT -> AUTONOMY_INIT");
         g_state.store(RobotState::AUTONOMY_INIT, std::memory_order_release);
-        while(!g_first_map_update_done.load(std::memory_order_acquire)){
+        while (!autonomy_engaged_ready()) {
+            maybe_log_startup_waiting(
+                &last_startup_wait_log_at,
+                read_startup_readiness());
             std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
         }
 
@@ -1402,12 +1492,6 @@ int main(){
           static_cast<int8_t>(-1));
       std::vector<planning::GridCoord> newly_occupied_cells;
       newly_occupied_cells.reserve(2048);
-
-      RobotState state;
-      do{
-        state = g_state.load(std::memory_order_acquire);
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      } while (state != RobotState::AUTONOMY_ENGAGED && state != RobotState::AUTONOMY_INIT);
 
       if (pose_source == PoseSource::fused_IMU_wheel_odom || pose_source == PoseSource::wheel_odom){
         while(!g_wheel_odom_ready.load(std::memory_order_acquire)){
