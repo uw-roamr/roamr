@@ -62,15 +62,6 @@ struct MapDeltaEvent {
 static std::deque<MapDeltaEvent> g_planner_delta_queue;
 static bool g_planner_delta_overflowed = false;
 
-struct LatestMapState {
-    core::PoseSE3d body_to_world;
-    double timestamp = 0.0;
-    uint64_t revision = 0;
-    bool valid = false;
-};
-
-static LatestMapState g_latest_map_state;
-
 // IMU globals
 static sensors::calibration::IMUHistoryBuffer g_imu_history;
 static sensors::calibration::IMUCalibration g_imu_calib(g_imu_history);
@@ -117,12 +108,28 @@ static std::atomic<double> g_scan_map_skip_until_timestamp{-1.0};
 struct MappingStats {
     uint64_t integrated_lidar_frames = 0;
     uint64_t window_lidar_frames = 0;
-    double total_update_seconds = 0.0;
-    double max_update_seconds = 0.0;
+    double total_integrate_seconds = 0.0;
+    double max_integrate_seconds = 0.0;
+    double total_snapshot_seconds = 0.0;
+    double max_snapshot_seconds = 0.0;
+    double total_map_lock_seconds = 0.0;
+    double max_map_lock_seconds = 0.0;
+    double total_publish_seconds = 0.0;
+    double max_publish_seconds = 0.0;
+    double total_frame_seconds = 0.0;
+    double max_frame_seconds = 0.0;
     size_t total_points = 0;
     size_t max_points = 0;
-    double window_total_update_seconds = 0.0;
-    double window_max_update_seconds = 0.0;
+    double window_total_integrate_seconds = 0.0;
+    double window_max_integrate_seconds = 0.0;
+    double window_total_snapshot_seconds = 0.0;
+    double window_max_snapshot_seconds = 0.0;
+    double window_total_map_lock_seconds = 0.0;
+    double window_max_map_lock_seconds = 0.0;
+    double window_total_publish_seconds = 0.0;
+    double window_max_publish_seconds = 0.0;
+    double window_total_frame_seconds = 0.0;
+    double window_max_frame_seconds = 0.0;
     size_t window_total_points = 0;
     size_t window_max_points = 0;
     std::chrono::steady_clock::time_point start_time{};
@@ -132,6 +139,22 @@ struct MappingStats {
 
 static std::mutex g_mapping_stats_mutex;
 static MappingStats g_mapping_stats;
+struct SnapshotConsumerStats {
+    uint64_t window_ready = 0;
+    uint64_t window_rendered = 0;
+    uint64_t window_skipped = 0;
+    uint64_t latest_requested_revision = 0;
+    uint64_t latest_received_revision = 0;
+    uint64_t window_total_lag_revision = 0;
+    uint64_t window_max_lag_revision = 0;
+    std::chrono::steady_clock::time_point last_summary_time{};
+    bool started = false;
+};
+
+static std::mutex g_planner_snapshot_stats_mutex;
+static SnapshotConsumerStats g_planner_snapshot_stats;
+static std::mutex g_telemetry_snapshot_stats_mutex;
+static SnapshotConsumerStats g_telemetry_snapshot_stats;
 static semantic::SemanticMapper g_semantic_mapper;
 static sensors::LidarCameraDataV2 g_semantic_lidar_buffer{};
 
@@ -164,7 +187,118 @@ static void reset_mapping_stats() {
     g_mapping_stats = MappingStats{};
 }
 
-static void record_mapping_frame(double update_seconds, size_t point_count) {
+static void reset_snapshot_consumer_stats(
+    std::mutex& stats_mutex,
+    SnapshotConsumerStats* stats) {
+    if (!stats) {
+        return;
+    }
+    std::lock_guard<std::mutex> lk(stats_mutex);
+    *stats = SnapshotConsumerStats{};
+}
+
+static void record_snapshot_consumer_summary_locked(
+    SnapshotConsumerStats* stats,
+    const char* tag,
+    double elapsed_since_summary) {
+    if (!stats || !tag) {
+        return;
+    }
+    const uint64_t lag_samples = stats->window_ready + stats->window_skipped;
+    const double avg_lag_revision =
+        (lag_samples > 0)
+            ? (static_cast<double>(stats->window_total_lag_revision) /
+               static_cast<double>(lag_samples))
+            : 0.0;
+    std::ostringstream log;
+    log << "[" << tag << "][snapshot]"
+        << " window=" << elapsed_since_summary << "s"
+        << " req_rev=" << stats->latest_requested_revision
+        << " got_rev=" << stats->latest_received_revision
+        << " lag_rev=" << avg_lag_revision << "/" << stats->window_max_lag_revision
+        << " ready=" << stats->window_ready
+        << " rendered=" << stats->window_rendered
+        << " skipped=" << stats->window_skipped;
+    stats->window_ready = 0;
+    stats->window_rendered = 0;
+    stats->window_skipped = 0;
+    stats->window_total_lag_revision = 0;
+    stats->window_max_lag_revision = 0;
+    wasm_log_line(log.str());
+}
+
+static void record_snapshot_consumer_event(
+    std::mutex& stats_mutex,
+    SnapshotConsumerStats* stats,
+    const char* tag,
+    uint64_t requested_revision,
+    uint64_t received_revision,
+    bool skipped,
+    bool rendered) {
+    if (!stats || !tag) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lk(stats_mutex);
+    if (!stats->started) {
+        stats->last_summary_time = now;
+        stats->started = true;
+    }
+    stats->latest_requested_revision = requested_revision;
+    stats->latest_received_revision = received_revision;
+    const uint64_t lag_revision =
+        (requested_revision > received_revision) ? (requested_revision - received_revision) : 0;
+    stats->window_total_lag_revision += lag_revision;
+    stats->window_max_lag_revision = std::max(stats->window_max_lag_revision, lag_revision);
+    if (skipped) {
+        stats->window_skipped += 1;
+    } else {
+        stats->window_ready += 1;
+    }
+    if (rendered) {
+        stats->window_rendered += 1;
+    }
+    const double elapsed_since_summary =
+        std::chrono::duration<double>(now - stats->last_summary_time).count();
+    if (elapsed_since_summary < 3.0) {
+        return;
+    }
+    stats->last_summary_time = now;
+    record_snapshot_consumer_summary_locked(stats, tag, elapsed_since_summary);
+}
+
+static void record_snapshot_consumer_render(
+    std::mutex& stats_mutex,
+    SnapshotConsumerStats* stats,
+    const char* tag,
+    uint64_t rendered_revision) {
+    if (!stats || !tag) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lk(stats_mutex);
+    if (!stats->started) {
+        stats->last_summary_time = now;
+        stats->started = true;
+    }
+    stats->latest_received_revision = rendered_revision;
+    stats->window_rendered += 1;
+    const double elapsed_since_summary =
+        std::chrono::duration<double>(now - stats->last_summary_time).count();
+    if (elapsed_since_summary < 3.0) {
+        return;
+    }
+    stats->last_summary_time = now;
+    record_snapshot_consumer_summary_locked(stats, tag, elapsed_since_summary);
+}
+
+static void record_mapping_frame(
+    double integrate_seconds,
+    double snapshot_seconds,
+    double map_lock_seconds,
+    double publish_seconds,
+    double total_seconds,
+    size_t point_count) {
     const auto now = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lk(g_mapping_stats_mutex);
     if (!g_mapping_stats.started) {
@@ -174,13 +308,38 @@ static void record_mapping_frame(double update_seconds, size_t point_count) {
     }
     g_mapping_stats.integrated_lidar_frames += 1;
     g_mapping_stats.window_lidar_frames += 1;
-    g_mapping_stats.total_update_seconds += update_seconds;
-    g_mapping_stats.max_update_seconds = std::max(g_mapping_stats.max_update_seconds, update_seconds);
+    g_mapping_stats.total_integrate_seconds += integrate_seconds;
+    g_mapping_stats.max_integrate_seconds =
+        std::max(g_mapping_stats.max_integrate_seconds, integrate_seconds);
+    g_mapping_stats.total_snapshot_seconds += snapshot_seconds;
+    g_mapping_stats.max_snapshot_seconds =
+        std::max(g_mapping_stats.max_snapshot_seconds, snapshot_seconds);
+    g_mapping_stats.total_map_lock_seconds += map_lock_seconds;
+    g_mapping_stats.max_map_lock_seconds =
+        std::max(g_mapping_stats.max_map_lock_seconds, map_lock_seconds);
+    g_mapping_stats.total_publish_seconds += publish_seconds;
+    g_mapping_stats.max_publish_seconds =
+        std::max(g_mapping_stats.max_publish_seconds, publish_seconds);
+    g_mapping_stats.total_frame_seconds += total_seconds;
+    g_mapping_stats.max_frame_seconds =
+        std::max(g_mapping_stats.max_frame_seconds, total_seconds);
     g_mapping_stats.total_points += point_count;
     g_mapping_stats.max_points = std::max(g_mapping_stats.max_points, point_count);
-    g_mapping_stats.window_total_update_seconds += update_seconds;
-    g_mapping_stats.window_max_update_seconds =
-        std::max(g_mapping_stats.window_max_update_seconds, update_seconds);
+    g_mapping_stats.window_total_integrate_seconds += integrate_seconds;
+    g_mapping_stats.window_max_integrate_seconds =
+        std::max(g_mapping_stats.window_max_integrate_seconds, integrate_seconds);
+    g_mapping_stats.window_total_snapshot_seconds += snapshot_seconds;
+    g_mapping_stats.window_max_snapshot_seconds =
+        std::max(g_mapping_stats.window_max_snapshot_seconds, snapshot_seconds);
+    g_mapping_stats.window_total_map_lock_seconds += map_lock_seconds;
+    g_mapping_stats.window_max_map_lock_seconds =
+        std::max(g_mapping_stats.window_max_map_lock_seconds, map_lock_seconds);
+    g_mapping_stats.window_total_publish_seconds += publish_seconds;
+    g_mapping_stats.window_max_publish_seconds =
+        std::max(g_mapping_stats.window_max_publish_seconds, publish_seconds);
+    g_mapping_stats.window_total_frame_seconds += total_seconds;
+    g_mapping_stats.window_max_frame_seconds =
+        std::max(g_mapping_stats.window_max_frame_seconds, total_seconds);
     g_mapping_stats.window_total_points += point_count;
     g_mapping_stats.window_max_points = std::max(g_mapping_stats.window_max_points, point_count);
     const double summary_interval_seconds = 3.0;
@@ -195,12 +354,36 @@ static void record_mapping_frame(double update_seconds, size_t point_count) {
         (total_mapping_seconds > 1e-6)
             ? (static_cast<double>(g_mapping_stats.integrated_lidar_frames) / total_mapping_seconds)
             : 0.0;
-    const double avg_update_ms =
+    const double avg_integrate_ms =
         (g_mapping_stats.window_lidar_frames > 0)
-            ? (g_mapping_stats.window_total_update_seconds /
+            ? (g_mapping_stats.window_total_integrate_seconds /
                static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
             : 0.0;
-    const double max_update_ms = g_mapping_stats.window_max_update_seconds * 1000.0;
+    const double max_integrate_ms = g_mapping_stats.window_max_integrate_seconds * 1000.0;
+    const double avg_snapshot_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_snapshot_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_snapshot_ms = g_mapping_stats.window_max_snapshot_seconds * 1000.0;
+    const double avg_map_lock_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_map_lock_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_map_lock_ms = g_mapping_stats.window_max_map_lock_seconds * 1000.0;
+    const double avg_publish_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_publish_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_publish_ms = g_mapping_stats.window_max_publish_seconds * 1000.0;
+    const double avg_total_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_frame_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_total_ms = g_mapping_stats.window_max_frame_seconds * 1000.0;
     const double avg_points =
         (g_mapping_stats.window_lidar_frames > 0)
             ? (static_cast<double>(g_mapping_stats.window_total_points) /
@@ -211,12 +394,24 @@ static void record_mapping_frame(double update_seconds, size_t point_count) {
         << " window=" << elapsed_since_summary << "s"
         << " frames=" << g_mapping_stats.window_lidar_frames
         << " hz=" << hz
-        << " update_ms=" << avg_update_ms << "/" << max_update_ms
+        << " integrate_ms=" << avg_integrate_ms << "/" << max_integrate_ms
+        << " snapshot_ms=" << avg_snapshot_ms << "/" << max_snapshot_ms
+        << " map_lock_ms=" << avg_map_lock_ms << "/" << max_map_lock_ms
+        << " publish_ms=" << avg_publish_ms << "/" << max_publish_ms
+        << " total_ms=" << avg_total_ms << "/" << max_total_ms
         << " pts=" << avg_points << "/" << g_mapping_stats.window_max_points;
     g_mapping_stats.last_summary_time = now;
     g_mapping_stats.window_lidar_frames = 0;
-    g_mapping_stats.window_total_update_seconds = 0.0;
-    g_mapping_stats.window_max_update_seconds = 0.0;
+    g_mapping_stats.window_total_integrate_seconds = 0.0;
+    g_mapping_stats.window_max_integrate_seconds = 0.0;
+    g_mapping_stats.window_total_snapshot_seconds = 0.0;
+    g_mapping_stats.window_max_snapshot_seconds = 0.0;
+    g_mapping_stats.window_total_map_lock_seconds = 0.0;
+    g_mapping_stats.window_max_map_lock_seconds = 0.0;
+    g_mapping_stats.window_total_publish_seconds = 0.0;
+    g_mapping_stats.window_max_publish_seconds = 0.0;
+    g_mapping_stats.window_total_frame_seconds = 0.0;
+    g_mapping_stats.window_max_frame_seconds = 0.0;
     g_mapping_stats.window_total_points = 0;
     g_mapping_stats.window_max_points = 0;
     wasm_log_line(log.str());
@@ -333,41 +528,18 @@ static void drain_planner_delta_events_locked(
     g_planner_delta_overflowed = false;
 }
 
-static bool publish_latest_map_snapshot_if_needed(
+static bool copy_published_map_snapshot(
     uint64_t min_revision,
-    mapping::MapSnapshot* out_snapshot = nullptr) {
-    {
-        std::lock_guard<std::mutex> lk(g_map_publish_mutex);
-        if (g_latest_map_snapshot.valid() &&
-            g_latest_map_snapshot.map_revision >= min_revision) {
-            if (out_snapshot) {
-                *out_snapshot = g_latest_map_snapshot;
-            }
-            return true;
-        }
-    }
-
-    mapping::MapSnapshot built_snapshot;
-    {
-        std::lock_guard<std::mutex> lk(g_map_mutex);
-        if (!g_latest_map_state.valid ||
-            g_latest_map_state.revision < min_revision) {
-            return false;
-        }
-        if (!mapping::build_map_snapshot(
-                g_map,
-                g_latest_map_state.body_to_world,
-                g_latest_map_state.timestamp,
-                g_latest_map_state.revision,
-                &built_snapshot)) {
-            return false;
-        }
-    }
-
+    mapping::MapSnapshot* out_snapshot = nullptr,
+    uint64_t* out_published_revision = nullptr) {
     std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+    const uint64_t published_revision = g_latest_map_snapshot.map_revision;
+    if (out_published_revision) {
+        *out_published_revision = published_revision;
+    }
     if (!g_latest_map_snapshot.valid() ||
-        g_latest_map_snapshot.map_revision < built_snapshot.map_revision) {
-        g_latest_map_snapshot = built_snapshot;
+        published_revision < min_revision) {
+        return false;
     }
     if (out_snapshot) {
         *out_snapshot = g_latest_map_snapshot;
@@ -1113,6 +1285,10 @@ int main(){
       double last_map_timestamp = -1.0;
       double last_empty_queue_log_timestamp = -1.0;
       bool logged_first_mapping_frame = false;
+      mapping::MapSnapshot staged_snapshot;
+      staged_snapshot.occupancy.resize(
+          static_cast<size_t>(mapping::Map::kMapSizeX * mapping::Map::kMapSizeY),
+          static_cast<int8_t>(-1));
       std::vector<planning::GridCoord> newly_occupied_cells;
       newly_occupied_cells.reserve(2048);
 
@@ -1131,9 +1307,19 @@ int main(){
       {
         std::lock_guard<std::mutex> lk(g_map_mutex);
         mapping::initialize_map(g_map);
-        g_latest_map_state = LatestMapState{};
       }
+      {
+        std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+        g_latest_map_snapshot = mapping::MapSnapshot{};
+      }
+      g_map_update_revision.store(0, std::memory_order_release);
       reset_mapping_stats();
+      reset_snapshot_consumer_stats(
+          g_planner_snapshot_stats_mutex,
+          &g_planner_snapshot_stats);
+      reset_snapshot_consumer_stats(
+          g_telemetry_snapshot_stats_mutex,
+          &g_telemetry_snapshot_stats);
       wasm_log_line("Map initialized");
 
       while(true){
@@ -1215,11 +1401,18 @@ int main(){
             g_lc_cv.notify_one();
             continue;
         }
+        const auto frame_started_at = std::chrono::steady_clock::now();
         uint64_t map_revision = 0;
+        double integrate_seconds = 0.0;
+        double snapshot_seconds = 0.0;
+        double map_lock_seconds = 0.0;
+        double publish_seconds = 0.0;
+        bool snapshot_ready = false;
         newly_occupied_cells.clear();
-        const auto map_update_started_at = std::chrono::steady_clock::now();
         {
+            const auto map_lock_started_at = std::chrono::steady_clock::now();
             std::lock_guard<std::mutex> lk(g_map_mutex);
+            const auto integrate_started_at = std::chrono::steady_clock::now();
             // project the filtered lidar scan into the occupancy grid.
             mapping::update_map_from_lidar(
                 g_map,
@@ -1227,25 +1420,60 @@ int main(){
                 body_to_world,
                 &newly_occupied_cells
             );
+            integrate_seconds =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - integrate_started_at).count();
             map_revision =
-                g_map_update_revision.fetch_add(1, std::memory_order_acq_rel) + 1;
-            g_latest_map_state.body_to_world = body_to_world;
-                g_latest_map_state.timestamp = candidate_timestamp;
-                g_latest_map_state.revision = map_revision;
-                g_latest_map_state.valid = true;
+                g_map_update_revision.load(std::memory_order_acquire) + 1;
+            const auto snapshot_started_at = std::chrono::steady_clock::now();
+            snapshot_ready = mapping::build_map_snapshot(
+                g_map,
+                body_to_world,
+                candidate_timestamp,
+                map_revision,
+                &staged_snapshot);
+            snapshot_seconds =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - snapshot_started_at).count();
+            map_lock_seconds =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - map_lock_started_at).count();
         }
-        const double map_update_seconds =
-            std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - map_update_started_at).count();
+        if (!snapshot_ready) {
+            {
+                std::lock_guard<std::mutex> lk(g_lc_cv_mutex);
+                g_lc_slot_states[ready_idx] = LidarSlotState::FREE;
+            }
+            g_lc_cv.notify_one();
+            continue;
+        }
+        {
+            const auto publish_started_at = std::chrono::steady_clock::now();
+            std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+            std::swap(g_latest_map_snapshot, staged_snapshot);
+            g_map_update_revision.store(map_revision, std::memory_order_release);
+            publish_seconds =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - publish_started_at).count();
+        }
         if (!g_first_map_update_done.load(std::memory_order_relaxed)) {
             g_first_map_update_done.store(true, std::memory_order_release);
         }
-        record_mapping_frame(map_update_seconds, lc_data.points_size / sensors::float_per_point);
         last_map_timestamp = candidate_timestamp;
         enqueue_planner_delta_event(
             map_revision,
             candidate_timestamp,
             std::move(newly_occupied_cells));
+        const double total_seconds =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - frame_started_at).count();
+        record_mapping_frame(
+            integrate_seconds,
+            snapshot_seconds,
+            map_lock_seconds,
+            publish_seconds,
+            total_seconds,
+            lc_data.points_size / sensors::float_per_point);
 
         // wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
 
@@ -1307,27 +1535,31 @@ int main(){
                 required_snapshot_revision =
                     g_map_update_revision.load(std::memory_order_acquire);
             }
-            publish_latest_map_snapshot_if_needed(
+            uint64_t published_snapshot_revision = 0;
+            const bool have_snapshot = copy_published_map_snapshot(
                 required_snapshot_revision,
-                &snapshot);
+                &snapshot,
+                &published_snapshot_revision);
+            record_snapshot_consumer_event(
+                g_planner_snapshot_stats_mutex,
+                &g_planner_snapshot_stats,
+                "planner",
+                required_snapshot_revision,
+                published_snapshot_revision,
+                !have_snapshot,
+                false);
             planning::bridge::PlanningOverlay current_overlay;
-            if (!snapshot.valid()) {
-                std::lock_guard<std::mutex> lk(g_map_publish_mutex);
-                snapshot = g_latest_map_snapshot;
-            }
             {
                 std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
                 current_overlay = g_latest_plan_overlay;
             }
-            if (!snapshot.valid()) {
-                wasm_log_line("snapshot invalid");
+            if (!have_snapshot || !snapshot.valid()) {
                 continue;
             }
 
 
             sensors::PoseLog pose_snapshot{};
             if (read_latest_pose_snapshot(m_pose, &pose_snapshot)) {
-                wasm_log_line("reading pose snapshot");
                 snapshot.pose = pose_log_to_se2(pose_snapshot);
                 snapshot.timestamp = std::max(snapshot.timestamp, pose_snapshot.timestamp);
             }
@@ -1533,14 +1765,20 @@ int main(){
             if (!cached_snapshot.valid() ||
                 cached_snapshot.map_revision != latest_map_revision) {
                 mapping::MapSnapshot next_snapshot;
-                publish_latest_map_snapshot_if_needed(
+                uint64_t published_snapshot_revision = 0;
+                const bool have_snapshot = copy_published_map_snapshot(
                     latest_map_revision,
-                    &next_snapshot);
-                if (!next_snapshot.valid()) {
-                    std::lock_guard<std::mutex> lk(g_map_publish_mutex);
-                    next_snapshot = g_latest_map_snapshot;
-                }
-                if (!next_snapshot.valid()) {
+                    &next_snapshot,
+                    &published_snapshot_revision);
+                record_snapshot_consumer_event(
+                    g_telemetry_snapshot_stats_mutex,
+                    &g_telemetry_snapshot_stats,
+                    "telemetry",
+                    latest_map_revision,
+                    published_snapshot_revision,
+                    !have_snapshot,
+                    false);
+                if (!have_snapshot || !next_snapshot.valid()) {
                     std::this_thread::sleep_for(
                         std::chrono::milliseconds(kTelemetryRenderIntervalMs));
                     continue;
@@ -1637,6 +1875,11 @@ int main(){
             last_rendered_semantic_revision = semantic_revision;
             last_rendered_pose_timestamp = pose_snapshot.timestamp;
             last_rendered_pose_visual_timestamp = pose_snapshot.timestamp;
+            record_snapshot_consumer_render(
+                g_telemetry_snapshot_stats_mutex,
+                &g_telemetry_snapshot_stats,
+                "telemetry",
+                snapshot.map_revision);
             std::this_thread::sleep_for(
                 std::chrono::milliseconds(kTelemetryRenderIntervalMs));
         }

@@ -22,7 +22,7 @@ struct JoystickView: View {
     private let holdDuration: Int = 100 // 100ms duration for ESP32
     let maxCommand: Double
 
-    init(size: CGFloat = 250, maxCommand: Double = 50, onSettingsTapped: (() -> Void)? = nil, onUpdate: @escaping (Int, Int, Int) -> Void) {
+    init(size: CGFloat = 250, maxCommand: Double = 38, onSettingsTapped: (() -> Void)? = nil, onUpdate: @escaping (Int, Int, Int) -> Void) {
         self.size = size
         self.maxCommand = maxCommand
         self.onSettingsTapped = onSettingsTapped
@@ -37,7 +37,7 @@ struct JoystickView: View {
                     value: $leftValue,
                     tint: .blue,
                     height: size,
-                    maxCommand: 100,
+                    maxCommand: maxCommand,
                     onInteractionChanged: { isActive in
                         updateInteraction(for: .left, isActive: isActive)
                     }
@@ -48,7 +48,7 @@ struct JoystickView: View {
                     value: $rightValue,
                     tint: .green,
                     height: size,
-                    maxCommand: 100,
+                    maxCommand: maxCommand,
                     onInteractionChanged: { isActive in
                         updateInteraction(for: .right, isActive: isActive)
                     }
