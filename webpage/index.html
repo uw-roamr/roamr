@@ -2541,6 +2541,23 @@
 
             mapPlannerTelemetryOverlayEl.style.display = 'block';
 
+            if (snapshot.planner_mode === 'frontier') {
+                fillPlannerGridCells(
+                    snapshot.frontier_candidates,
+                    'rgba(18, 196, 184, 0.28)'
+                );
+                fillPlannerGridCells(
+                    snapshot.selected_frontier_cluster,
+                    'rgba(255, 166, 77, 0.36)'
+                );
+                if (snapshot.selected_frontier_seed) {
+                    drawPlannerSeedMarker(
+                        snapshot.selected_frontier_seed,
+                        'rgba(255, 196, 77, 0.98)'
+                    );
+                }
+            }
+
             strokePlannerPath(snapshot.path_grid, 'rgba(234, 53, 116, 0.98)', 2.5);
             if (snapshot.start_cell) {
                 drawPlannerMarker(snapshot.start_cell, 'rgba(255, 255, 255, 0.98)', 3.5);

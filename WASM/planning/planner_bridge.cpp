@@ -725,6 +725,23 @@ PlanningOverlay update_plan_overlay(
                << planned.selected_seed.y << ")"
                << " message=" << planned.message;
   // wasm_log_line(frontier_log.str());
+  if (!planned.success || planned.path_grid.empty()) {
+    PlanningOverlay cached = copy_cached_overlay();
+    if (!cached.path_grid.empty() && is_overlay_path_valid(snapshot, cached)) {
+      overlay = cached;
+      overlay.source_map_revision = snapshot.map_revision;
+      overlay.frontier_candidates = planned.frontier_cells;
+      overlay.selected_frontier_cluster = planned.selected_cluster_cells;
+      overlay.selected_frontier_seed_enabled = false;
+      overlay.selected_frontier_seed = GridCoord{};
+      if (planned.success || !planned.selected_cluster_cells.empty()) {
+        overlay.selected_frontier_seed_enabled = true;
+        overlay.selected_frontier_seed = planned.selected_seed;
+      }
+      update_cached_overlay(overlay);
+      return overlay;
+    }
+  }
   overlay = overlay_from_frontier_result(snapshot.map_revision, planned);
   update_cached_overlay(overlay);
   return overlay;
