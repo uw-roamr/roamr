@@ -184,9 +184,13 @@ namespace mapping {
                           const core::PoseSE3d& world_T_base_link,
                           double timestamp,
                           uint64_t map_revision,
-                          MapSnapshot* out_snapshot) {
+                          MapSnapshot* out_snapshot,
+                          double* out_occupancy_copy_seconds) {
     if (!out_snapshot) {
       return false;
+    }
+    if (out_occupancy_copy_seconds) {
+      *out_occupancy_copy_seconds = 0.0;
     }
 
     OccupancyGridMetadata meta{};
@@ -206,9 +210,16 @@ namespace mapping {
     if (out_snapshot->occupancy.size() != occupancy_size) {
       out_snapshot->occupancy.resize(occupancy_size, static_cast<int8_t>(-1));
     }
+    const auto occupancy_copy_started_at = std::chrono::steady_clock::now();
     const int32_t copied = map.get_occupancy_grid(
         out_snapshot->occupancy.data(),
         static_cast<int32_t>(out_snapshot->occupancy.size()));
+    if (out_occupancy_copy_seconds) {
+      *out_occupancy_copy_seconds =
+          std::chrono::duration<double>(
+              std::chrono::steady_clock::now() - occupancy_copy_started_at)
+              .count();
+    }
     if (copied != meta.width * meta.height) {
       return false;
     }

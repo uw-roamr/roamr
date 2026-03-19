@@ -20,7 +20,8 @@ namespace mapping{
                             const core::PoseSE3d& body_to_world,
                             double timestamp,
                             uint64_t map_revision,
-                            MapSnapshot* out_snapshot);
+                            MapSnapshot* out_snapshot,
+                            double* out_occupancy_copy_seconds = nullptr);
 
   void update_map_from_lidar(Map& map,
                              const sensors::LidarCameraData& lc_data,

@@ -4,6 +4,7 @@
 #include "mapping/map.h"
 
 #include <cmath>
+#include <cstring>
 
 namespace mapping {
 
@@ -17,6 +18,13 @@ int16_t clamp_cell_score(int value) {
     return Map::kMaxCellScore;
   }
   return static_cast<int16_t>(value);
+}
+
+int8_t occupancy_value_for_cell(bool visited, bool confirmed) {
+  if (!visited) {
+    return -1;
+  }
+  return confirmed ? 100 : 0;
 }
 
 void maybe_append_newly_occupied_cell(
@@ -63,6 +71,7 @@ void Map::reset_map() {
   scan_count_.fill(0);
   confirmed_.fill(0);
   visited_.fill(0);
+  occupancy_.fill(-1);
   hit_cell_scan_stamp_.fill(0);
   current_scan_stamp_ = 0;
   map_origin_initialized_ = 0;
@@ -75,16 +84,7 @@ int32_t Map::get_occupancy_grid(int8_t* out_data, int32_t max_cells) const {
   if (!out_data || max_cells < total) {
     return 0;
   }
-  for (int32_t gy = 0; gy < kMapSizeY; ++gy) {
-    for (int32_t gx = 0; gx < kMapSizeX; ++gx) {
-      const int32_t idx = gx + gy * kMapSizeX;
-      int8_t value = -1;
-      if (visited_[idx]) {
-        value = confirmed_[idx] ? 100 : 0;
-      }
-      out_data[idx] = value;
-    }
-  }
+  std::memcpy(out_data, occupancy_.data(), static_cast<size_t>(total));
   return total;
 }
 
@@ -204,6 +204,9 @@ void Map::integrate_ray(
       if (count >= kOccupiedThreshold) {
         confirmed_[idx] = 1;
       }
+      occupancy_[idx] = occupancy_value_for_cell(
+          visited_[idx] != 0,
+          confirmed_[idx] != 0);
       maybe_append_newly_occupied_cell(
           x,
           y,
@@ -224,6 +227,9 @@ void Map::integrate_ray(
     if (confirmed_[idx] && count <= kClearThreshold) {
       confirmed_[idx] = 0;
     }
+    occupancy_[idx] = occupancy_value_for_cell(
+        visited_[idx] != 0,
+        confirmed_[idx] != 0);
 
     const int e2 = 2 * err;
     if (e2 >= dy) {
@@ -258,6 +264,9 @@ void Map::integrate_free_ray(
     if (confirmed_[idx] && count <= kClearThreshold) {
       confirmed_[idx] = 0;
     }
+    occupancy_[idx] = occupancy_value_for_cell(
+        visited_[idx] != 0,
+        confirmed_[idx] != 0);
     if (x == x1 && y == y1) {
       break;
     }

@@ -118,6 +118,8 @@ struct MappingStats {
     double max_free_integrate_seconds = 0.0;
     double total_snapshot_seconds = 0.0;
     double max_snapshot_seconds = 0.0;
+    double total_snapshot_copy_seconds = 0.0;
+    double max_snapshot_copy_seconds = 0.0;
     double total_map_lock_seconds = 0.0;
     double max_map_lock_seconds = 0.0;
     double total_publish_seconds = 0.0;
@@ -140,6 +142,8 @@ struct MappingStats {
     double window_max_free_integrate_seconds = 0.0;
     double window_total_snapshot_seconds = 0.0;
     double window_max_snapshot_seconds = 0.0;
+    double window_total_snapshot_copy_seconds = 0.0;
+    double window_max_snapshot_copy_seconds = 0.0;
     double window_total_map_lock_seconds = 0.0;
     double window_max_map_lock_seconds = 0.0;
     double window_total_publish_seconds = 0.0;
@@ -318,6 +322,7 @@ static void record_mapping_frame(
     double hit_integrate_seconds,
     double free_integrate_seconds,
     double snapshot_seconds,
+    double snapshot_copy_seconds,
     double map_lock_seconds,
     double publish_seconds,
     double total_seconds,
@@ -348,6 +353,9 @@ static void record_mapping_frame(
     g_mapping_stats.total_snapshot_seconds += snapshot_seconds;
     g_mapping_stats.max_snapshot_seconds =
         std::max(g_mapping_stats.max_snapshot_seconds, snapshot_seconds);
+    g_mapping_stats.total_snapshot_copy_seconds += snapshot_copy_seconds;
+    g_mapping_stats.max_snapshot_copy_seconds =
+        std::max(g_mapping_stats.max_snapshot_copy_seconds, snapshot_copy_seconds);
     g_mapping_stats.total_map_lock_seconds += map_lock_seconds;
     g_mapping_stats.max_map_lock_seconds =
         std::max(g_mapping_stats.max_map_lock_seconds, map_lock_seconds);
@@ -380,6 +388,9 @@ static void record_mapping_frame(
     g_mapping_stats.window_total_snapshot_seconds += snapshot_seconds;
     g_mapping_stats.window_max_snapshot_seconds =
         std::max(g_mapping_stats.window_max_snapshot_seconds, snapshot_seconds);
+    g_mapping_stats.window_total_snapshot_copy_seconds += snapshot_copy_seconds;
+    g_mapping_stats.window_max_snapshot_copy_seconds =
+        std::max(g_mapping_stats.window_max_snapshot_copy_seconds, snapshot_copy_seconds);
     g_mapping_stats.window_total_map_lock_seconds += map_lock_seconds;
     g_mapping_stats.window_max_map_lock_seconds =
         std::max(g_mapping_stats.window_max_map_lock_seconds, map_lock_seconds);
@@ -441,6 +452,13 @@ static void record_mapping_frame(
                static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
             : 0.0;
     const double max_snapshot_ms = g_mapping_stats.window_max_snapshot_seconds * 1000.0;
+    const double avg_snapshot_copy_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_snapshot_copy_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_snapshot_copy_ms =
+        g_mapping_stats.window_max_snapshot_copy_seconds * 1000.0;
     const double avg_map_lock_ms =
         (g_mapping_stats.window_lidar_frames > 0)
             ? (g_mapping_stats.window_total_map_lock_seconds /
@@ -484,6 +502,7 @@ static void record_mapping_frame(
         << " hit_integrate_ms=" << avg_hit_integrate_ms << "/" << max_hit_integrate_ms
         << " free_integrate_ms=" << avg_free_integrate_ms << "/" << max_free_integrate_ms
         << " snapshot_ms=" << avg_snapshot_ms << "/" << max_snapshot_ms
+        << " snapshot_copy_ms=" << avg_snapshot_copy_ms << "/" << max_snapshot_copy_ms
         << " map_lock_ms=" << avg_map_lock_ms << "/" << max_map_lock_ms
         << " publish_ms=" << avg_publish_ms << "/" << max_publish_ms
         << " total_ms=" << avg_total_ms << "/" << max_total_ms
@@ -502,6 +521,8 @@ static void record_mapping_frame(
     g_mapping_stats.window_max_free_integrate_seconds = 0.0;
     g_mapping_stats.window_total_snapshot_seconds = 0.0;
     g_mapping_stats.window_max_snapshot_seconds = 0.0;
+    g_mapping_stats.window_total_snapshot_copy_seconds = 0.0;
+    g_mapping_stats.window_max_snapshot_copy_seconds = 0.0;
     g_mapping_stats.window_total_map_lock_seconds = 0.0;
     g_mapping_stats.window_max_map_lock_seconds = 0.0;
     g_mapping_stats.window_total_publish_seconds = 0.0;
@@ -911,6 +932,7 @@ static constexpr double kTelemetryPoseRenderMinIntervalSec = 0.03;
 static constexpr double kPoseTrailMinDistanceM = 0.015;
 static constexpr double kPoseTrailMinYawDeltaRad = 3.0 * core::pi / 180.0;
 static constexpr double kPoseTrailMinIntervalSec = 0.03;
+static constexpr double kTelemetryStaticRenderMinIntervalSec = 0.15;
 static constexpr int32_t kSemanticMappingLoopSleepMs = 125;
 
 struct OuterLoopTurnPidConfig {
@@ -1495,6 +1517,7 @@ int main(){
         double integrate_seconds = 0.0;
         mapping::MapUpdatePerf map_update_perf{};
         double snapshot_seconds = 0.0;
+        double snapshot_copy_seconds = 0.0;
         double map_lock_seconds = 0.0;
         double publish_seconds = 0.0;
         bool snapshot_ready = false;
@@ -1522,7 +1545,8 @@ int main(){
                 body_to_world,
                 candidate_timestamp,
                 map_revision,
-                &staged_snapshot);
+                &staged_snapshot,
+                &snapshot_copy_seconds);
             snapshot_seconds =
                 std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - snapshot_started_at).count();
@@ -1564,6 +1588,7 @@ int main(){
             map_update_perf.hit_integrate_seconds,
             map_update_perf.free_integrate_seconds,
             snapshot_seconds,
+            snapshot_copy_seconds,
             map_lock_seconds,
             publish_seconds,
             total_seconds,
@@ -1844,19 +1869,15 @@ int main(){
     std::thread telemetry_thread([&m_pose](){
         mapping::PoseTrailState pose_trail;
         mapping::MapSnapshot cached_snapshot;
-        planning::bridge::PlanningOverlay cached_overlay;
         std::vector<semantic::SemanticLandmark> semantic_landmarks;
         uint64_t last_rendered_map_revision = 0;
-        uint64_t last_rendered_overlay_revision = 0;
         uint64_t last_rendered_semantic_revision = 0;
-        uint64_t cached_overlay_revision = 0;
         uint64_t cached_semantic_revision = 0;
         double cached_snapshot_timestamp = -1.0;
-        double last_rendered_pose_timestamp = -1.0;
-        double last_rendered_pose_visual_timestamp = -1.0;
         double last_pose_trail_timestamp = -1.0;
         core::PoseSE2d last_trail_pose{};
         bool have_last_trail_pose = false;
+        auto last_static_render_at = std::chrono::steady_clock::time_point::min();
         while (true) {
             const uint64_t latest_map_revision =
                 g_map_update_revision.load(std::memory_order_acquire);
@@ -1885,12 +1906,6 @@ int main(){
                 cached_snapshot_timestamp = cached_snapshot.timestamp;
             }
 
-            const uint64_t overlay_revision = planning::bridge::latest_overlay_revision();
-            if (overlay_revision != cached_overlay_revision) {
-                std::lock_guard<std::mutex> plan_lk(g_plan_publish_mutex);
-                cached_overlay = g_latest_plan_overlay;
-                cached_overlay_revision = overlay_revision;
-            }
             const uint64_t semantic_revision = g_semantic_mapper.landmark_revision();
             if (semantic_revision != cached_semantic_revision) {
                 g_semantic_mapper.copy_landmarks(&semantic_landmarks);
@@ -1898,7 +1913,6 @@ int main(){
             }
 
             mapping::MapSnapshot& snapshot = cached_snapshot;
-            planning::bridge::PlanningOverlay& overlay = cached_overlay;
             if (!snapshot.valid()) {
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(kTelemetryRenderIntervalMs));
@@ -1915,16 +1929,24 @@ int main(){
             snapshot.timestamp = std::max(cached_snapshot_timestamp, pose_snapshot.timestamp);
 
             const bool map_changed = snapshot.map_revision != last_rendered_map_revision;
-            const bool overlay_changed = overlay_revision != last_rendered_overlay_revision;
             const bool semantic_changed = semantic_revision != last_rendered_semantic_revision;
-            const bool pose_changed = pose_snapshot.timestamp > last_rendered_pose_timestamp;
-            const bool pose_visual_changed =
-                pose_changed &&
-                ((last_rendered_pose_visual_timestamp < 0.0) ||
-                 ((pose_snapshot.timestamp - last_rendered_pose_visual_timestamp) >=
-                  kTelemetryPoseRenderMinIntervalSec));
+            if (!map_changed && !semantic_changed) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(kTelemetryRenderIntervalMs));
+                continue;
+            }
 
-            bool pose_trail_changed = false;
+            const auto now = std::chrono::steady_clock::now();
+            if (last_static_render_at != std::chrono::steady_clock::time_point::min()) {
+                const double elapsed_since_static_render =
+                    std::chrono::duration<double>(now - last_static_render_at).count();
+                if (elapsed_since_static_render < kTelemetryStaticRenderMinIntervalSec) {
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(kTelemetryRenderIntervalMs));
+                    continue;
+                }
+            }
+
             const bool time_gate =
                 (last_pose_trail_timestamp < 0.0) ||
                 ((pose_snapshot.timestamp - last_pose_trail_timestamp) >=
@@ -1947,32 +1969,18 @@ int main(){
                 last_trail_pose = snapshot.pose;
                 last_pose_trail_timestamp = pose_snapshot.timestamp;
                 have_last_trail_pose = true;
-                pose_trail_changed = true;
-            }
-            if (!map_changed &&
-                !overlay_changed &&
-                !semantic_changed &&
-                !pose_visual_changed &&
-                !pose_trail_changed) {
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(kTelemetryRenderIntervalMs));
-                continue;
             }
             mapping::visualization::render_map_frame(
                 snapshot,
                 pose_trail,
-                overlay,
                 semantic_landmarks,
                 semantic_revision,
-                overlay_revision,
                 kRenderWidth,
                 kRenderHeight,
                 g_map_image);
             last_rendered_map_revision = snapshot.map_revision;
-            last_rendered_overlay_revision = overlay_revision;
             last_rendered_semantic_revision = semantic_revision;
-            last_rendered_pose_timestamp = pose_snapshot.timestamp;
-            last_rendered_pose_visual_timestamp = pose_snapshot.timestamp;
+            last_static_render_at = now;
             record_snapshot_consumer_render(
                 g_telemetry_snapshot_stats_mutex,
                 &g_telemetry_snapshot_stats,

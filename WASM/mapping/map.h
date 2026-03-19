@@ -99,6 +99,7 @@ namespace mapping{
         std::array<int16_t, kMapSizeX * kMapSizeY> scan_count_{};
         std::array<uint8_t, kMapSizeX * kMapSizeY> confirmed_{};
         std::array<uint8_t, kMapSizeX * kMapSizeY> visited_{};
+        std::array<int8_t, kMapSizeX * kMapSizeY> occupancy_{};
         std::array<uint32_t, kMapSizeX * kMapSizeY> hit_cell_scan_stamp_{};
         uint32_t current_scan_stamp_ = 0;
 
