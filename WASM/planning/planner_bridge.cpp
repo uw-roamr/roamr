@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <mutex>
 #include <sstream>
 #include <vector>
@@ -37,6 +38,7 @@ std::vector<GridCoord> g_persistent_frontier_goals;
 std::mutex g_overlay_cache_mutex;
 PlanningOverlay g_cached_overlay;
 std::atomic<uint64_t> g_cached_overlay_revision{0};
+std::atomic<uint64_t> g_planner_telemetry_sequence{0};
 std::mutex g_planned_path_mutex;
 std::vector<core::Vector3d> g_planned_path_world;
 uint64_t g_planned_path_revision = 0;
@@ -291,6 +293,96 @@ void update_cached_overlay(const PlanningOverlay& overlay) {
 PlanningOverlay copy_cached_overlay() {
   std::lock_guard<std::mutex> lk(g_overlay_cache_mutex);
   return g_cached_overlay;
+}
+
+uint32_t vector_app_ptr(const std::vector<GridCoord>& cells) {
+  if (cells.empty()) {
+    return 0;
+  }
+  return static_cast<uint32_t>(
+      reinterpret_cast<uintptr_t>(cells.data()));
+}
+
+int32_t vector_count(const std::vector<GridCoord>& cells) {
+  return static_cast<int32_t>(cells.size());
+}
+
+void fill_message(const std::string& message, PlannerTelemetryFrame* frame) {
+  if (!frame) {
+    return;
+  }
+  frame->message_length = static_cast<uint32_t>(
+      std::min<size_t>(message.size(), sizeof(frame->message) - 1));
+  if (frame->message_length > 0) {
+    std::memcpy(frame->message, message.data(), frame->message_length);
+  }
+  frame->message[frame->message_length] = '\0';
+}
+
+void publish_direct_planner_telemetry(
+    uint64_t map_revision,
+    uint64_t goal_revision,
+    double timestamp,
+    const GridCoord& start_cell,
+    bool goal_enabled,
+    const GridCoord& goal_cell,
+    const PlanResult& planned) {
+  PlannerTelemetryFrame frame{};
+  frame.sequence = g_planner_telemetry_sequence.fetch_add(1, std::memory_order_acq_rel) + 1;
+  frame.source_map_revision = map_revision;
+  frame.goal_revision = goal_revision;
+  frame.timestamp = timestamp;
+  frame.planner_mode = static_cast<int32_t>(PlannerTelemetryMode::DirectGoalDStar);
+  frame.success = planned.success ? 1 : 0;
+  frame.goal_enabled = goal_enabled ? 1 : 0;
+  frame.start_cell_valid = 1;
+  frame.start_x = start_cell.x;
+  frame.start_y = start_cell.y;
+  frame.goal_x = goal_cell.x;
+  frame.goal_y = goal_cell.y;
+  frame.path_grid_ptr = vector_app_ptr(planned.path_grid);
+  frame.path_grid_count = vector_count(planned.path_grid);
+  frame.changed_cells_ptr = vector_app_ptr(planned.changed_cells);
+  frame.changed_cells_count = vector_count(planned.changed_cells);
+  frame.expanded_cells_ptr = vector_app_ptr(planned.expanded_cells);
+  frame.expanded_cells_count = vector_count(planned.expanded_cells);
+  fill_message(planned.message, &frame);
+  host_log_planner_telemetry(&frame);
+}
+
+void publish_frontier_planner_telemetry(
+    uint64_t map_revision,
+    uint64_t goal_revision,
+    double timestamp,
+    const GridCoord& start_cell,
+    const FrontierPlanResult& planned) {
+  PlannerTelemetryFrame frame{};
+  frame.sequence = g_planner_telemetry_sequence.fetch_add(1, std::memory_order_acq_rel) + 1;
+  frame.source_map_revision = map_revision;
+  frame.goal_revision = goal_revision;
+  frame.timestamp = timestamp;
+  frame.planner_mode = static_cast<int32_t>(PlannerTelemetryMode::Frontier);
+  frame.success = planned.success ? 1 : 0;
+  frame.goal_enabled = (planned.success && !planned.path_grid.empty()) ? 1 : 0;
+  frame.start_cell_valid = 1;
+  frame.start_x = start_cell.x;
+  frame.start_y = start_cell.y;
+  frame.goal_x = planned.goal_cell.x;
+  frame.goal_y = planned.goal_cell.y;
+  frame.selected_frontier_seed_enabled =
+      (planned.success || !planned.selected_cluster_cells.empty()) ? 1 : 0;
+  frame.selected_frontier_seed_x = planned.selected_seed.x;
+  frame.selected_frontier_seed_y = planned.selected_seed.y;
+  frame.path_grid_ptr = vector_app_ptr(planned.path_grid);
+  frame.path_grid_count = vector_count(planned.path_grid);
+  frame.frontier_candidates_ptr = vector_app_ptr(planned.frontier_cells);
+  frame.frontier_candidates_count = vector_count(planned.frontier_cells);
+  frame.selected_frontier_cluster_ptr =
+      vector_app_ptr(planned.selected_cluster_cells);
+  frame.selected_frontier_cluster_count =
+      vector_count(planned.selected_cluster_cells);
+  fill_message(planned.message, &frame);
+  host_log_planner_telemetry(&frame);
 }
 
 PlanningOverlay overlay_from_plan_result(
@@ -558,12 +650,28 @@ PlanningOverlay update_plan_overlay(
             render_width,
             render_height,
             &goal_cell)) {
+      publish_direct_planner_telemetry(
+          snapshot.map_revision,
+          g_goal_revision.load(std::memory_order_acquire),
+          snapshot.timestamp,
+          start_cell,
+          false,
+          goal_cell,
+          PlanResult{});
       update_cached_path_world({});
       update_cached_overlay(overlay);
       return overlay;
     }
 
     const PlanResult planned = g_planner.plan_to_grid(planner_map, start_cell, goal_cell);
+    publish_direct_planner_telemetry(
+        snapshot.map_revision,
+        g_goal_revision.load(std::memory_order_acquire),
+        snapshot.timestamp,
+        start_cell,
+        true,
+        goal_cell,
+        planned);
     std::ostringstream plan_log;
     plan_log << "[planning] direct goal result success=" << (planned.success ? 1 : 0)
              << " start=(" << start_cell.x << "," << start_cell.y << ")"
@@ -598,6 +706,12 @@ PlanningOverlay update_plan_overlay(
       planner_map,
       core::Vector3d{snapshot.pose.x, snapshot.pose.y, snapshot.pose.theta},
       frontier_cfg);
+  publish_frontier_planner_telemetry(
+      snapshot.map_revision,
+      g_goal_revision.load(std::memory_order_acquire),
+      snapshot.timestamp,
+      start_cell,
+      planned);
   std::ostringstream frontier_log;
   frontier_log << "[planning] frontier result success=" << (planned.success ? 1 : 0)
                << " start=(" << start_cell.x << "," << start_cell.y << ")"

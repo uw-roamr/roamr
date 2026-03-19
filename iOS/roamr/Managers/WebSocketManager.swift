@@ -134,6 +134,81 @@ private struct IncomingTeleopCommand {
     let holdMs: Int
 }
 
+struct MapMetadataSnapshot: Equatable {
+    let width: Int
+    let height: Int
+    let resolutionM: Double
+    let originXM: Double
+    let originYM: Double
+    let originInitialized: Bool
+}
+
+struct PlannerGridCell: Codable, Equatable, Hashable, Identifiable {
+    let x: Int
+    let y: Int
+
+    var id: String {
+        "\(x),\(y)"
+    }
+}
+
+enum PlannerTelemetryMode: String, Codable {
+    case none = "none"
+    case directGoalDStar = "direct_goal_dstar"
+    case frontier = "frontier"
+}
+
+struct PlannerTelemetrySnapshot: Codable, Equatable, Identifiable {
+    let sequence: UInt64
+    let plannerMode: PlannerTelemetryMode
+    let sourceMapRevision: UInt64
+    let goalRevision: UInt64
+    let timestamp: Double
+    let success: Bool
+    let goalEnabled: Bool
+    let startCell: PlannerGridCell?
+    let goalCell: PlannerGridCell?
+    let pathGrid: [PlannerGridCell]
+    let frontierCandidates: [PlannerGridCell]
+    let selectedFrontierCluster: [PlannerGridCell]
+    let selectedFrontierSeed: PlannerGridCell?
+    let changedCells: [PlannerGridCell]
+    let expandedCells: [PlannerGridCell]
+    let message: String
+
+    var id: UInt64 {
+        sequence
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case sequence
+        case plannerMode = "planner_mode"
+        case sourceMapRevision = "source_map_revision"
+        case goalRevision = "goal_revision"
+        case timestamp
+        case success
+        case goalEnabled = "goal_enabled"
+        case startCell = "start_cell"
+        case goalCell = "goal_cell"
+        case pathGrid = "path_grid"
+        case frontierCandidates = "frontier_candidates"
+        case selectedFrontierCluster = "selected_frontier_cluster"
+        case selectedFrontierSeed = "selected_frontier_seed"
+        case changedCells = "changed_cells"
+        case expandedCells = "expanded_cells"
+        case message
+    }
+}
+
+private struct PlannerTelemetryMessage: Encodable {
+    let type = "planner_telemetry"
+    let snapshot: PlannerTelemetrySnapshot
+}
+
+private struct PlannerTelemetryResetMessage: Encodable {
+    let type = "planner_reset"
+}
+
 class WebSocketManager: ObservableObject {
     static let shared = WebSocketManager()
     private static let maxRecentWasmLogs = 200
@@ -146,6 +221,8 @@ class WebSocketManager: ObservableObject {
     @Published var serverStatus: String = "Stopped"
     @Published var lastMessage: String = ""
     @Published var connectedClients: Int = 0
+    @Published private(set) var latestMapMetadata: MapMetadataSnapshot?
+    @Published private(set) var latestPlannerTelemetry: PlannerTelemetrySnapshot?
 
     private var listener: NWListener?
     private var connections: [NWConnection] = []
@@ -161,6 +238,9 @@ class WebSocketManager: ObservableObject {
     private var latestMlDetectionsMessage: String?
     private var latestWasmStateMessage: String?
     private var latestPoseMessage: String?
+    private var latestPlannerTelemetryMessage: String?
+    private var latestMapMetadataSnapshot: MapMetadataSnapshot?
+    private var latestPlannerTelemetrySnapshot: PlannerTelemetrySnapshot?
     private var recentWasmLogMessages: [String] = []
     private var selectedWasmTargetId: String
     private var wasmUploadSessions: [ObjectIdentifier: WasmUploadSession] = [:]
@@ -891,14 +971,30 @@ class WebSocketManager: ObservableObject {
               ]) else {
             return
         }
+        let snapshot = MapMetadataSnapshot(
+            width: width,
+            height: height,
+            resolutionM: resolutionM,
+            originXM: originXM,
+            originYM: originYM,
+            originInitialized: originInitialized
+        )
+        latestMapMetadataSnapshot = snapshot
         latestMapMetadataMessage = payload
+        DispatchQueue.main.async {
+            self.latestMapMetadata = snapshot
+        }
         broadcastTextMessage(payload)
     }
 
     func publishMapFrameReset() {
         latestMapFrameMessage = nil
         latestMapMetadataMessage = nil
+        latestMapMetadataSnapshot = nil
         latestMapLayerPayloads.removeAll()
+        DispatchQueue.main.async {
+            self.latestMapMetadata = nil
+        }
         guard let payload = makeJSONString([
             "type": "map_frame_reset"
         ]) else {
@@ -950,6 +1046,32 @@ class WebSocketManager: ObservableObject {
             return
         }
         latestPoseMessage = payload
+        broadcastTextMessage(payload)
+    }
+
+    func publishPlannerTelemetry(_ snapshot: PlannerTelemetrySnapshot) {
+        latestPlannerTelemetrySnapshot = snapshot
+        guard let latestPayload = makeJSONText(PlannerTelemetryMessage(snapshot: snapshot)) else {
+            return
+        }
+
+        latestPlannerTelemetryMessage = latestPayload
+        DispatchQueue.main.async {
+            self.latestPlannerTelemetry = snapshot
+        }
+
+        broadcastTextMessage(latestPayload)
+    }
+
+    func publishPlannerTelemetryReset() {
+        latestPlannerTelemetrySnapshot = nil
+        latestPlannerTelemetryMessage = nil
+        DispatchQueue.main.async {
+            self.latestPlannerTelemetry = nil
+        }
+        guard let payload = makeJSONText(PlannerTelemetryResetMessage()) else {
+            return
+        }
         broadcastTextMessage(payload)
     }
 
@@ -1147,6 +1269,10 @@ class WebSocketManager: ObservableObject {
 
         if let latestPoseMessage {
             sendTextFrame(latestPoseMessage, to: connection, label: "latest pose")
+        }
+
+        if let latestPlannerTelemetryMessage {
+            sendTextFrame(latestPlannerTelemetryMessage, to: connection, label: "latest planner telemetry")
         }
 
         sendLatestPointCloud(to: connection)
@@ -1556,6 +1682,15 @@ class WebSocketManager: ObservableObject {
     private func makeJSONString(_ object: [String: Any]) -> String? {
         guard JSONSerialization.isValidJSONObject(object),
               let data = try? JSONSerialization.data(withJSONObject: object, options: []),
+              let text = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return text
+    }
+
+    private func makeJSONText<T: Encodable>(_ value: T) -> String? {
+        let encoder = JSONEncoder()
+        guard let data = try? encoder.encode(value),
               let text = String(data: data, encoding: .utf8) else {
             return nil
         }

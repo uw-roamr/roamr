@@ -20,12 +20,12 @@ namespace mapping {
   // Sensor height above world origin (meters). Use to convert sensor-relative Z to world Z.
   constexpr float sensorHeightMeters = 0.20f;
 
-  // Rerun logging: include camera image in the filtered lidar frame (expensive copy).
-  constexpr bool kRerunIncludeImage = false;
+  // logging: include camera image in the filtered lidar frame (expensive copy).
+  constexpr bool kLogIncludeImage = false;
   // Keep rerun point payload bounded to reduce JSON encode + websocket pressure.
-  constexpr int kRerunMaxPoints = 4000;
+  constexpr int kLogMaxPoints = 4000;
   // Color map-eligible 3D points in rerun for fast filter debugging.
-  constexpr bool kRerunHighlightFiltered = true;
+  constexpr bool kLogHighlightFiltered = true;
   constexpr double kMapLogIntervalSec = 0.1;
   constexpr int kOccupancyRayBins = 512;
   constexpr int kMaxRawPointsPerScan = 12000;

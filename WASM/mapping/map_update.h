@@ -14,10 +14,6 @@ namespace mapping{
       size_t selected_free_bins = 0;
     };
 
-    void build_rerun_frame_from_lidar(const sensors::LidarCameraData& lc_data,
-                                      sensors::LidarCameraData& rerun_out,
-                                      const core::PoseSE3d& body_to_world);
-
     void initialize_map(Map& map);
 
     bool build_map_snapshot(const Map& map,

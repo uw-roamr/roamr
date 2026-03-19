@@ -38,6 +38,7 @@ final class WasmManager: ObservableObject {
     @Published var currentRunDisplayName: String?
     @Published var logLines: [String] = []
     @Published var latestMapJPEGData: Data?
+    @Published var latestBaseMapPNGData: Data?
     @Published var latestMapTimestamp: Double = 0
     @Published var latestMapFrameCount: Int = 0
     @Published private(set) var recordingEnabled: Bool
@@ -175,6 +176,7 @@ final class WasmManager: ObservableObject {
             NativeFunction(name: "host_log_imu", signature: "(*)", impl: host_log_imu_impl),
             NativeFunction(name: "host_log_pose", signature: "(*)", impl: host_log_pose_impl),
             NativeFunction(name: "host_log_pose_wheel", signature: "(*)", impl: host_log_pose_wheel_impl),
+            NativeFunction(name: "host_log_planner_telemetry", signature: "(*)", impl: host_log_planner_telemetry_impl),
             NativeFunction(name: "write_motors", signature: "(*)", impl: write_motors_impl)
         ]
 
@@ -393,8 +395,10 @@ final class WasmManager: ObservableObject {
 
     func clearMapPreview() {
         WebSocketManager.shared.publishMapFrameReset()
+        WebSocketManager.shared.publishPlannerTelemetryReset()
         DispatchQueue.main.async {
             self.latestMapJPEGData = nil
+            self.latestBaseMapPNGData = nil
             self.latestMapTimestamp = 0
             self.latestMapFrameCount = 0
         }
@@ -422,6 +426,13 @@ final class WasmManager: ObservableObject {
             self.latestMapJPEGData = jpegData
             self.latestMapTimestamp = timestamp
             self.latestMapFrameCount += 1
+        }
+    }
+
+    func updateBaseMapPreview(pngData: Data) {
+        guard !pngData.isEmpty else { return }
+        DispatchQueue.main.async {
+            self.latestBaseMapPNGData = pngData
         }
     }
 

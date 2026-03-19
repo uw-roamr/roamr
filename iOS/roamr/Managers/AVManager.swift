@@ -170,7 +170,7 @@ final class AVManager: NSObject, ObservableObject, ARSessionDelegate {
         var isRunning = false
     }
 
-    // Keep compute cost bounded for WASM/Rerun telemetry.
+    // Keep compute cost bounded for WASM telemetry.
     private let processingTargetFPS: Double = 20.0
     private let previewTargetFPS: Double = 12.0
     private let websocketPointCloudTargetFPS: Double = 10.0
