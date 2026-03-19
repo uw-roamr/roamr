@@ -153,6 +153,7 @@ class WebSocketManager: ObservableObject {
     private var incomingFrameBuffers: [ObjectIdentifier: Data] = [:]
     private var partialIncomingMessages: [ObjectIdentifier: PartialIncomingWebSocketMessage] = [:]
     private var mediaSendStates: [ObjectIdentifier: MediaSendState] = [:]
+    private var keepaliveTimers: [ObjectIdentifier: DispatchSourceTimer] = [:]
     private var latestPointCloudData: Data?
     private var latestMapFrameMessage: String?
     private var latestMapLayerPayloads: [String: Data] = [:]
@@ -162,6 +163,7 @@ class WebSocketManager: ObservableObject {
     private var selectedWasmTargetId: String
     private var wasmUploadSessions: [ObjectIdentifier: WasmUploadSession] = [:]
     private let port: NWEndpoint.Port = 8080
+    private let keepalivePingInterval: TimeInterval = 15.0
     private let enablePointCloudProfiling = true
     private let pointCloudProfilingSummaryInterval: TimeInterval = 3.0
     private let pointCloudProfileLock = NSLock()
@@ -220,6 +222,11 @@ class WebSocketManager: ObservableObject {
         connections.removeAll()
         connectionStates.removeAll()
         mediaSendStates.removeAll()
+        keepaliveTimers.values.forEach { timer in
+            timer.setEventHandler {}
+            timer.cancel()
+        }
+        keepaliveTimers.removeAll()
         isServerRunning = false
         serverStatus = "Stopped"
         connectedClients = 0
@@ -266,6 +273,7 @@ class WebSocketManager: ObservableObject {
                     print("🔑 WebSocket Key: \(wsKey)")
                     self.sendHandshakeResponse(to: connection, key: wsKey)
                     self.connectionStates[ObjectIdentifier(connection)] = true
+                    self.startKeepalivePingTimer(for: connection)
                     print("✅ WebSocket handshake complete")
 
                     self.sendLatestTelemetryState(to: connection)
@@ -486,6 +494,7 @@ class WebSocketManager: ObservableObject {
         incomingFrameBuffers.removeValue(forKey: connectionId)
         partialIncomingMessages.removeValue(forKey: connectionId)
         mediaSendStates.removeValue(forKey: connectionId)
+        stopKeepalivePingTimer(for: connectionId)
         wasmUploadSessions.removeValue(forKey: connectionId)
         if connections.isEmpty {
             bluetoothManager?.sendMessage("0 0 0")
@@ -521,6 +530,39 @@ class WebSocketManager: ObservableObject {
                 print("❌ Failed to send control frame: \(error)")
             }
         })
+    }
+
+    private func startKeepalivePingTimer(for connection: NWConnection) {
+        let connectionId = ObjectIdentifier(connection)
+        stopKeepalivePingTimer(for: connectionId)
+
+        let timer = DispatchSource.makeTimerSource(queue: networkQueue)
+        timer.schedule(
+            deadline: .now() + keepalivePingInterval,
+            repeating: keepalivePingInterval
+        )
+        timer.setEventHandler { [weak self, weak connection] in
+            guard let self else { return }
+            guard let connection else {
+                self.stopKeepalivePingTimer(for: connectionId)
+                return
+            }
+            guard self.connectionStates[connectionId] == true else {
+                self.stopKeepalivePingTimer(for: connectionId)
+                return
+            }
+            self.sendControlFrame(opcode: 0x9, to: connection)
+        }
+        keepaliveTimers[connectionId] = timer
+        timer.resume()
+    }
+
+    private func stopKeepalivePingTimer(for connectionId: ObjectIdentifier) {
+        guard let timer = keepaliveTimers.removeValue(forKey: connectionId) else {
+            return
+        }
+        timer.setEventHandler {}
+        timer.cancel()
     }
 
     private func shouldRemoveConnection(for error: NWError) -> Bool {

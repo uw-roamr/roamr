@@ -1418,6 +1418,8 @@
         const MAX_CONSOLE_LINES = 200;
         const ROAMR_WEB_CLIENT_VERSION = '2026-03-17.1';
         const ROAMR_WEBSOCKET_PROTOCOL_VERSION = '2026-03-17.1';
+        const RECONNECT_BASE_DELAY_MS = 1000;
+        const RECONNECT_MAX_DELAY_MS = 10000;
 
         // Joystick variables
         let joystickTimer = null;
@@ -1441,6 +1443,9 @@
         let mapViewerInitialized = false;
         let pointCloudDiagnosticTimer = null;
         let mapFrameCount = 0;
+        let reconnectTimer = null;
+        let reconnectAttempts = 0;
+        let shouldReconnect = false;
         const requiredMapLayers = ['base', 'odometry', 'planning', 'frontiers', 'semantic'];
         const mapLayerState = {
             hasLayerFrames: false,
@@ -1594,27 +1599,71 @@
             messageLog.insertBefore(logItem, messageLog.firstChild);
         }
 
-        function connect() {
+        function clearReconnectTimer() {
+            if (reconnectTimer) {
+                clearTimeout(reconnectTimer);
+                reconnectTimer = null;
+            }
+        }
+
+        function scheduleReconnect() {
+            if (!shouldReconnect || reconnectTimer || ws) {
+                return;
+            }
+
+            reconnectAttempts += 1;
+            const delay = Math.min(
+                RECONNECT_BASE_DELAY_MS * (2 ** (reconnectAttempts - 1)),
+                RECONNECT_MAX_DELAY_MS
+            );
+            addLog(`🔄 Reconnecting in ${(delay / 1000).toFixed(1)}s (attempt ${reconnectAttempts})`);
+            reconnectTimer = window.setTimeout(() => {
+                reconnectTimer = null;
+                if (!shouldReconnect || ws) {
+                    return;
+                }
+                connect({ isReconnect: true });
+            }, delay);
+        }
+
+        function connect({ isReconnect = false } = {}) {
             const ip = ipInput.value.trim();
             if (!ip) {
                 alert('Please enter an IP address');
                 return;
             }
 
+            if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+                if (!isReconnect) {
+                    addLog('ℹ️ WebSocket is already connected or connecting');
+                }
+                return;
+            }
+
             const wsUrl = `ws://${ip}:8080`;
-            addLog(`Connecting to ${wsUrl}...`);
+            shouldReconnect = true;
+            clearReconnectTimer();
+            addLog(`${isReconnect ? 'Reconnecting' : 'Connecting'} to ${wsUrl}...`);
 
             try {
-                ws = new WebSocket(wsUrl);
-                ws.binaryType = 'arraybuffer'; // Important for receiving video frames
+                const socket = new WebSocket(wsUrl);
+                ws = socket;
+                socket.binaryType = 'arraybuffer'; // Important for receiving video frames
 
-                ws.onopen = function() {
+                socket.onopen = function() {
+                    if (ws !== socket) {
+                        return;
+                    }
+                    reconnectAttempts = 0;
                     updateStatus(true);
-                    addLog('✅ Connected to iPhone!');
+                    addLog(isReconnect ? '✅ Reconnected to iPhone!' : '✅ Connected to iPhone!');
                     refreshWasmPrograms();
                 };
 
-                ws.onmessage = function(event) {
+                socket.onmessage = function(event) {
+                    if (ws !== socket) {
+                        return;
+                    }
                     if (event.data instanceof ArrayBuffer) {
                         handleBinaryMessage(event.data);
                     } else {
@@ -1622,22 +1671,30 @@
                     }
                 };
 
-                ws.onerror = function(error) {
+                socket.onerror = function(error) {
+                    if (ws !== socket) {
+                        return;
+                    }
                     addLog('❌ Connection error');
                     console.error('WebSocket error:', error);
                 };
 
-                ws.onclose = function(event) {
+                socket.onclose = function(event) {
+                    if (ws !== socket) {
+                        return;
+                    }
+                    ws = null;
                     updateStatus(false);
                     const closeCode = typeof event.code === 'number' ? event.code : 0;
                     const closeReason = event.reason ? ` (${event.reason})` : '';
                     const closeClean = event.wasClean ? 'clean' : 'unclean';
                     addLog(`❌ Disconnected from iPhone [code=${closeCode}, ${closeClean}]${closeReason}`);
-                    ws = null;
+                    scheduleReconnect();
                 };
             } catch (error) {
                 addLog(`❌ Failed to connect: ${error.message}`);
                 console.error('Connection error:', error);
+                scheduleReconnect();
             }
         }
 
@@ -1697,10 +1754,16 @@
         }
 
         function disconnect() {
-            if (ws) {
-                ws.close();
-                ws = null;
+            shouldReconnect = false;
+            reconnectAttempts = 0;
+            clearReconnectTimer();
+
+            const socket = ws;
+            ws = null;
+            if (socket) {
+                socket.close(1000, 'Client disconnect');
             }
+            updateStatus(false);
         }
 
         function emergencyStopRemote() {
@@ -3600,6 +3663,21 @@
             resetWasmControlState();
             applyWasmControlsAccordionLayout();
             syncConsoleHeights();
+        });
+
+        window.addEventListener('online', () => {
+            if (shouldReconnect && !ws && !reconnectTimer) {
+                connect({ isReconnect: true });
+            }
+        });
+
+        window.addEventListener('pagehide', () => {
+            shouldReconnect = false;
+            clearReconnectTimer();
+            if (ws) {
+                ws.close(1001, 'Page unloading');
+                ws = null;
+            }
         });
     </script>
 </body>
