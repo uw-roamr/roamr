@@ -14,7 +14,6 @@ struct SettingsPage: View {
     @State private var recordingPath: String = WasmManager.shared.recordingPath
     @State private var selectedRecordingFolderPath: String? = WasmManager.shared.selectedRecordingFolderPath
     @State private var isShowingRecordingFolderPicker = false
-
     @Environment(\.safeAreaInsets) private var safeAreaInsets
     @State private var isLoading = false
     @State private var errorMessage: String?
@@ -47,11 +46,11 @@ struct SettingsPage: View {
         }
         .padding(.top, safeAreaInsets.top)
         .padding(.bottom, safeAreaInsets.bottom + AppConstants.shared.tabBarHeight)
-		.onAppear {
+        .onAppear {
             recordingEnabled = WasmManager.shared.recordingEnabled
             recordingPath = WasmManager.shared.recordingPath
             selectedRecordingFolderPath = WasmManager.shared.selectedRecordingFolderPath
-		}
+        }
         .fileImporter(
             isPresented: $isShowingRecordingFolderPicker,
             allowedContentTypes: [.folder],

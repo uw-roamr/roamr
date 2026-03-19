@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ContentView: View {
 	@State var currentPage: AppPage = .wasm
+	@Environment(\.safeAreaInsets) private var safeAreaInsets
 
 	var body: some View {
 		ZStack(alignment: .bottom) {
@@ -28,14 +29,14 @@ struct ContentView: View {
 					SettingsPage()
 				}
 			}
-			.ignoresSafeArea()
 			.frame(maxWidth: .infinity, maxHeight: .infinity)
 			.animation(.easeInOut, value: currentPage)
 
 			FloatingBubbleTabBar(currentPage: $currentPage)
-				.padding(.bottom, 12)
+				.padding(.bottom, safeAreaInsets.bottom)
 				.zIndex(1)
 		}
+		.ignoresSafeArea()
 		.frame(maxWidth: .infinity, maxHeight: .infinity)
 	}
 }

@@ -14,6 +14,7 @@ struct PageHeader<TrailingContent: View>: View {
 	var titleColor: Color = .primary
 	var statusTextColor: Color = .gray
 	var infoText: String?
+	var titleAccessory: AnyView? = nil
 	@ViewBuilder var trailingContent: () -> TrailingContent
 
 	@State private var showingInfo = false
@@ -21,7 +22,7 @@ struct PageHeader<TrailingContent: View>: View {
 	var body: some View {
 		HStack {
 			VStack(alignment: .leading, spacing: 2) {
-				HStack(spacing: 8) {
+				HStack(spacing: 6) {
 					Text(title)
 						.font(.largeTitle)
 						.fontWeight(.bold)
@@ -35,6 +36,10 @@ struct PageHeader<TrailingContent: View>: View {
 								.font(.title3)
 								.foregroundStyle(.secondary)
 						}
+					}
+
+					if let accessory = titleAccessory {
+						accessory
 					}
 				}
 
@@ -77,6 +82,7 @@ extension PageHeader where TrailingContent == EmptyView {
 		self.titleColor = titleColor
 		self.statusTextColor = statusTextColor
 		self.infoText = infoText
+		self.titleAccessory = nil
 		self.trailingContent = { EmptyView() }
 	}
 }

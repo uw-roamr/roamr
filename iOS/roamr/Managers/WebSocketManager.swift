@@ -564,7 +564,6 @@ class WebSocketManager: ObservableObject {
         timer.setEventHandler {}
         timer.cancel()
     }
-
     private func shouldRemoveConnection(for error: NWError) -> Bool {
         switch error {
         case .posix(let posixError):
