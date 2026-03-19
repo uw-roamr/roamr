@@ -169,11 +169,12 @@ final class WasmManager: ObservableObject {
             NativeFunction(name: "ml_run_latest_camera_frame", signature: "(*)", impl: ml_run_latest_camera_frame_impl),
             NativeFunction(name: "ml_close_model", signature: "(*)", impl: ml_close_model_impl),
             NativeFunction(name: "wasm_log_text", signature: "(*)", impl: wasm_log_text_impl),
-            NativeFunction(name: "rerun_log_lidar_frame", signature: "(*)", impl: rerun_log_lidar_frame_impl),
-            NativeFunction(name: "rerun_log_map_frame", signature: "(*)", impl: rerun_log_map_frame_impl),
-            NativeFunction(name: "rerun_log_imu", signature: "(*)", impl: rerun_log_imu_impl),
-            NativeFunction(name: "rerun_log_pose", signature: "(*)", impl: rerun_log_pose_impl),
-            NativeFunction(name: "rerun_log_pose_wheel", signature: "(*)", impl: rerun_log_pose_wheel_impl),
+            NativeFunction(name: "host_log_lidar_frame", signature: "(*)", impl: host_log_lidar_frame_impl),
+            NativeFunction(name: "host_log_map_frame", signature: "(*)", impl: host_log_map_frame_impl),
+            NativeFunction(name: "host_log_map_metadata", signature: "(*)", impl: host_log_map_metadata_impl),
+            NativeFunction(name: "host_log_imu", signature: "(*)", impl: host_log_imu_impl),
+            NativeFunction(name: "host_log_pose", signature: "(*)", impl: host_log_pose_impl),
+            NativeFunction(name: "host_log_pose_wheel", signature: "(*)", impl: host_log_pose_wheel_impl),
             NativeFunction(name: "write_motors", signature: "(*)", impl: write_motors_impl)
         ]
 

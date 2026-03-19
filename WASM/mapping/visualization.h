@@ -10,7 +10,7 @@ namespace mapping {
 namespace visualization {
 
 // Render the visualization layers and ship each one to the host via
-// rerun_log_map_frame. The host distinguishes frames by MapImage.layer_id.
+// host_log_map_frame. The host distinguishes frames by MapImage.layer_id.
 void render_map_frame(
     const MapSnapshot& snapshot,
     const PoseTrailState& pose_trail,

@@ -604,7 +604,7 @@ void emit_frame(
       reinterpret_cast<uintptr_t>(s_image_buf.data()));
   out_frame.data_size = static_cast<int32_t>(s_cur_w * s_cur_h * 4);
   out_frame.layer_id = static_cast<int32_t>(layer_id);
-  rerun_log_map_frame(&out_frame);
+  host_log_map_frame(&out_frame);
 }
 
 void emit_cached_frame(
@@ -620,7 +620,7 @@ void emit_cached_frame(
       reinterpret_cast<uintptr_t>(buffer.data()));
   out_frame.data_size = static_cast<int32_t>(s_cur_w * s_cur_h * 4);
   out_frame.layer_id = static_cast<int32_t>(layer_id);
-  rerun_log_map_frame(&out_frame);
+  host_log_map_frame(&out_frame);
 }
 
 }  // namespace
@@ -638,6 +638,8 @@ void render_map_frame(
   if (!snapshot.valid()) {
     return;
   }
+
+  host_log_map_metadata(&snapshot.meta);
 
   if (width <= 0) {
     width = 256;

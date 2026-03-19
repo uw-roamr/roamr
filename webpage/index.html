@@ -1206,6 +1206,7 @@
                             <canvas id="mapLayerPlanning" class="map-layer-canvas" aria-label="WASM Planning Layer"></canvas>
                             <canvas id="mapLayerFrontiers" class="map-layer-canvas" aria-label="WASM Frontiers Layer"></canvas>
                             <canvas id="mapLayerSemantic" class="map-layer-canvas" aria-label="WASM Semantic Layer"></canvas>
+                            <canvas id="mapLivePoseOverlay" class="map-layer-canvas" aria-label="WASM Live Pose Overlay"></canvas>
                         </div>
                         <div class="map-placeholder" id="mapPlaceholder">
                             <div class="map-placeholder-icon">🗺️</div>
@@ -1356,6 +1357,8 @@
         const mapContainerEl = document.getElementById('mapContainer');
         const mapStageEl = document.getElementById('mapStage');
         const mapPreviewEl = document.getElementById('mapPreview');
+        const mapLivePoseOverlayEl = document.getElementById('mapLivePoseOverlay');
+        const mapLivePoseOverlayCtx = mapLivePoseOverlayEl.getContext('2d', { alpha: true });
         const mapLayerCanvasEls = {
             base: document.getElementById('mapLayerBase'),
             odometry: document.getElementById('mapLayerOdometry'),
@@ -1416,8 +1419,10 @@
             5: 'semantic'
         };
         const MAX_CONSOLE_LINES = 200;
-        const ROAMR_WEB_CLIENT_VERSION = '2026-03-17.1';
-        const ROAMR_WEBSOCKET_PROTOCOL_VERSION = '2026-03-17.1';
+        const MAX_LIVE_POSE_TRAIL_POINTS = 4096;
+        const LIVE_POSE_FORWARD_LENGTH_PX = 10;
+        const ROAMR_WEB_CLIENT_VERSION = '2026-03-19.1';
+        const ROAMR_WEBSOCKET_PROTOCOL_VERSION = '2026-03-19.1';
         const RECONNECT_BASE_DELAY_MS = 1000;
         const RECONNECT_MAX_DELAY_MS = 10000;
 
@@ -1473,6 +1478,26 @@
             }
         };
 
+        const mapMetadataState = {
+            width: 0,
+            height: 0,
+            resolutionM: 0,
+            originXM: 0,
+            originYM: 0,
+            originInitialized: false,
+            hasMetadata: false
+        };
+
+        const livePoseState = {
+            hasPose: false,
+            timestamp: null,
+            x: 0,
+            y: 0,
+            yaw: 0,
+            trail: [],
+            renderQueued: false
+        };
+
         const wasmControlState = {
             files: [],
             hubFiles: [],
@@ -1485,6 +1510,10 @@
             hubError: '',
             compatibility: null
         };
+        mapPreviewEl.addEventListener('load', () => {
+            updateMapTransform();
+            scheduleLivePoseOverlayRender();
+        });
         let wasmUploadInProgress = false;
         let wasmControlsAccordionExpanded = true;
         let lastKnownWasmRunningState = false;
@@ -1838,6 +1867,16 @@
                 return;
             }
 
+            if (parsed.type === 'map_meta') {
+                handleMapMetadataMessage(parsed);
+                return;
+            }
+
+            if (parsed.type === 'pose') {
+                handlePoseMessage(parsed);
+                return;
+            }
+
             if (parsed.type === 'ml_detections_reset') {
                 resetMlOverlay();
                 return;
@@ -2029,6 +2068,215 @@
             return `hsl(${hue} 90% 62%)`;
         }
 
+        function quaternionToYawRadians(quaternion) {
+            if (!Array.isArray(quaternion) || quaternion.length !== 4) {
+                return 0;
+            }
+            const x = Number(quaternion[0]) || 0;
+            const y = Number(quaternion[1]) || 0;
+            const z = Number(quaternion[2]) || 0;
+            const w = Number(quaternion[3]) || 1;
+            const sinYaw = 2 * ((w * z) + (x * y));
+            const cosYaw = 1 - 2 * ((y * y) + (z * z));
+            return Math.atan2(sinYaw, cosYaw);
+        }
+
+        function clearLivePoseTrail() {
+            livePoseState.trail = [];
+        }
+
+        function handleMapMetadataMessage(message) {
+            const width = Number(message.width);
+            const height = Number(message.height);
+            const resolutionM = Number(message.resolution_m);
+            const originXM = Number(message.origin_x_m);
+            const originYM = Number(message.origin_y_m);
+            const originInitialized = Boolean(message.origin_initialized);
+            if (!Number.isFinite(width) || width <= 0 ||
+                !Number.isFinite(height) || height <= 0 ||
+                !Number.isFinite(resolutionM) || resolutionM <= 0 ||
+                !Number.isFinite(originXM) ||
+                !Number.isFinite(originYM)) {
+                return;
+            }
+
+            const metadataChanged =
+                !mapMetadataState.hasMetadata ||
+                mapMetadataState.width !== width ||
+                mapMetadataState.height !== height ||
+                Math.abs(mapMetadataState.resolutionM - resolutionM) > 1e-9 ||
+                Math.abs(mapMetadataState.originXM - originXM) > 1e-9 ||
+                Math.abs(mapMetadataState.originYM - originYM) > 1e-9 ||
+                mapMetadataState.originInitialized !== originInitialized;
+
+            mapMetadataState.width = width;
+            mapMetadataState.height = height;
+            mapMetadataState.resolutionM = resolutionM;
+            mapMetadataState.originXM = originXM;
+            mapMetadataState.originYM = originYM;
+            mapMetadataState.originInitialized = originInitialized;
+            mapMetadataState.hasMetadata = true;
+
+            if (metadataChanged) {
+                clearLivePoseTrail();
+            }
+            scheduleLivePoseOverlayRender();
+        }
+
+        function handlePoseMessage(message) {
+            const translation = Array.isArray(message.translation) ? message.translation : [];
+            const quaternion = Array.isArray(message.quaternion) ? message.quaternion : [];
+            const timestamp = Number(message.timestamp);
+            if (translation.length !== 3 || quaternion.length !== 4 || !Number.isFinite(timestamp)) {
+                return;
+            }
+
+            const x = Number(translation[0]);
+            const y = Number(translation[1]);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) {
+                return;
+            }
+
+            livePoseState.hasPose = true;
+            livePoseState.timestamp = timestamp;
+            livePoseState.x = x;
+            livePoseState.y = y;
+            livePoseState.yaw = quaternionToYawRadians(quaternion);
+            livePoseState.trail.push({ x, y, yaw: livePoseState.yaw });
+            if (livePoseState.trail.length > MAX_LIVE_POSE_TRAIL_POINTS) {
+                livePoseState.trail.splice(0, livePoseState.trail.length - MAX_LIVE_POSE_TRAIL_POINTS);
+            }
+            scheduleLivePoseOverlayRender();
+        }
+
+        function shouldShowLivePoseOverlay() {
+            return mapLayerToggleEls.odometry.checked &&
+                livePoseState.hasPose &&
+                mapMetadataState.hasMetadata &&
+                mapMetadataState.originInitialized;
+        }
+
+        function getPoseOverlayIntrinsicSize() {
+            const activeRenderable = getActiveMapRenderableElement();
+            return getRenderableIntrinsicSize(activeRenderable);
+        }
+
+        function ensureLivePoseOverlayCanvasSize() {
+            const intrinsicSize = getPoseOverlayIntrinsicSize();
+            if (!intrinsicSize) {
+                return null;
+            }
+            if (mapLivePoseOverlayEl.width !== intrinsicSize.width) {
+                mapLivePoseOverlayEl.width = intrinsicSize.width;
+            }
+            if (mapLivePoseOverlayEl.height !== intrinsicSize.height) {
+                mapLivePoseOverlayEl.height = intrinsicSize.height;
+            }
+            return intrinsicSize;
+        }
+
+        function projectWorldPoseToOverlayPixel(x, y) {
+            const intrinsicSize = ensureLivePoseOverlayCanvasSize();
+            if (!intrinsicSize || !mapMetadataState.hasMetadata || mapMetadataState.resolutionM <= 0) {
+                return null;
+            }
+
+            const scale = Math.min(
+                intrinsicSize.width / mapMetadataState.width,
+                intrinsicSize.height / mapMetadataState.height
+            );
+            const offX = (intrinsicSize.width - (mapMetadataState.width * scale)) * 0.5;
+            const offY = (intrinsicSize.height - (mapMetadataState.height * scale)) * 0.5;
+            const gridX = (x - mapMetadataState.originXM) / mapMetadataState.resolutionM;
+            const gridY = (y - mapMetadataState.originYM) / mapMetadataState.resolutionM;
+
+            return {
+                x: offX + ((gridX + 0.5) * scale),
+                y: offY + (((mapMetadataState.height - 1 - gridY) + 0.5) * scale)
+            };
+        }
+
+        function scheduleLivePoseOverlayRender() {
+            if (livePoseState.renderQueued) {
+                return;
+            }
+            livePoseState.renderQueued = true;
+            requestAnimationFrame(renderLivePoseOverlay);
+        }
+
+        function renderLivePoseOverlay() {
+            livePoseState.renderQueued = false;
+
+            const intrinsicSize = ensureLivePoseOverlayCanvasSize();
+            if (!intrinsicSize) {
+                mapLivePoseOverlayEl.style.display = 'none';
+                return;
+            }
+
+            mapLivePoseOverlayCtx.setTransform(1, 0, 0, 1, 0, 0);
+            mapLivePoseOverlayCtx.clearRect(0, 0, mapLivePoseOverlayEl.width, mapLivePoseOverlayEl.height);
+
+            if (!shouldShowLivePoseOverlay()) {
+                mapLivePoseOverlayEl.style.display = 'none';
+                return;
+            }
+
+            mapLivePoseOverlayEl.style.display = 'block';
+
+            if (livePoseState.trail.length >= 2) {
+                mapLivePoseOverlayCtx.beginPath();
+                let startedPath = false;
+                for (const sample of livePoseState.trail) {
+                    const pixel = projectWorldPoseToOverlayPixel(sample.x, sample.y);
+                    if (!pixel) {
+                        continue;
+                    }
+                    if (!startedPath) {
+                        mapLivePoseOverlayCtx.moveTo(pixel.x, pixel.y);
+                        startedPath = true;
+                    } else {
+                        mapLivePoseOverlayCtx.lineTo(pixel.x, pixel.y);
+                    }
+                }
+                if (startedPath) {
+                    mapLivePoseOverlayCtx.strokeStyle = 'rgba(120, 90, 255, 0.95)';
+                    mapLivePoseOverlayCtx.lineWidth = 2;
+                    mapLivePoseOverlayCtx.stroke();
+                }
+            }
+
+            const posePixel = projectWorldPoseToOverlayPixel(livePoseState.x, livePoseState.y);
+            if (!posePixel) {
+                return;
+            }
+
+            const cosYaw = Math.cos(livePoseState.yaw);
+            const sinYaw = Math.sin(livePoseState.yaw);
+            const forwardX = posePixel.x + (cosYaw * LIVE_POSE_FORWARD_LENGTH_PX);
+            const forwardY = posePixel.y - (sinYaw * LIVE_POSE_FORWARD_LENGTH_PX);
+            const leftX = posePixel.x - (sinYaw * LIVE_POSE_FORWARD_LENGTH_PX);
+            const leftY = posePixel.y - (cosYaw * LIVE_POSE_FORWARD_LENGTH_PX);
+
+            mapLivePoseOverlayCtx.beginPath();
+            mapLivePoseOverlayCtx.moveTo(posePixel.x, posePixel.y);
+            mapLivePoseOverlayCtx.lineTo(forwardX, forwardY);
+            mapLivePoseOverlayCtx.strokeStyle = 'rgba(255, 0, 0, 1)';
+            mapLivePoseOverlayCtx.lineWidth = 2;
+            mapLivePoseOverlayCtx.stroke();
+
+            mapLivePoseOverlayCtx.beginPath();
+            mapLivePoseOverlayCtx.moveTo(posePixel.x, posePixel.y);
+            mapLivePoseOverlayCtx.lineTo(leftX, leftY);
+            mapLivePoseOverlayCtx.strokeStyle = 'rgba(0, 255, 0, 1)';
+            mapLivePoseOverlayCtx.lineWidth = 2;
+            mapLivePoseOverlayCtx.stroke();
+
+            mapLivePoseOverlayCtx.beginPath();
+            mapLivePoseOverlayCtx.arc(posePixel.x, posePixel.y, 2.5, 0, Math.PI * 2);
+            mapLivePoseOverlayCtx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+            mapLivePoseOverlayCtx.fill();
+        }
+
         function handleMapFrameMessage(message) {
             if (typeof message.jpeg_b64 !== 'string' || message.jpeg_b64.length === 0) {
                 return;
@@ -2041,6 +2289,7 @@
             mapPreviewEl.style.display = 'block';
             mapPlaceholderEl.style.display = 'none';
             updateMapTransform();
+            scheduleLivePoseOverlayRender();
             mapFrameCount += 1;
             mapFramesEl.textContent = mapFrameCount.toLocaleString();
             mapSizeEl.textContent = `${((message.jpeg_b64.length * 3) / 4 / 1024).toFixed(1)} KB`;
@@ -2141,6 +2390,7 @@
             updateMapExportButtons();
             mapPlaceholderEl.style.display = 'none';
             updateMapTransform();
+            scheduleLivePoseOverlayRender();
 
             if (timestamp !== null &&
                 (mapLayerState.displayedTimestamp === null ||
@@ -2814,6 +3064,19 @@
             mapFramesEl.textContent = '0';
             mapSizeEl.textContent = '0 KB';
             mapTimestampEl.textContent = '-';
+            mapMetadataState.width = 0;
+            mapMetadataState.height = 0;
+            mapMetadataState.resolutionM = 0;
+            mapMetadataState.originXM = 0;
+            mapMetadataState.originYM = 0;
+            mapMetadataState.originInitialized = false;
+            mapMetadataState.hasMetadata = false;
+            livePoseState.hasPose = false;
+            livePoseState.timestamp = null;
+            livePoseState.x = 0;
+            livePoseState.y = 0;
+            livePoseState.yaw = 0;
+            clearLivePoseTrail();
             resetMapTransform();
             mapPreviewEl.removeAttribute('src');
             mapPreviewEl.style.display = 'none';
@@ -2828,6 +3091,10 @@
                 canvas.style.display = 'none';
                 canvas.dataset.loaded = '';
             });
+            mapLivePoseOverlayCtx.clearRect(0, 0, mapLivePoseOverlayEl.width, mapLivePoseOverlayEl.height);
+            mapLivePoseOverlayEl.width = 0;
+            mapLivePoseOverlayEl.height = 0;
+            mapLivePoseOverlayEl.style.display = 'none';
             mapPlaceholderEl.style.display = 'block';
             updateMapExportButtons();
         }
@@ -3271,6 +3538,7 @@
                 toggleEl.addEventListener('change', () => {
                     updateMapLayerVisibility();
                     updateMapTransform();
+                    scheduleLivePoseOverlayRender();
                 });
             });
 
@@ -3410,6 +3678,7 @@
             mapStageEl.style.width = `${metrics.fittedWidth}px`;
             mapStageEl.style.height = `${metrics.fittedHeight}px`;
             mapStageEl.style.transform = `translate(${mapViewState.offsetX}px, ${mapViewState.offsetY}px) scale(${mapViewState.scale})`;
+            scheduleLivePoseOverlayRender();
             syncConsoleHeights();
         }
 
@@ -3497,14 +3766,19 @@
 
         function updateMapLayerVisibility() {
             if (!mapLayerState.hasLayerFrames) {
+                mapLivePoseOverlayEl.style.display = shouldShowLivePoseOverlay() ? 'block' : 'none';
                 return;
             }
             Object.entries(mapLayerCanvasEls).forEach(([key, canvas]) => {
+                const shouldHideLayerForLivePose = key === 'odometry' && shouldShowLivePoseOverlay();
                 canvas.style.display =
-                    mapLayerToggleEls[key].checked && canvas.dataset.loaded === '1'
+                    !shouldHideLayerForLivePose &&
+                    mapLayerToggleEls[key].checked &&
+                    canvas.dataset.loaded === '1'
                         ? 'block'
                         : 'none';
             });
+            mapLivePoseOverlayEl.style.display = shouldShowLivePoseOverlay() ? 'block' : 'none';
             mapPreviewEl.style.display = 'none';
         }
 

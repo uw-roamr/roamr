@@ -11,7 +11,7 @@ import Combine
 import CryptoKit
 
 private enum RoamrWebSocketCompatibility {
-    static let protocolVersion = "2026-03-17.1"
+    static let protocolVersion = "2026-03-19.1"
     static let webClientName = "roamr-web"
 }
 
@@ -156,9 +156,11 @@ class WebSocketManager: ObservableObject {
     private var keepaliveTimers: [ObjectIdentifier: DispatchSourceTimer] = [:]
     private var latestPointCloudData: Data?
     private var latestMapFrameMessage: String?
+    private var latestMapMetadataMessage: String?
     private var latestMapLayerPayloads: [String: Data] = [:]
     private var latestMlDetectionsMessage: String?
     private var latestWasmStateMessage: String?
+    private var latestPoseMessage: String?
     private var recentWasmLogMessages: [String] = []
     private var selectedWasmTargetId: String
     private var wasmUploadSessions: [ObjectIdentifier: WasmUploadSession] = [:]
@@ -867,8 +869,35 @@ class WebSocketManager: ObservableObject {
         broadcastTextMessage(payload)
     }
 
+    func publishMapMetadata(
+        width: Int,
+        height: Int,
+        resolutionM: Double,
+        originXM: Double,
+        originYM: Double,
+        originInitialized: Bool
+    ) {
+        guard width > 0,
+              height > 0,
+              resolutionM > 0,
+              let payload = makeJSONString([
+                "type": "map_meta",
+                "width": width,
+                "height": height,
+                "resolution_m": resolutionM,
+                "origin_x_m": originXM,
+                "origin_y_m": originYM,
+                "origin_initialized": originInitialized
+              ]) else {
+            return
+        }
+        latestMapMetadataMessage = payload
+        broadcastTextMessage(payload)
+    }
+
     func publishMapFrameReset() {
         latestMapFrameMessage = nil
+        latestMapMetadataMessage = nil
         latestMapLayerPayloads.removeAll()
         guard let payload = makeJSONString([
             "type": "map_frame_reset"
@@ -900,6 +929,28 @@ class WebSocketManager: ObservableObject {
         }
         latestMapLayerPayloads[layer] = payload
         broadcastBestEffortBinaryData(payload, topicKey: MediaTopicKey.mapLayer(layer))
+    }
+
+    func publishPose(
+        timestamp: Double,
+        translation: [Double],
+        quaternion: [Double],
+        source: String
+    ) {
+        guard timestamp > 0,
+              translation.count == 3,
+              quaternion.count == 4,
+              let payload = makeJSONString([
+                "type": "pose",
+                "timestamp": timestamp,
+                "translation": translation,
+                "quaternion": quaternion,
+                "pose_source": source
+              ]) else {
+            return
+        }
+        latestPoseMessage = payload
+        broadcastTextMessage(payload)
     }
 
     func publishWasmControlState() {
@@ -1069,6 +1120,9 @@ class WebSocketManager: ObservableObject {
             }
         }
 
+        if let latestMapMetadataMessage {
+            sendTextFrame(latestMapMetadataMessage, to: connection, label: "latest map metadata")
+        }
         if let latestMapFrameMessage {
             sendTextFrame(latestMapFrameMessage, to: connection, label: "latest map frame")
         }
@@ -1089,6 +1143,10 @@ class WebSocketManager: ObservableObject {
 
         if let latestMlDetectionsMessage {
             sendTextFrame(latestMlDetectionsMessage, to: connection, label: "latest ml detections")
+        }
+
+        if let latestPoseMessage {
+            sendTextFrame(latestPoseMessage, to: connection, label: "latest pose")
         }
 
         sendLatestPointCloud(to: connection)

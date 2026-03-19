@@ -901,8 +901,7 @@ static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
 static constexpr int32_t kPathFollowHoldMs = 120;
 static constexpr double kGoalCheckLogIntervalSec = 0.5;
-static constexpr double kRerunPoseLogIntervalSec = 0.2;
-static constexpr bool kEnableRerunPoseTelemetry = false;
+static constexpr double kHostPoseLogIntervalSec = 1.0 / 30.0;
 static constexpr bool kEnableVerboseAutonomyLogs = false;
 static constexpr bool kEnablePlannerWakeLogs = false;
 static constexpr int32_t kPlannerPollMs = 50;
@@ -1148,8 +1147,6 @@ int main(){
         using Clock = std::chrono::steady_clock;
         const auto target_interval = std::chrono::microseconds(sensors::IMUIntervalMicrosecond);
         double g_last_calib_timestamp = -1.0;
-        double last_rerun_pose_log_timestamp = -1.0;
-
         // initial calibration for gyro and accelerometer biases
         g_imu_calib.init_biases();
         g_imu_preintegrator.reset();
@@ -1188,14 +1185,6 @@ int main(){
                         core::recorder::enqueue_pose(
                             pose_copy,
                             core::recorder::PoseDataSource::kIMU);
-                    }
-                    if (kEnableRerunPoseTelemetry &&
-                        pose_copy.timestamp > 0.0 &&
-                        (last_rerun_pose_log_timestamp < 0.0 ||
-                         (pose_copy.timestamp - last_rerun_pose_log_timestamp) >=
-                             kRerunPoseLogIntervalSec)) {
-                        rerun_log_pose(&pose_copy);
-                        last_rerun_pose_log_timestamp = pose_copy.timestamp;
                     }
                 }
                 // wasm_log_line("imu: " + std::to_string(imu_copy.timestamp) + ", " + std::to_string(imu_copy.gyro_z));
@@ -1315,7 +1304,7 @@ int main(){
             });
             lk.unlock();
 
-            rerun_log_lidar_frame(&g_lidar_preview_buffer);
+            host_log_lidar_frame(&g_lidar_preview_buffer);
 
             lk.lock();
             g_lidar_preview_ready = false;
@@ -2002,6 +1991,7 @@ int main(){
         uint64_t planned_path_revision = 0;
         core::PoseSE2d wheel_pose{};
         double last_goal_check_log_timestamp = -1.0;
+        double last_host_pose_log_timestamp = -1.0;
         bool goal_reached_logged = false;
         bool wheel_odom_origin_initialized = false;
 
@@ -2067,6 +2057,14 @@ int main(){
             } else {
                 std::lock_guard<std::mutex> lk(m_pose);
                 pose_copy = g_pose;
+            }
+
+            if (pose_copy.timestamp > 0.0 &&
+                (last_host_pose_log_timestamp < 0.0 ||
+                 (pose_copy.timestamp - last_host_pose_log_timestamp) >=
+                     kHostPoseLogIntervalSec)) {
+                host_log_pose(&pose_copy);
+                last_host_pose_log_timestamp = pose_copy.timestamp;
             }
 
             const RobotState state = g_state.load(std::memory_order_acquire);
@@ -2168,18 +2166,15 @@ int main(){
         }
     });
 
-
-
-    // TODO: remove once autonomy control loop is closed
-    // controls::drive_forward_demo();
-    // controls::drive_twist_demo(motors);
-
     imu_thread.join();
     lidar_camera_thread.join();
     lidar_preview_thread.join();
-    semantic_mapping_thread.join();
+
     mapping_thread.join();
-    // planner_thread.join();
+    semantic_mapping_thread.join();
+
+    planner_thread.join();
+    control_thread.join();
+
     telemetry_thread.join();
-    // control_thread.join();
 }

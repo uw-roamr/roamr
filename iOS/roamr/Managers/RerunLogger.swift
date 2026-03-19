@@ -50,6 +50,16 @@ private enum WasmMapLayout {
     static let totalByteCount = layerIdOffset + MemoryLayout<Int32>.size
 }
 
+private enum WasmMapMetadataLayout {
+    static let widthOffset = 0
+    static let heightOffset = widthOffset + MemoryLayout<Int32>.size
+    static let resolutionOffset = heightOffset + MemoryLayout<Int32>.size
+    static let originXOffset = resolutionOffset + MemoryLayout<Double>.size
+    static let originYOffset = originXOffset + MemoryLayout<Double>.size
+    static let originInitializedOffset = originYOffset + MemoryLayout<Double>.size
+    static let totalByteCount = originInitializedOffset + MemoryLayout<Int32>.size
+}
+
 private enum WasmMapLayerId: Int32 {
     case composite = 0
     case base = 1
@@ -103,6 +113,15 @@ private struct WasmMapFrameView {
     let dataPointer: UnsafeMutablePointer<UInt8>
     let dataCount: Int
     let layerId: WasmMapLayerId
+}
+
+private struct WasmMapMetadataView: Equatable {
+    let width: Int
+    let height: Int
+    let resolutionM: Double
+    let originXM: Double
+    let originYM: Double
+    let originInitialized: Bool
 }
 
 private struct WasmImuView {
@@ -506,7 +525,7 @@ private final class WasmRerunTelemetryBridge {
         defer { stateLock.unlock() }
         if warnedImageSizeZero { return }
         warnedImageSizeZero = true
-        print("rerun_log_lidar_frame_impl: image_size is 0 in WASM payload; skipping camera/image logging")
+        print("[host][ios][bridge] image_size is 0 in WASM payload; skipping camera/image logging")
     }
 
     private func recordPerf(decodeMs: Double, pointEmitMs: Double, frameTotalMs: Double) {
@@ -548,6 +567,7 @@ private final class WasmRerunMapBridge {
     private let processingLock = NSLock()
     private let jpegEncoder = RGBJpegEncoder(quality: 0.7)
     private var rgbScratch: [UInt8] = []
+    private var lastPublishedMetadata: WasmMapMetadataView?
 
     private init() {}
 
@@ -559,6 +579,27 @@ private final class WasmRerunMapBridge {
             return
         }
         logMapImage(frame)
+    }
+
+    func handleWasmMapMetadata(execEnv: wasm_exec_env_t?, payloadPointer: UnsafeMutableRawPointer?) {
+        processingLock.lock()
+        defer { processingLock.unlock() }
+
+        guard let metadata = decodeMetadata(execEnv: execEnv, payloadPointer: payloadPointer) else {
+            return
+        }
+        if metadata == lastPublishedMetadata {
+            return
+        }
+        lastPublishedMetadata = metadata
+        WebSocketManager.shared.publishMapMetadata(
+            width: metadata.width,
+            height: metadata.height,
+            resolutionM: metadata.resolutionM,
+            originXM: metadata.originXM,
+            originYM: metadata.originYM,
+            originInitialized: metadata.originInitialized
+        )
     }
 
     private func decodeFrame(
@@ -623,6 +664,58 @@ private final class WasmRerunMapBridge {
             dataPointer: dataPointer,
             dataCount: Int(dataSize),
             layerId: layerId
+        )
+    }
+
+    private func decodeMetadata(
+        execEnv: wasm_exec_env_t?,
+        payloadPointer: UnsafeMutableRawPointer?
+    ) -> WasmMapMetadataView? {
+        guard let execEnv = execEnv, let payloadPointer = payloadPointer else { return nil }
+
+        let basePointer = payloadPointer.assumingMemoryBound(to: UInt8.self)
+        guard let moduleInstance = wasm_runtime_get_module_inst(execEnv) else {
+            return nil
+        }
+
+        var nativeStart: UnsafeMutablePointer<UInt8>?
+        var nativeEnd: UnsafeMutablePointer<UInt8>?
+        guard wasm_runtime_get_native_addr_range(moduleInstance, basePointer, &nativeStart, &nativeEnd) else {
+            return nil
+        }
+
+        if let nativeEnd = nativeEnd {
+            let baseAddress = UInt(bitPattern: basePointer)
+            let endAddress = UInt(bitPattern: nativeEnd)
+            if baseAddress + UInt(WasmMapMetadataLayout.totalByteCount) > endAddress {
+                return nil
+            }
+        }
+
+        let width = basePointer.advanced(by: WasmMapMetadataLayout.widthOffset)
+            .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+        let height = basePointer.advanced(by: WasmMapMetadataLayout.heightOffset)
+            .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+        let resolutionM = basePointer.advanced(by: WasmMapMetadataLayout.resolutionOffset)
+            .withMemoryRebound(to: Double.self, capacity: 1) { $0.pointee }
+        let originXM = basePointer.advanced(by: WasmMapMetadataLayout.originXOffset)
+            .withMemoryRebound(to: Double.self, capacity: 1) { $0.pointee }
+        let originYM = basePointer.advanced(by: WasmMapMetadataLayout.originYOffset)
+            .withMemoryRebound(to: Double.self, capacity: 1) { $0.pointee }
+        let originInitialized = basePointer.advanced(by: WasmMapMetadataLayout.originInitializedOffset)
+            .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+
+        guard width > 0, height > 0, resolutionM > 0 else {
+            return nil
+        }
+
+        return WasmMapMetadataView(
+            width: Int(width),
+            height: Int(height),
+            resolutionM: resolutionM,
+            originXM: originXM,
+            originYM: originYM,
+            originInitialized: originInitialized != 0
         )
     }
 
@@ -1221,25 +1314,71 @@ private extension RerunWebSocketClient {
     }
 }
 
-func rerun_log_lidar_frame_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+func host_log_lidar_frame_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     WasmRerunTelemetryBridge.shared.handleWasmFrame(execEnv: exec_env, payloadPointer: ptr)
 }
 
-func rerun_log_map_frame_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+func host_log_map_frame_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     WasmRerunMapBridge.shared.handleWasmMapFrame(execEnv: exec_env, payloadPointer: ptr)
 }
 
-func rerun_log_imu_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+func host_log_map_metadata_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+    WasmRerunMapBridge.shared.handleWasmMapMetadata(execEnv: exec_env, payloadPointer: ptr)
+}
+
+func host_log_imu_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     _ = exec_env
     _ = ptr
 }
 
-func rerun_log_pose_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
-    _ = exec_env
-    _ = ptr
+func host_log_pose_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+    guard let exec_env, let ptr else { return }
+    let basePointer = ptr.assumingMemoryBound(to: UInt8.self)
+    guard let moduleInstance = wasm_runtime_get_module_inst(exec_env) else {
+        return
+    }
+
+    var nativeStart: UnsafeMutablePointer<UInt8>?
+    var nativeEnd: UnsafeMutablePointer<UInt8>?
+    guard wasm_runtime_get_native_addr_range(moduleInstance, basePointer, &nativeStart, &nativeEnd) else {
+        return
+    }
+
+    if let nativeEnd = nativeEnd {
+        let baseAddress = UInt(bitPattern: basePointer)
+        let endAddress = UInt(bitPattern: nativeEnd)
+        if baseAddress + UInt(WasmPoseLayout.totalByteCount) > endAddress {
+            return
+        }
+    }
+
+    let timestamp = basePointer.advanced(by: WasmPoseLayout.timestampOffset)
+        .withMemoryRebound(to: Double.self, capacity: 1) { $0.pointee }
+    let translationPointer = basePointer.advanced(by: WasmPoseLayout.translationOffset)
+        .withMemoryRebound(to: Double.self, capacity: WasmPoseLayout.translationCount) { $0 }
+    let quaternionPointer = basePointer.advanced(by: WasmPoseLayout.quaternionOffset)
+        .withMemoryRebound(to: Double.self, capacity: WasmPoseLayout.quaternionCount) { $0 }
+
+    let translation = [
+        translationPointer[0],
+        translationPointer[1],
+        translationPointer[2]
+    ]
+    let quaternion = [
+        quaternionPointer[0],
+        quaternionPointer[1],
+        quaternionPointer[2],
+        quaternionPointer[3]
+    ]
+    WebSocketManager.shared.publishPose(
+        timestamp: timestamp,
+        translation: translation,
+        quaternion: quaternion,
+        source: "fused"
+    )
 }
 
-func rerun_log_pose_wheel_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+func host_log_pose_wheel_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     _ = exec_env
     _ = ptr
 }
