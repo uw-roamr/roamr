@@ -922,6 +922,7 @@ static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
 static constexpr double kStartupWaitLogIntervalSec = 1.0;
 static constexpr int32_t kPathFollowHoldMs = 120;
+static constexpr double kControlStatusLogIntervalSec = 0.5;
 static constexpr double kGoalCheckLogIntervalSec = 0.5;
 static constexpr double kHostPoseLogIntervalSec = 1.0 / 30.0;
 static constexpr bool kEnableVerboseAutonomyLogs = false;
@@ -2083,9 +2084,55 @@ int main(){
         uint64_t planned_path_revision = 0;
         core::PoseSE2d wheel_pose{};
         double last_goal_check_log_timestamp = -1.0;
+        double last_control_status_log_timestamp = -1.0;
         double last_host_pose_log_timestamp = -1.0;
         bool goal_reached_logged = false;
         bool wheel_odom_origin_initialized = false;
+
+        auto maybe_log_control_status =
+            [&](const char* reason,
+                const controls::Pose2D* fused_pose,
+                const controls::PathFollowerStatus* status,
+                const controls::TwistCommand* command,
+                bool has_path,
+                bool scan_active,
+                bool goal_reached) {
+                if (!reason || odom.timestamp <= 0.0) {
+                    return;
+                }
+                if (last_control_status_log_timestamp >= 0.0 &&
+                    (odom.timestamp - last_control_status_log_timestamp) <
+                        kControlStatusLogIntervalSec) {
+                    return;
+                }
+                std::ostringstream log;
+                log << "[control]"
+                    << " reason=" << reason
+                    << " state=" << static_cast<int>(g_state.load(std::memory_order_acquire))
+                    << " substate=" << autonomy::autonomy_substate_name(
+                           g_autonomy_substate.load(std::memory_order_acquire))
+                    << " scan_active=" << (scan_active ? 1 : 0)
+                    << " has_path=" << (has_path ? 1 : 0)
+                    << " path_revision=" << planned_path_revision
+                    << " waypoints=" << planned_path_world.size()
+                    << " goal_reached=" << (goal_reached ? 1 : 0);
+                if (fused_pose) {
+                    log << " pose=("
+                        << fused_pose->x << "," << fused_pose->y << "," << fused_pose->yaw
+                        << ")";
+                }
+                if (status) {
+                    log << " target_index=" << status->target_index
+                        << " dist_error=" << status->distance_error_m
+                        << " heading_error=" << status->heading_error_rad;
+                }
+                if (command) {
+                    log << " v_cmd=" << command->v_mps
+                        << " omega_cmd=" << command->omega_rad_s;
+                }
+                wasm_log_line(log.str());
+                last_control_status_log_timestamp = odom.timestamp;
+            };
 
         while(true){
             read_wheel_odometry(&odom);
@@ -2167,10 +2214,26 @@ int main(){
                 path_follower.clear_path();
                 planned_path_world.clear();
                 motors.stop();
+                maybe_log_control_status(
+                    "no_reachable_frontiers",
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    false,
+                    g_scan_active.load(std::memory_order_acquire),
+                    false);
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 continue;
             }
             if (g_scan_active.load(std::memory_order_acquire)) {
+                maybe_log_control_status(
+                    "scan_active",
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    path_follower.has_path(),
+                    true,
+                    false);
                 continue;
             }
 
@@ -2196,12 +2259,28 @@ int main(){
                 } else {
                     path_follower.clear_path();
                     motors.stop();
+                    maybe_log_control_status(
+                        "path_revision_cleared",
+                        &fused_pose,
+                        nullptr,
+                        nullptr,
+                        false,
+                        false,
+                        false);
                     set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "path_revision_cleared");
                 }
             }
 
             if (!path_follower.has_path()) {
                 motors.stop();
+                maybe_log_control_status(
+                    "no_path",
+                    &fused_pose,
+                    nullptr,
+                    nullptr,
+                    false,
+                    false,
+                    false);
                 continue;
             }
 
@@ -2249,11 +2328,30 @@ int main(){
                     g_latest_plan_overlay = planning::bridge::PlanningOverlay{};
                 }
                 motors.stop();
+                maybe_log_control_status(
+                    "goal_reached",
+                    &fused_pose,
+                    &status,
+                    &status.command,
+                    false,
+                    false,
+                    true);
                 set_autonomy_substate(autonomy::AutonomySubstate::SCAN_REQUESTED, "goal_reached");
                 g_scan_requested.store(true, std::memory_order_release);
                 continue;
             }
             goal_reached_logged = false;
+            maybe_log_control_status(
+                (std::abs(status.command.v_mps) < 1e-4 &&
+                 std::abs(status.command.omega_rad_s) < 1e-4)
+                    ? "zero_command"
+                    : "tracking",
+                &fused_pose,
+                &status,
+                &status.command,
+                true,
+                false,
+                false);
             motors.drive_twist(status.command, odom);
         }
     });
