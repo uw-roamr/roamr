@@ -13,6 +13,8 @@ enum BrowseFilter: String, CaseIterable {
 }
 
 struct BrowseTab: View {
+	@Environment(\.safeAreaInsets) private var safeAreaInsets
+
     @State private var searchText = ""
     @State private var selectedFilter: BrowseFilter = .publicFiles
     @State private var errorMessage: String?
@@ -79,7 +81,7 @@ struct BrowseTab: View {
                     }
                 }
                 .padding(.horizontal)
-                .padding(.bottom, 20)
+				.padding(.bottom, safeAreaInsets.bottom + AppConstants.shared.tabBarHeight)
             }
         }
         .task {
