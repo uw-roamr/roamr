@@ -21,7 +21,8 @@
 #include "freertos/task.h"
 #include "nvs_flash.h"
 
-#define DEVICE_NAME "ESP32_C6"
+// REPLACE X HERE AND BELOW WITH ROBOT NUMBER
+#define DEVICE_NAME "roamr-robot-X"
 #define GATTS_SERVICE_UUID 0x00FF
 #define GATTS_CONTROL_CHAR_UUID 0xFF01
 #define GATTS_DATA_CHAR_UUID 0xFF02
@@ -76,8 +77,9 @@ struct OdomSample {
   int16_t dr_ticks;
 };
 
-static uint8_t raw_adv_data[] = {0x02, 0x01, 0x06, 0x09, 0x09, 'E', 'S',
-                                 'P',  '3',  '2',  '_',  'C',  '6'};
+// REPLACE X HERE WITH ROBOT NUMBER
+static uint8_t raw_adv_data[] = {0x02, 0x01, 0x06, 0x0E, 0x09, 'r', 'o',
+                                 'a',  'm',  'r',  '-',  'r',  'o', 'b', 'o', 't', '-', 'X'};
 
 static esp_ble_adv_params_t adv_params = {
     .adv_int_min = 0x20,
@@ -233,8 +235,8 @@ static int16_t wrappedDeltaTicks(uint16_t current, uint16_t previous) {
 }
 
 static void setMotorTargetsPercent(int left_pct, int right_pct) {
-  const float left_voltage = (clampPercent(left_pct) / 100.0f) * 12.0f;
-  const float right_voltage = -(clampPercent(right_pct) / 100.0f) * 12.0f;
+  const float left_voltage = -(clampPercent(left_pct) / 100.0f) * 12.0f;
+  const float right_voltage = (clampPercent(right_pct) / 100.0f) * 12.0f;
   g_motor_left.target = left_voltage;
   g_motor_right.target = right_voltage;
 }
