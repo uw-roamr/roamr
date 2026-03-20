@@ -851,9 +851,22 @@ FrontierPlanResult plan_to_largest_frontier_in_window(
 
   int32_t best_cluster_index = -1;
   int32_t best_cluster_size = -1;
+  double best_cluster_distance2 = std::numeric_limits<double>::infinity();
   for (size_t i = 0; i < clusters.size(); ++i) {
     const int32_t cluster_size = static_cast<int32_t>(clusters[i].size());
-    if (cluster_size > best_cluster_size) {
+    if (cluster_size <= 0) {
+      continue;
+    }
+    const GridCoord centroid = cluster_centroids[i];
+    const double dx = static_cast<double>(centroid.x - start_cell.x);
+    const double dy = static_cast<double>(centroid.y - start_cell.y);
+    const double distance2 = dx * dx + dy * dy;
+    const bool better_distance = distance2 + 1e-6 < best_cluster_distance2;
+    const bool near_equal_distance =
+        std::abs(distance2 - best_cluster_distance2) <= 1e-6;
+    if (better_distance ||
+        (near_equal_distance && cluster_size > best_cluster_size)) {
+      best_cluster_distance2 = distance2;
       best_cluster_size = cluster_size;
       best_cluster_index = static_cast<int32_t>(i);
     }
@@ -978,88 +991,12 @@ FrontierPlanResult plan_to_largest_frontier(
     aggregated_result.message = "robot pose outside map bounds";
     return aggregated_result;
   }
-
-  constexpr double kInitialWindowSizeM = 1.0;
-  constexpr double kWindowGrowthStepM = 0.5;
-  const int32_t initial_window_cells = std::max<int32_t>(
-      1,
-      static_cast<int32_t>(std::ceil(kInitialWindowSizeM / map.resolution_m)));
-  const int32_t growth_step_cells = std::max<int32_t>(
-      1,
-      static_cast<int32_t>(std::ceil(kWindowGrowthStepM / map.resolution_m)));
-
-  int32_t adaptive_attempts = 0;
-  bool attempted_full_map = false;
-
-  auto finish_attempt = [&](FrontierPlanResult attempt_result,
-                            const GridWindowBounds& window,
-                            bool full_map_attempt) {
-    ++adaptive_attempts;
-    accumulate_perf(attempt_result.perf, &aggregated_result.perf);
-    attempt_result.perf = aggregated_result.perf;
-    attempt_result.perf.adaptive_attempts = adaptive_attempts;
-    attempt_result.perf.attempted_window_size_m =
-        std::max(window.width, window.height) * map.resolution_m;
-    attempt_result.perf.used_full_map_fallback = full_map_attempt ? 1 : 0;
-    return attempt_result;
-  };
-
-  for (int32_t window_cells = initial_window_cells;
-       window_cells < std::max(map.width, map.height);
-       window_cells += growth_step_cells) {
-    const GridWindowBounds window = build_window_bounds(
-        map, start_cell, window_cells, window_cells);
-    const bool full_map_attempt = is_full_window(map, window);
-    if (full_map_attempt) {
-      attempted_full_map = true;
-    }
-
-    const GridMap2D cropped_map = crop_grid_map(map, window);
-    FrontierPlanResult attempt_result =
-        plan_to_largest_frontier_in_window(cropped_map, start_world, cfg);
-    attempt_result.frontier_cells =
-        translate_cells_to_global(attempt_result.frontier_cells, window);
-    attempt_result.path_grid =
-        translate_cells_to_global(attempt_result.path_grid, window);
-    attempt_result.selected_cluster_cells =
-        translate_cells_to_global(attempt_result.selected_cluster_cells, window);
-    if (attempt_result.success) {
-      attempt_result.goal_cell =
-          translate_to_global_cell(attempt_result.goal_cell, window);
-    }
-    if (attempt_result.success || !attempt_result.selected_cluster_cells.empty()) {
-      attempt_result.selected_seed =
-          translate_to_global_cell(attempt_result.selected_seed, window);
-    }
-
-    if (attempt_result.success) {
-      return finish_attempt(std::move(attempt_result), window, full_map_attempt);
-    }
-    aggregated_result = finish_attempt(std::move(attempt_result), window, full_map_attempt);
-    if (full_map_attempt) {
-      return aggregated_result;
-    }
-  }
-
-  if (!attempted_full_map) {
-    GridWindowBounds full_window;
-    full_window.width = map.width;
-    full_window.height = map.height;
-    FrontierPlanResult attempt_result =
-        plan_to_largest_frontier_in_window(map, start_world, cfg);
-    if (attempt_result.success) {
-      attempt_result = finish_attempt(std::move(attempt_result), full_window, true);
-      attempt_result.perf.used_full_map_fallback = 1;
-      return attempt_result;
-    }
-    aggregated_result = finish_attempt(std::move(attempt_result), full_window, true);
-    aggregated_result.perf.used_full_map_fallback = 1;
-    return aggregated_result;
-  }
-
-  aggregated_result.perf.adaptive_attempts = adaptive_attempts;
-  aggregated_result.message = "no reachable frontier cluster";
-  return aggregated_result;
+  FrontierPlanResult result = plan_to_largest_frontier_in_window(map, start_world, cfg);
+  result.perf.adaptive_attempts = 1;
+  result.perf.attempted_window_size_m =
+      std::max(map.width, map.height) * map.resolution_m;
+  result.perf.used_full_map_fallback = 1;
+  return result;
 }
 
 }  // namespace planning::simplified
