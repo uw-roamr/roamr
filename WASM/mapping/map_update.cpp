@@ -27,7 +27,8 @@ namespace mapping {
   // Color map-eligible 3D points in rerun for fast filter debugging.
   constexpr bool kLogHighlightFiltered = true;
   constexpr double kMapLogIntervalSec = 0.1;
-  constexpr int kOccupancyRayBins = 512;
+  constexpr int kHitRayBins = 1024;
+  constexpr int kFreeRayBins = 512;
   constexpr int kMaxRawPointsPerScan = 12000;
   constexpr int kMapPreprocessSlices = 1;
 
@@ -44,11 +45,14 @@ namespace mapping {
 
   static MapPerfWindow g_map_perf_window;
 
-  struct DirectionalBinSample {
+  struct HitDirectionalBinSample {
     bool has_hit = false;
     double hit_range2 = std::numeric_limits<double>::infinity();
     double hit_world_x = 0.0;
     double hit_world_y = 0.0;
+  };
+
+  struct FreeDirectionalBinSample {
     bool has_free = false;
     double free_range2 = std::numeric_limits<double>::infinity();
     double free_world_x = 0.0;
@@ -60,38 +64,39 @@ namespace mapping {
     return std::chrono::duration<double, std::milli>(end - start).count();
   }
 
-  inline int ray_bin_from_angle(double angle_rad) {
+  inline int ray_bin_from_angle(double angle_rad, int bin_count) {
     const double wrapped = core::normalize_angle(angle_rad);
     const double unit = (wrapped + core::pi) / (2.0 * core::pi);
-    int bin = static_cast<int>(std::floor(unit * static_cast<double>(kOccupancyRayBins)));
+    int bin = static_cast<int>(std::floor(unit * static_cast<double>(bin_count)));
     if (bin < 0) {
       bin = 0;
     }
-    if (bin >= kOccupancyRayBins) {
-      bin = kOccupancyRayBins - 1;
+    if (bin >= bin_count) {
+      bin = bin_count - 1;
     }
     return bin;
   }
 
+  template <typename Sample, size_t N>
   inline void reset_directional_bins(
-      std::array<DirectionalBinSample, kOccupancyRayBins>* bins) {
+      std::array<Sample, N>* bins) {
     if (!bins) {
       return;
     }
-    for (DirectionalBinSample& bin : *bins) {
-      bin = DirectionalBinSample{};
+    for (Sample& bin : *bins) {
+      bin = Sample{};
     }
   }
 
-  inline void merge_directional_bins(
-      const std::array<DirectionalBinSample, kOccupancyRayBins>& src,
-      std::array<DirectionalBinSample, kOccupancyRayBins>* dst) {
+  inline void merge_hit_directional_bins(
+      const std::array<HitDirectionalBinSample, kHitRayBins>& src,
+      std::array<HitDirectionalBinSample, kHitRayBins>* dst) {
     if (!dst) {
       return;
     }
-    for (int i = 0; i < kOccupancyRayBins; ++i) {
-      const DirectionalBinSample& src_bin = src[i];
-      DirectionalBinSample& dst_bin = (*dst)[i];
+    for (int i = 0; i < kHitRayBins; ++i) {
+      const HitDirectionalBinSample& src_bin = src[i];
+      HitDirectionalBinSample& dst_bin = (*dst)[i];
       if (src_bin.has_hit &&
           (!dst_bin.has_hit || src_bin.hit_range2 < dst_bin.hit_range2)) {
         dst_bin.has_hit = true;
@@ -99,9 +104,18 @@ namespace mapping {
         dst_bin.hit_world_x = src_bin.hit_world_x;
         dst_bin.hit_world_y = src_bin.hit_world_y;
       }
-      if (dst_bin.has_hit) {
-        continue;
-      }
+    }
+  }
+
+  inline void merge_free_directional_bins(
+      const std::array<FreeDirectionalBinSample, kFreeRayBins>& src,
+      std::array<FreeDirectionalBinSample, kFreeRayBins>* dst) {
+    if (!dst) {
+      return;
+    }
+    for (int i = 0; i < kFreeRayBins; ++i) {
+      const FreeDirectionalBinSample& src_bin = src[i];
+      FreeDirectionalBinSample& dst_bin = (*dst)[i];
       if (src_bin.has_free &&
           (!dst_bin.has_free || src_bin.free_range2 < dst_bin.free_range2)) {
         dst_bin.has_free = true;
@@ -110,6 +124,19 @@ namespace mapping {
         dst_bin.free_world_y = src_bin.free_world_y;
       }
     }
+  }
+
+  inline bool free_bin_overlaps_hit(
+      int free_bin,
+      const std::array<HitDirectionalBinSample, kHitRayBins>& hit_bins) {
+    const int hit_begin = (free_bin * kHitRayBins) / kFreeRayBins;
+    const int hit_end = ((free_bin + 1) * kHitRayBins + kFreeRayBins - 1) / kFreeRayBins;
+    for (int hit_bin = hit_begin; hit_bin < std::min(hit_end, kHitRayBins); ++hit_bin) {
+      if (hit_bins[hit_bin].has_hit) {
+        return true;
+      }
+    }
+    return false;
   }
 
   void classify_lidar_points_into_directional_bins(
@@ -127,8 +154,9 @@ namespace mapping {
       double r20,
       double r21,
       double r22,
-      std::array<DirectionalBinSample, kOccupancyRayBins>* bins) {
-    if (!bins) {
+      std::array<HitDirectionalBinSample, kHitRayBins>* hit_bins,
+      std::array<FreeDirectionalBinSample, kFreeRayBins>* free_bins) {
+    if (!hit_bins || !free_bins) {
       return;
     }
     for (int point_idx = point_begin; point_idx < point_end; point_idx += point_stride) {
@@ -145,11 +173,11 @@ namespace mapping {
         continue;
       }
 
-      const int ray_bin = ray_bin_from_angle(std::atan2(lidar_y, lidar_x));
-      DirectionalBinSample& bin = (*bins)[ray_bin];
       const double planar_range2 = lidar_x * lidar_x + lidar_y * lidar_y;
       const double r2 = rel_x * rel_x + rel_y * rel_y;
       if (r2 <= static_cast<double>(mapMaxRangeMeters * mapMaxRangeMeters)) {
+        const int hit_bin = ray_bin_from_angle(std::atan2(lidar_y, lidar_x), kHitRayBins);
+        HitDirectionalBinSample& bin = (*hit_bins)[hit_bin];
         if (!bin.has_hit || planar_range2 < bin.hit_range2) {
           bin.has_hit = true;
           bin.hit_range2 = planar_range2;
@@ -159,11 +187,13 @@ namespace mapping {
         continue;
       }
 
-      if (r2 <= 1e-9 || bin.has_hit) {
+      if (r2 <= 1e-9) {
         continue;
       }
 
       const double r = std::sqrt(r2);
+      const int free_bin = ray_bin_from_angle(std::atan2(lidar_y, lidar_x), kFreeRayBins);
+      FreeDirectionalBinSample& bin = (*free_bins)[free_bin];
       if (!bin.has_free || planar_range2 < bin.free_range2) {
         bin.has_free = true;
         bin.free_range2 = planar_range2;
@@ -292,8 +322,10 @@ namespace mapping {
     constexpr float max_range2 = mapMaxRangeMeters * mapMaxRangeMeters;
     int used_points = 0;
     int free_points = 0;
-    std::array<DirectionalBinSample, kOccupancyRayBins> ray_bins{};
-    reset_directional_bins(&ray_bins);
+    std::array<HitDirectionalBinSample, kHitRayBins> hit_ray_bins{};
+    std::array<FreeDirectionalBinSample, kFreeRayBins> free_ray_bins{};
+    reset_directional_bins(&hit_ray_bins);
+    reset_directional_bins(&free_ray_bins);
     int32_t start_x = 0;
     int32_t start_y = 0;
     bool scan_ready = false;
@@ -326,14 +358,18 @@ namespace mapping {
           r20,
           r21,
           r22,
-          &ray_bins);
+          &hit_ray_bins,
+          &free_ray_bins);
     } else {
-      std::array<std::array<DirectionalBinSample, kOccupancyRayBins>, kMapPreprocessSlices>
-          slice_bins{};
+      std::array<std::array<HitDirectionalBinSample, kHitRayBins>, kMapPreprocessSlices>
+          slice_hit_bins{};
+      std::array<std::array<FreeDirectionalBinSample, kFreeRayBins>, kMapPreprocessSlices>
+          slice_free_bins{};
       const int slice_span =
           (total_points + kMapPreprocessSlices - 1) / kMapPreprocessSlices;
       for (int slice_idx = 0; slice_idx < kMapPreprocessSlices; ++slice_idx) {
-        reset_directional_bins(&slice_bins[slice_idx]);
+        reset_directional_bins(&slice_hit_bins[slice_idx]);
+        reset_directional_bins(&slice_free_bins[slice_idx]);
         const int point_begin = slice_idx * slice_span;
         const int point_end = std::min(total_points, point_begin + slice_span);
         if (point_begin >= point_end) {
@@ -354,10 +390,12 @@ namespace mapping {
             r20,
             r21,
             r22,
-            &slice_bins[slice_idx]);
+            &slice_hit_bins[slice_idx],
+            &slice_free_bins[slice_idx]);
       }
       for (int slice_idx = 0; slice_idx < kMapPreprocessSlices; ++slice_idx) {
-        merge_directional_bins(slice_bins[slice_idx], &ray_bins);
+        merge_hit_directional_bins(slice_hit_bins[slice_idx], &hit_ray_bins);
+        merge_free_directional_bins(slice_free_bins[slice_idx], &free_ray_bins);
       }
     }
     const double classify_seconds =
@@ -366,7 +404,7 @@ namespace mapping {
             .count();
 
     const auto hit_integrate_started_at = std::chrono::steady_clock::now();
-    for (const DirectionalBinSample& bin : ray_bins) {
+    for (const HitDirectionalBinSample& bin : hit_ray_bins) {
       if (!bin.has_hit || used_points >= kMaxMapPoints || !ensure_scan_ready()) {
         continue;
       }
@@ -387,8 +425,9 @@ namespace mapping {
             .count();
 
     const auto free_integrate_started_at = std::chrono::steady_clock::now();
-    for (const DirectionalBinSample& bin : ray_bins) {
-      if (bin.has_hit) {
+    for (int free_bin = 0; free_bin < kFreeRayBins; ++free_bin) {
+      const FreeDirectionalBinSample& bin = free_ray_bins[free_bin];
+      if (free_bin_overlaps_hit(free_bin, hit_ray_bins)) {
         continue;
       }
       if (bin.has_free && free_points < kMaxFreeRays && ensure_scan_ready()) {
