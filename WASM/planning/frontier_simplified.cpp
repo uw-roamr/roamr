@@ -844,29 +844,13 @@ FrontierPlanResult plan_to_largest_frontier_in_window(
     result.message = "no frontier clusters";
     return finish();
   }
-  const auto centroid_start = std::chrono::steady_clock::now();
-  const std::vector<GridCoord> cluster_centroids = compute_cluster_centroids(clusters);
-  result.perf.centroid_ms = elapsed_ms(centroid_start);
-  result.frontier_cells = cluster_centroids;
+  result.frontier_cells = frontier_cells;
 
   int32_t best_cluster_index = -1;
   int32_t best_cluster_size = -1;
-  double best_cluster_distance2 = std::numeric_limits<double>::infinity();
   for (size_t i = 0; i < clusters.size(); ++i) {
     const int32_t cluster_size = static_cast<int32_t>(clusters[i].size());
-    if (cluster_size <= 0) {
-      continue;
-    }
-    const GridCoord centroid = cluster_centroids[i];
-    const double dx = static_cast<double>(centroid.x - start_cell.x);
-    const double dy = static_cast<double>(centroid.y - start_cell.y);
-    const double distance2 = dx * dx + dy * dy;
-    const bool better_distance = distance2 + 1e-6 < best_cluster_distance2;
-    const bool near_equal_distance =
-        std::abs(distance2 - best_cluster_distance2) <= 1e-6;
-    if (better_distance ||
-        (near_equal_distance && cluster_size > best_cluster_size)) {
-      best_cluster_distance2 = distance2;
+    if (cluster_size > best_cluster_size) {
       best_cluster_size = cluster_size;
       best_cluster_index = static_cast<int32_t>(i);
     }
@@ -886,50 +870,23 @@ FrontierPlanResult plan_to_largest_frontier_in_window(
           &goal_seed,
           &goal_cell)) {
     result.perf.approach_ms = elapsed_ms(approach_start);
-    result.selected_cluster_cells = {goal_seed};
     result.message = "largest frontier cluster has no nearby free approach cell";
     return finish();
   }
   result.perf.approach_ms = elapsed_ms(approach_start);
 
   const auto path_start = std::chrono::steady_clock::now();
-  const PlanResult seed_plan = plan_to_grid_with_clearance_cost_impl(
+  const PlanResult planned = plan_to_grid_with_clearance_cost_impl(
       map,
       planner_cfg,
       inflated_occupancy,
       start_cell,
       goal_cell);
   result.perf.path_ms = elapsed_ms(path_start);
-  if (!seed_plan.success || seed_plan.path_grid.empty() || seed_plan.path_world.empty()) {
-    if (best_cluster_index >= 0 &&
-        static_cast<size_t>(best_cluster_index) < cluster_centroids.size()) {
-      result.selected_cluster_cells = {
-          cluster_centroids[static_cast<size_t>(best_cluster_index)]};
-    }
+  if (!planned.success || planned.path_grid.empty() || planned.path_world.empty()) {
     result.message = "largest frontier cluster unreachable";
     return finish();
   }
-
-  PlanResult planned = seed_plan;
-  double applied_standoff_m = 0.0;
-  const auto standoff_start = std::chrono::steady_clock::now();
-  if (!apply_goal_standoff(
-          map,
-          planner_cfg,
-          seed_plan,
-          cfg.min_standoff_path_progress_m,
-          &planned,
-          &applied_standoff_m)) {
-    result.perf.standoff_ms = elapsed_ms(standoff_start);
-    if (best_cluster_index >= 0 &&
-        static_cast<size_t>(best_cluster_index) < cluster_centroids.size()) {
-      result.selected_cluster_cells = {
-          cluster_centroids[static_cast<size_t>(best_cluster_index)]};
-    }
-    result.message = "largest frontier cluster standoff failed";
-    return finish();
-  }
-  result.perf.standoff_ms = elapsed_ms(standoff_start);
 
   result.success = true;
   result.message = "ok";
@@ -937,14 +894,9 @@ FrontierPlanResult plan_to_largest_frontier_in_window(
   result.selected_seed = goal_seed;
   result.path_grid = planned.path_grid;
   result.path_world = planned.path_world;
-  if (best_cluster_index >= 0 &&
-      static_cast<size_t>(best_cluster_index) < cluster_centroids.size()) {
-    result.selected_cluster_cells = {
-        cluster_centroids[static_cast<size_t>(best_cluster_index)]};
-  }
+  result.selected_cluster_cells = best_cluster;
   result.selected_cluster_size = best_cluster_size;
   result.selected_path_length_m = path_length_m(map, planned.path_grid);
-  result.selected_goal_standoff_m = applied_standoff_m;
 
   std::ostringstream log;
   log << "[planning][simplified] success=1"
@@ -992,7 +944,8 @@ FrontierPlanResult plan_to_largest_frontier(
     return aggregated_result;
   }
 
-  constexpr double kLocalWindowSizeM = 3.0;
+  const double kLocalWindowSizeM =
+      std::max(map.width, map.height) * map.resolution_m;
   const int32_t local_window_cells = std::max<int32_t>(
       1,
       static_cast<int32_t>(std::ceil(kLocalWindowSizeM / map.resolution_m)));

@@ -348,9 +348,6 @@ void Map::integrate_hit_world(
   if (hit_cell_scan_stamp_[end_idx] == current_scan_stamp_) {
     return;
   }
-  if (!ray_reaches_endpoint_without_occlusion(start_x, start_y, end_x, end_y)) {
-    return;
-  }
   hit_cell_scan_stamp_[end_idx] = current_scan_stamp_;
   integrate_ray(
       start_x,
@@ -372,10 +369,6 @@ void Map::integrate_free_world(
   if (!world_to_grid(wx, wy, &end_x, &end_y)) {
     return;
   }
-  if (!ray_reaches_endpoint_without_occlusion(start_x, start_y, end_x, end_y)) {
-    return;
-  }
-
   integrate_free_ray(start_x, start_y, end_x, end_y);
 }
 

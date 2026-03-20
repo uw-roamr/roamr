@@ -27,13 +27,14 @@ struct PIDGains {
 
 struct PathFollowerConfig {
   PIDGains distance_pid{1.8, 0.0, 0.12, 0.6};
-  PIDGains heading_pid{1.0, 0.0, 0.22, 1.5};
+  PIDGains heading_pid{0.8, 0.0, 0.22, 1.5};
 
   double lookahead_m = 0.05;
   double waypoint_reached_m = 0.02;
   double goal_tolerance_m = 0.04;
   double goal_heading_tolerance_rad = 0.22;
   double start_heading_align_tolerance_rad = 0.18;
+  double max_anchor_distance_m = 0.08;
 
   double max_linear_speed_mps = kMaxLinearSpeedMps;
   double max_angular_speed_rad_s = kMaxAngularSpeedRadPerSec;
@@ -76,9 +77,12 @@ class PathFollower {
       // continue toward its forward endpoint instead of driving back to path_[0].
       // Still require heading alignment before resuming forward motion so the
       // robot does not cut through inflated cells on the new first segment.
-      target_index_ = select_anchor_index(*current_pose);
-      heading_alignment_segment_index_ =
-          std::min(target_index_, path_.size() - 1) > 0 ? (target_index_ - 1) : 0;
+      const AnchorSelection anchor = select_anchor(*current_pose);
+      if (anchor.distance_m <= cfg_.max_anchor_distance_m) {
+        target_index_ = anchor.target_index;
+        heading_alignment_segment_index_ =
+            std::min(target_index_, path_.size() - 1) > 0 ? (target_index_ - 1) : 0;
+      }
     }
     reset_controller_state();
   }
@@ -314,9 +318,16 @@ class PathFollower {
     return idx;
   }
 
-  size_t select_anchor_index(const Pose2D& pose) const {
+  struct AnchorSelection {
+    size_t target_index = 0;
+    double distance_m = std::numeric_limits<double>::infinity();
+  };
+
+  AnchorSelection select_anchor(const Pose2D& pose) const {
+    AnchorSelection best;
     if (path_.size() < 2) {
-      return 0;
+      best.distance_m = 0.0;
+      return best;
     }
 
     size_t best_segment_index = 0;
@@ -329,7 +340,9 @@ class PathFollower {
         best_segment_index = i;
       }
     }
-    return std::min(best_segment_index + 1, path_.size() - 1);
+    best.target_index = std::min(best_segment_index + 1, path_.size() - 1);
+    best.distance_m = std::sqrt(best_dist_sq);
+    return best;
   }
 
   static double point_to_segment_distance_sq(

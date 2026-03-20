@@ -21,6 +21,10 @@ constexpr int32_t kRenderWidthDefault = 256;   // keep in sync with mapping/map_
 constexpr int32_t kRenderHeightDefault = 256;  // keep in sync with mapping/map_update.cpp
 constexpr int32_t kMaxPlannedPathCells = 4096; // keep in sync with mapping/map.cpp
 constexpr bool kEnableAutoFrontierExploration = true;
+constexpr bool kUsePersistentFrontierGoals = false;
+constexpr double kAutoFrontierReplanIntervalSec = 0.75;
+constexpr double kPlanStartPoseSnapDistanceM = 0.05;
+constexpr double kPlanStartRejectDistanceM = 0.10;
 constexpr double kVisitedFrontierRadiusM = 0.20;
 constexpr int32_t kFrontierMergeDistanceCells = 3;
 constexpr size_t kMaxFrontierPlanAttempts = 8;
@@ -44,6 +48,8 @@ std::atomic<uint64_t> g_planner_telemetry_sequence{0};
 std::mutex g_planned_path_mutex;
 std::vector<core::Vector3d> g_planned_path_world;
 uint64_t g_planned_path_revision = 0;
+std::chrono::steady_clock::time_point g_last_auto_frontier_plan_time =
+    std::chrono::steady_clock::time_point::min();
 struct FrontierProfileWindow {
   std::chrono::steady_clock::time_point window_start =
       std::chrono::steady_clock::time_point::min();
@@ -103,7 +109,7 @@ FrontierExplorerConfig build_frontier_config() {
   cfg.snap_goal_to_free = true;
   cfg.snap_search_radius_cells = 10;
   cfg.min_cluster_size = 4;
-  cfg.goal_standoff_m = 0.12;
+  cfg.goal_standoff_m = 0.18;
   cfg.min_standoff_path_progress_m = 0.10;
   return cfg;
 }
@@ -134,6 +140,73 @@ double path_length_m(const std::vector<core::Vector3d>& path_world) {
     length += std::sqrt(dx * dx + dy * dy);
   }
   return length;
+}
+
+double planar_distance_m(const core::Vector3d& a, const core::Vector3d& b) {
+  const double dx = a.x - b.x;
+  const double dy = a.y - b.y;
+  return std::sqrt(dx * dx + dy * dy);
+}
+
+std::string plan_start_offset_message(double start_offset_m) {
+  std::ostringstream oss;
+  oss << "plan start offset " << start_offset_m << "m from pose";
+  return oss.str();
+}
+
+bool align_path_start_with_pose(
+    const core::Vector3d& start_world,
+    std::vector<core::Vector3d>* path_world,
+    std::string* message) {
+  if (!path_world || path_world->empty()) {
+    return false;
+  }
+  const double start_offset_m = planar_distance_m(path_world->front(), start_world);
+  if (start_offset_m > kPlanStartRejectDistanceM) {
+    if (message) {
+      *message = plan_start_offset_message(start_offset_m);
+    }
+    return false;
+  }
+  if (start_offset_m <= kPlanStartPoseSnapDistanceM) {
+    core::Vector3d& start = path_world->front();
+    start.x = start_world.x;
+    start.y = start_world.y;
+    start.z = start_world.z;
+  }
+  return true;
+}
+
+void invalidate_plan_start_mismatch(
+    const core::Vector3d& start_world,
+    PlanResult* planned) {
+  if (!planned || planned->path_world.empty()) {
+    return;
+  }
+  planned->success = false;
+  planned->message =
+      plan_start_offset_message(planar_distance_m(planned->path_world.front(), start_world));
+  planned->path_grid.clear();
+  planned->path_world.clear();
+  planned->changed_cells.clear();
+  planned->expanded_cells.clear();
+}
+
+void invalidate_plan_start_mismatch(
+    const core::Vector3d& start_world,
+    FrontierPlanResult* planned) {
+  if (!planned || planned->path_world.empty()) {
+    return;
+  }
+  planned->success = false;
+  planned->message =
+      plan_start_offset_message(planar_distance_m(planned->path_world.front(), start_world));
+  planned->goal_cell = GridCoord{};
+  planned->path_grid.clear();
+  planned->path_world.clear();
+  planned->selected_path_length_m = 0.0;
+  planned->selected_heading_delta_rad = 0.0;
+  planned->selected_goal_standoff_m = 0.0;
 }
 
 DStarLitePlanner g_planner(build_planner_config());
@@ -909,6 +982,10 @@ PlanningOverlay update_plan_overlay(
     update_cached_overlay(overlay);
     return overlay;
   }
+  const core::Vector3d start_world{
+      snapshot.pose.x,
+      snapshot.pose.y,
+      snapshot.pose.theta};
 
   if (goal.active) {
     if (render_width <= 0) {
@@ -941,16 +1018,13 @@ PlanningOverlay update_plan_overlay(
       return overlay;
     }
 
-    const PlannerConfig planner_cfg = build_planner_config();
-    const std::vector<int8_t> inflated_occupancy =
-        inflate_obstacles(planner_map, planner_cfg);
-    const PlanResult planned =
-        simplified::plan_to_grid_with_clearance_cost(
-            planner_map,
-            planner_cfg,
-            inflated_occupancy,
-            start_cell,
-            goal_cell);
+    PlanResult planned = g_planner.plan_to_grid(planner_map, start_cell, goal_cell);
+    if (planned.success &&
+        !planned.path_grid.empty() &&
+        !planned.path_world.empty() &&
+        !align_path_start_with_pose(start_world, &planned.path_world, &planned.message)) {
+      invalidate_plan_start_mismatch(start_world, &planned);
+    }
     publish_direct_planner_telemetry(
         snapshot.map_revision,
         g_goal_revision.load(std::memory_order_acquire),
@@ -975,30 +1049,42 @@ PlanningOverlay update_plan_overlay(
     return overlay;
   }
 
-  PlanningOverlay cached = copy_cached_overlay();
-  if (!cached.path_grid.empty() && is_overlay_path_valid(snapshot, cached)) {
-    cached.source_map_revision = snapshot.map_revision;
+  const auto now = std::chrono::steady_clock::now();
+  const double elapsed_sec = std::chrono::duration<double>(
+      now - g_last_auto_frontier_plan_time).count();
+  if (g_last_auto_frontier_plan_time != std::chrono::steady_clock::time_point::min() &&
+      elapsed_sec < kAutoFrontierReplanIntervalSec) {
+    PlanningOverlay cached = copy_cached_overlay();
+    if (cached.source_map_revision != 0) {
+      cached.source_map_revision = snapshot.map_revision;
+    }
     return cached;
   }
+  g_last_auto_frontier_plan_time = now;
 
   const FrontierExplorerConfig frontier_cfg = build_frontier_config();
-  const core::Vector3d start_world{
-      snapshot.pose.x,
-      snapshot.pose.y,
-      snapshot.pose.theta};
-  refresh_persistent_frontier_goals(planner_map, start_world, frontier_cfg);
-  const std::vector<GridCoord> persistent_goals = copy_persistent_frontier_goals();
-  FrontierPlanResult planned = plan_to_persistent_frontier_goals(
-      planner_map,
-      start_cell,
-      start_world,
-      frontier_cfg,
-      persistent_goals);
-  if (!planned.success && persistent_goals.empty()) {
+  FrontierPlanResult planned;
+  if (kUsePersistentFrontierGoals) {
+    refresh_persistent_frontier_goals(planner_map, start_world, frontier_cfg);
+    const std::vector<GridCoord> persistent_goals = copy_persistent_frontier_goals();
+    planned = plan_to_persistent_frontier_goals(
+        planner_map,
+        start_cell,
+        start_world,
+        frontier_cfg,
+        persistent_goals);
+  }
+  if (!planned.success) {
     planned = planning::simplified::plan_to_largest_frontier(
         planner_map,
         start_world,
         frontier_cfg);
+  }
+  if (planned.success &&
+      !planned.path_grid.empty() &&
+      !planned.path_world.empty() &&
+      !align_path_start_with_pose(start_world, &planned.path_world, &planned.message)) {
+    invalidate_plan_start_mismatch(start_world, &planned);
   }
   publish_frontier_planner_telemetry(
       snapshot.map_revision,
@@ -1019,23 +1105,6 @@ PlanningOverlay update_plan_overlay(
                << planned.selected_seed.y << ")"
                << " message=" << planned.message;
   // wasm_log_line(frontier_log.str());
-  if (!planned.success || planned.path_grid.empty()) {
-    if (!cached.path_grid.empty() &&
-        is_overlay_path_valid(snapshot, cached)) {
-      overlay = cached;
-      overlay.source_map_revision = snapshot.map_revision;
-      overlay.frontier_candidates = planned.frontier_cells;
-      overlay.selected_frontier_cluster = planned.selected_cluster_cells;
-      overlay.selected_frontier_seed_enabled = false;
-      overlay.selected_frontier_seed = GridCoord{};
-      if (planned.success || !planned.selected_cluster_cells.empty()) {
-        overlay.selected_frontier_seed_enabled = true;
-        overlay.selected_frontier_seed = planned.selected_seed;
-      }
-      update_cached_overlay(overlay);
-      return overlay;
-    }
-  }
   overlay = overlay_from_frontier_result(snapshot.map_revision, start_cell, planned);
   update_cached_overlay(overlay);
   return overlay;
