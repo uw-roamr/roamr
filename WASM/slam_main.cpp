@@ -182,23 +182,10 @@ struct MappingStats {
 
 static std::mutex g_mapping_stats_mutex;
 
-constexpr double kFrontierRescanMinTranslationM = 0.30;
-
 void record_completed_scan_pose(const controls::Pose2D& pose) {
     std::lock_guard<std::mutex> lk(g_last_completed_scan_pose_mutex);
     g_last_completed_scan_pose = pose;
     g_have_last_completed_scan_pose = true;
-}
-
-bool should_request_frontier_confirmation_scan(const controls::Pose2D& pose) {
-    std::lock_guard<std::mutex> lk(g_last_completed_scan_pose_mutex);
-    if (!g_have_last_completed_scan_pose) {
-        return true;
-    }
-    const double dx = pose.x - g_last_completed_scan_pose.x;
-    const double dy = pose.y - g_last_completed_scan_pose.y;
-    const double translation_m = std::hypot(dx, dy);
-    return translation_m >= kFrontierRescanMinTranslationM;
 }
 static MappingStats g_mapping_stats;
 struct SnapshotConsumerStats {
@@ -2576,7 +2563,6 @@ int main(){
                 last_goal_check_log_timestamp = odom.timestamp;
             }
             if (status.goal_reached) {
-                const bool manual_goal_active = planning::bridge::has_active_goal();
                 if (!goal_reached_logged) {
                     goal_reached_logged = true;
                     wasm_log_line("[autonomy][path] goal reached");
@@ -2596,16 +2582,10 @@ int main(){
                     false,
                     false,
                     true);
-                if (!manual_goal_active &&
-                    !should_request_frontier_confirmation_scan(fused_pose)) {
-                    set_autonomy_substate(
-                        autonomy::AutonomySubstate::WAITING_FOR_PATH,
-                        "goal_reached_skip_nearby_rescan");
-                    notify_planner_wake();
-                    continue;
-                }
-                set_autonomy_substate(autonomy::AutonomySubstate::SCAN_REQUESTED, "goal_reached");
-                g_scan_requested.store(true, std::memory_order_release);
+                set_autonomy_substate(
+                    autonomy::AutonomySubstate::WAITING_FOR_PATH,
+                    "goal_reached_replan");
+                notify_planner_wake();
                 continue;
             }
             goal_reached_logged = false;

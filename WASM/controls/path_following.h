@@ -26,7 +26,7 @@ struct PIDGains {
 };
 
 struct PathFollowerConfig {
-  PIDGains distance_pid{1.8, 0.0, 0.12, 0.6};
+  PIDGains distance_pid{1.5, 0.0, 0.12, 0.6};
   PIDGains heading_pid{1.0, 0.0, 0.22, 1.5};
 
   double lookahead_m = 0.05;

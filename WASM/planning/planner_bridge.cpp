@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <vector>
@@ -40,6 +41,13 @@ std::vector<GridCoord> g_persistent_frontier_goals;
 std::mutex g_overlay_cache_mutex;
 PlanningOverlay g_cached_overlay;
 std::atomic<uint64_t> g_cached_overlay_revision{0};
+std::mutex g_inflated_costmap_cache_mutex;
+struct InflatedCostmapCacheEntry {
+  uint64_t map_revision = 0;
+  PlannerConfig config{};
+  std::shared_ptr<const mapping::InflatedCostmap> costmap;
+};
+InflatedCostmapCacheEntry g_inflated_costmap_cache;
 std::atomic<uint64_t> g_planner_telemetry_sequence{0};
 std::mutex g_planned_path_mutex;
 std::vector<core::Vector3d> g_planned_path_world;
@@ -420,6 +428,48 @@ bool same_path_world(
   return true;
 }
 
+bool same_planner_config(
+    const PlannerConfig& a,
+    const PlannerConfig& b) {
+  return a.occupied_threshold == b.occupied_threshold &&
+         a.treat_unknown_as_occupied == b.treat_unknown_as_occupied &&
+         a.allow_diagonal == b.allow_diagonal &&
+         a.prevent_corner_cutting == b.prevent_corner_cutting &&
+         std::abs(a.inflation_radius_m - b.inflation_radius_m) <= 1e-9 &&
+         a.simplify_path == b.simplify_path &&
+         a.snap_start_to_free == b.snap_start_to_free &&
+         a.snap_goal_to_free == b.snap_goal_to_free &&
+         a.snap_search_radius_cells == b.snap_search_radius_cells &&
+         a.max_expanded_nodes == b.max_expanded_nodes;
+}
+
+std::shared_ptr<const mapping::InflatedCostmap> get_inflated_costmap_cached(
+    const mapping::MapSnapshot& snapshot,
+    const PlannerConfig& cfg) {
+  if (!snapshot.valid()) {
+    return nullptr;
+  }
+  {
+    std::lock_guard<std::mutex> lk(g_inflated_costmap_cache_mutex);
+    if (g_inflated_costmap_cache.costmap &&
+        g_inflated_costmap_cache.map_revision == snapshot.map_revision &&
+        same_planner_config(g_inflated_costmap_cache.config, cfg)) {
+      return g_inflated_costmap_cache.costmap;
+    }
+  }
+
+  auto rebuilt = std::make_shared<mapping::InflatedCostmap>();
+  if (!mapping::build_inflated_costmap(snapshot, cfg, rebuilt.get())) {
+    return nullptr;
+  }
+
+  std::lock_guard<std::mutex> lk(g_inflated_costmap_cache_mutex);
+  g_inflated_costmap_cache.map_revision = snapshot.map_revision;
+  g_inflated_costmap_cache.config = cfg;
+  g_inflated_costmap_cache.costmap = rebuilt;
+  return rebuilt;
+}
+
 void record_frontier_profile(
     const FrontierPlanResult& planned,
     double publish_ms) {
@@ -764,14 +814,15 @@ bool is_overlay_path_valid(
     return false;
   }
   const PlannerConfig cfg = build_planner_config();
-  mapping::InflatedCostmap costmap;
-  if (!mapping::build_inflated_costmap(snapshot, cfg, &costmap)) {
+  const std::shared_ptr<const mapping::InflatedCostmap> costmap =
+      get_inflated_costmap_cached(snapshot, cfg);
+  if (!costmap || !costmap->valid()) {
     return false;
   }
   return is_path_grid_traversable(
-      costmap.grid,
-      costmap.config,
-      costmap.inflated_occupancy,
+      costmap->grid,
+      costmap->config,
+      costmap->inflated_occupancy,
       overlay.path_grid);
 }
 
@@ -785,36 +836,37 @@ bool does_new_occupancy_intersect_overlay_path(
     return false;
   }
   const PlannerConfig cfg = build_planner_config();
-  mapping::InflatedCostmap costmap;
-  if (!mapping::build_inflated_costmap(snapshot, cfg, &costmap)) {
+  const std::shared_ptr<const mapping::InflatedCostmap> costmap =
+      get_inflated_costmap_cached(snapshot, cfg);
+  if (!costmap || !costmap->valid()) {
     return false;
   }
   const int32_t radius_cells = std::max<int32_t>(
       1,
       static_cast<int32_t>(
-          std::ceil(cfg.inflation_radius_m / costmap.grid.resolution_m)) + 1);
+          std::ceil(cfg.inflation_radius_m / costmap->grid.resolution_m)) + 1);
   std::vector<uint8_t> path_mask(
-      static_cast<size_t>(costmap.grid.width * costmap.grid.height),
+      static_cast<size_t>(costmap->grid.width * costmap->grid.height),
       0);
   mark_inflated_cell(
-      costmap.grid,
+      costmap->grid,
       overlay.path_grid.front().x,
       overlay.path_grid.front().y,
       radius_cells,
       &path_mask);
   for (size_t i = 1; i < overlay.path_grid.size(); ++i) {
     mark_inflated_segment(
-        costmap.grid,
+        costmap->grid,
         overlay.path_grid[i - 1],
         overlay.path_grid[i],
         radius_cells,
         &path_mask);
   }
   for (const GridCoord& cell : newly_occupied_cells) {
-    if (!costmap.grid.in_bounds(cell.x, cell.y)) {
+    if (!costmap->grid.in_bounds(cell.x, cell.y)) {
       continue;
     }
-    if (path_mask[static_cast<size_t>(costmap.grid.index(cell.x, cell.y))] != 0) {
+    if (path_mask[static_cast<size_t>(costmap->grid.index(cell.x, cell.y))] != 0) {
       return true;
     }
   }
@@ -831,6 +883,8 @@ void invalidate_current_plan() {
   }
   update_cached_overlay(PlanningOverlay{});
   g_planner.invalidate();
+  std::lock_guard<std::mutex> lk(g_inflated_costmap_cache_mutex);
+  g_inflated_costmap_cache = InflatedCostmapCacheEntry{};
 }
 
 void refresh_persistent_frontier_goals(
@@ -942,13 +996,26 @@ PlanningOverlay update_plan_overlay(
     }
 
     const PlannerConfig planner_cfg = build_planner_config();
-    const std::vector<int8_t> inflated_occupancy =
-        inflate_obstacles(planner_map, planner_cfg);
+    const std::shared_ptr<const mapping::InflatedCostmap> costmap =
+        get_inflated_costmap_cached(snapshot, planner_cfg);
+    if (!costmap || !costmap->valid()) {
+      publish_direct_planner_telemetry(
+          snapshot.map_revision,
+          g_goal_revision.load(std::memory_order_acquire),
+          snapshot.timestamp,
+          start_cell,
+          true,
+          goal_cell,
+          PlanResult{});
+      update_cached_path_world({});
+      update_cached_overlay(overlay);
+      return overlay;
+    }
     const PlanResult planned =
         simplified::plan_to_grid_with_clearance_cost(
-            planner_map,
-            planner_cfg,
-            inflated_occupancy,
+            costmap->grid,
+            costmap->config,
+            costmap->inflated_occupancy,
             start_cell,
             goal_cell);
     publish_direct_planner_telemetry(
