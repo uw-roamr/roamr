@@ -550,13 +550,23 @@ class DStarLitePlanner : public GridPlanner {
       const GridMap2D& map,
       const GridCoord& start_in,
       const GridCoord& goal_in) override {
+    const std::vector<int8_t> new_occ = inflate_obstacles(map, cfg_);
+    return plan_to_grid(map, new_occ, start_in, goal_in);
+  }
+
+  PlanResult plan_to_grid(
+      const GridMap2D& map,
+      const std::vector<int8_t>& new_occ,
+      const GridCoord& start_in,
+      const GridCoord& goal_in) {
     PlanResult result;
     if (!map.valid()) { result.message = "invalid occupancy grid"; return result; }
     if (!map.in_bounds(start_in.x, start_in.y) || !map.in_bounds(goal_in.x, goal_in.y)) {
       result.message = "start or goal outside map bounds"; return result;
     }
-
-    const std::vector<int8_t> new_occ = inflate_obstacles(map, cfg_);
+    if (new_occ.size() != static_cast<size_t>(map.width * map.height)) {
+      result.message = "invalid inflated occupancy"; return result;
+    }
 
     GridCoord start = start_in;
     GridCoord goal  = goal_in;

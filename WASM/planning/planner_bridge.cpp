@@ -186,6 +186,10 @@ bool frontier_goal_set_contains_near(
   return false;
 }
 
+bool same_planner_config(
+    const PlannerConfig& a,
+    const PlannerConfig& b);
+
 std::vector<GridCoord> copy_persistent_frontier_goals() {
   std::lock_guard<std::mutex> lk(g_frontier_cache_mutex);
   return g_persistent_frontier_goals;
@@ -196,12 +200,13 @@ FrontierPlanResult plan_to_persistent_frontier_goals(
     const GridCoord& start_cell,
     const core::Vector3d& start_world,
     const FrontierExplorerConfig& frontier_cfg,
+    DStarLitePlanner* planner,
     const std::vector<GridCoord>& persistent_goals) {
   FrontierPlanResult result;
   result.frontier_cells = persistent_goals;
   result.frontier_cell_count = static_cast<int32_t>(persistent_goals.size());
   result.cluster_count = static_cast<int32_t>(persistent_goals.size());
-  if (!planner_map.valid() || persistent_goals.empty()) {
+  if (!planner_map.valid() || !planner || persistent_goals.empty()) {
     result.message = "no persistent frontier goals";
     return result;
   }
@@ -243,9 +248,8 @@ FrontierPlanResult plan_to_persistent_frontier_goals(
       continue;
     }
 
-    const PlanResult planned = simplified::plan_to_grid_with_clearance_cost(
+    const PlanResult planned = planner->plan_to_grid(
         planner_map,
-        planner_cfg,
         inflated_occupancy,
         start_cell,
         goal_cell);
@@ -273,6 +277,25 @@ FrontierPlanResult plan_to_persistent_frontier_goals(
 
   result.message = "no reachable persistent frontier goal";
   return result;
+}
+
+PlanResult plan_with_dstar_cached_costmap(
+    const mapping::InflatedCostmap& costmap,
+    const GridCoord& start_cell,
+    const GridCoord& goal_cell) {
+  if (!costmap.valid()) {
+    PlanResult result;
+    result.message = "invalid inflated costmap";
+    return result;
+  }
+  if (!same_planner_config(g_planner.config(), costmap.config)) {
+    g_planner.set_config(costmap.config);
+  }
+  return g_planner.plan_to_grid(
+      costmap.grid,
+      costmap.inflated_occupancy,
+      start_cell,
+      goal_cell);
 }
 
 bool is_path_segment_traversable(
@@ -1012,12 +1035,7 @@ PlanningOverlay update_plan_overlay(
       return overlay;
     }
     const PlanResult planned =
-        simplified::plan_to_grid_with_clearance_cost(
-            costmap->grid,
-            costmap->config,
-            costmap->inflated_occupancy,
-            start_cell,
-            goal_cell);
+        plan_with_dstar_cached_costmap(*costmap, start_cell, goal_cell);
     publish_direct_planner_telemetry(
         snapshot.map_revision,
         g_goal_revision.load(std::memory_order_acquire),
@@ -1053,20 +1071,24 @@ PlanningOverlay update_plan_overlay(
       snapshot.pose.x,
       snapshot.pose.y,
       snapshot.pose.theta};
+  const PlannerConfig frontier_planner_cfg =
+      planner_config_from_frontier_config(frontier_cfg);
+  const std::shared_ptr<const mapping::InflatedCostmap> frontier_costmap =
+      get_inflated_costmap_cached(snapshot, frontier_planner_cfg);
+  if (!frontier_costmap || !frontier_costmap->valid()) {
+    update_cached_path_world({});
+    update_cached_overlay(overlay);
+    return overlay;
+  }
   refresh_persistent_frontier_goals(planner_map, start_world, frontier_cfg);
   const std::vector<GridCoord> persistent_goals = copy_persistent_frontier_goals();
   FrontierPlanResult planned = plan_to_persistent_frontier_goals(
-      planner_map,
+      frontier_costmap->grid,
       start_cell,
       start_world,
       frontier_cfg,
+      &g_planner,
       persistent_goals);
-  if (!planned.success && persistent_goals.empty()) {
-    planned = planning::simplified::plan_to_largest_frontier(
-        planner_map,
-        start_world,
-        frontier_cfg);
-  }
   publish_frontier_planner_telemetry(
       snapshot.map_revision,
       g_goal_revision.load(std::memory_order_acquire),
