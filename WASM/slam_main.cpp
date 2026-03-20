@@ -996,6 +996,8 @@ static constexpr bool kEnableVerboseAutonomyLogs = false;
 static constexpr bool kEnablePlannerWakeLogs = false;
 static constexpr int32_t kPlannerPollMs = 50;
 static constexpr double kPlannerMinIntervalSec = 0.35;
+static constexpr int32_t kPlannerStaleStartRetryThresholdCells = 2;
+static constexpr double kPlannerStalePoseRetryMinAgeSec = 0.10;
 static constexpr int32_t kTelemetryRenderIntervalMs = 33;
 static constexpr double kTelemetryPoseRenderMinIntervalSec = 0.03;
 static constexpr double kPoseTrailMinDistanceM = 0.015;
@@ -1015,7 +1017,7 @@ struct OuterLoopTurnPidConfig {
 };
 
 static constexpr OuterLoopTurnPidConfig kScan4x90TurnPidCfg{
-    2.0,
+    4.0,
     0.25,
     0.5,
     0.5 * core::pi,
@@ -1980,11 +1982,65 @@ int main(){
                 set_autonomy_substate(autonomy::AutonomySubstate::GOAL_SELECTION, "auto_frontier_goal");
             }
             set_autonomy_substate(autonomy::AutonomySubstate::PLANNING_GOAL, "update_plan_overlay");
-            planning::bridge::PlanningOverlay overlay =
-                planning::bridge::update_plan_overlay(
-                    snapshot,
+            planning::bridge::PlanningOverlay overlay;
+            mapping::MapSnapshot planning_snapshot = snapshot;
+            sensors::PoseLog planning_pose_snapshot = pose_snapshot;
+            planning::GridCoord planning_start_cell = start_cell;
+            bool have_planning_start_cell = have_start_cell;
+            constexpr int32_t kPlannerMaxFreshnessAttempts = 2;
+            for (int32_t plan_attempt = 0; plan_attempt < kPlannerMaxFreshnessAttempts; ++plan_attempt) {
+                overlay = planning::bridge::update_plan_overlay(
+                    planning_snapshot,
                     kRenderWidth,
                     kRenderHeight);
+                if (manual_goal_active || plan_attempt + 1 >= kPlannerMaxFreshnessAttempts) {
+                    break;
+                }
+
+                sensors::PoseLog latest_pose_after_plan{};
+                if (!read_latest_pose_snapshot(m_pose, &latest_pose_after_plan)) {
+                    break;
+                }
+
+                mapping::MapSnapshot refreshed_snapshot = planning_snapshot;
+                refreshed_snapshot.pose = pose_log_to_se2(latest_pose_after_plan);
+                refreshed_snapshot.timestamp =
+                    std::max(refreshed_snapshot.timestamp, latest_pose_after_plan.timestamp);
+                planning::GridCoord latest_start_cell{};
+                const bool have_latest_start_cell =
+                    pose_to_map_cell(refreshed_snapshot, refreshed_snapshot.pose, &latest_start_cell);
+                const int32_t moved_cells =
+                    (have_planning_start_cell && have_latest_start_cell)
+                        ? std::max(
+                              std::abs(latest_start_cell.x - planning_start_cell.x),
+                              std::abs(latest_start_cell.y - planning_start_cell.y))
+                        : 0;
+                const double pose_age_sec =
+                    (latest_pose_after_plan.timestamp > planning_pose_snapshot.timestamp)
+                        ? (latest_pose_after_plan.timestamp - planning_pose_snapshot.timestamp)
+                        : 0.0;
+                const bool stale_planning_start =
+                    have_planning_start_cell &&
+                    have_latest_start_cell &&
+                    moved_cells >= kPlannerStaleStartRetryThresholdCells &&
+                    pose_age_sec >= kPlannerStalePoseRetryMinAgeSec;
+                if (!stale_planning_start) {
+                    break;
+                }
+
+                std::ostringstream stale_log;
+                stale_log << "[planning] retrying stale frontier start"
+                          << " start=(" << planning_start_cell.x << "," << planning_start_cell.y << ")"
+                          << " current=(" << latest_start_cell.x << "," << latest_start_cell.y << ")"
+                          << " move_cells=" << moved_cells
+                          << " pose_age_s=" << pose_age_sec;
+                wasm_log_line(stale_log.str());
+
+                planning_snapshot = std::move(refreshed_snapshot);
+                planning_pose_snapshot = latest_pose_after_plan;
+                planning_start_cell = latest_start_cell;
+                have_planning_start_cell = have_latest_start_cell;
+            }
             const bool published_path = !overlay.path_grid.empty();
             const bool have_frontier_candidates = !overlay.frontier_candidates.empty();
             const bool no_reachable_frontiers =
