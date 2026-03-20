@@ -1208,6 +1208,7 @@
                             <canvas id="mapLayerOdometry" class="map-layer-canvas" aria-label="WASM Odometry Layer"></canvas>
                             <canvas id="mapLayerPlanning" class="map-layer-canvas" aria-label="WASM Planning Layer"></canvas>
                             <canvas id="mapLayerFrontiers" class="map-layer-canvas" aria-label="WASM Frontiers Layer"></canvas>
+                            <canvas id="mapFrontierTelemetryOverlay" class="map-layer-canvas" aria-label="WASM Frontier Telemetry Overlay"></canvas>
                             <canvas id="mapLayerSemantic" class="map-layer-canvas" aria-label="WASM Semantic Layer"></canvas>
                             <canvas id="mapPlannerTelemetryOverlay" class="map-layer-canvas" aria-label="WASM Planner Telemetry Overlay"></canvas>
                             <canvas id="mapLivePoseOverlay" class="map-layer-canvas" aria-label="WASM Live Pose Overlay"></canvas>
@@ -1381,6 +1382,8 @@
         const mapPreviewEl = document.getElementById('mapPreview');
         const mapLivePoseOverlayEl = document.getElementById('mapLivePoseOverlay');
         const mapLivePoseOverlayCtx = mapLivePoseOverlayEl.getContext('2d', { alpha: true });
+        const mapFrontierTelemetryOverlayEl = document.getElementById('mapFrontierTelemetryOverlay');
+        const mapFrontierTelemetryOverlayCtx = mapFrontierTelemetryOverlayEl.getContext('2d', { alpha: true });
         const mapPlannerTelemetryOverlayEl = document.getElementById('mapPlannerTelemetryOverlay');
         const mapPlannerTelemetryOverlayCtx = mapPlannerTelemetryOverlayEl.getContext('2d', { alpha: true });
         const mapLayerCanvasEls = {
@@ -2583,6 +2586,14 @@
             return mapLayerToggleEls.planning.checked;
         }
 
+        function shouldShowFrontierTelemetryOverlay() {
+            const snapshot = getDisplayedPlannerTelemetrySnapshot();
+            if (!snapshot || !plannerTelemetryState.hasStructuredTelemetry || !mapMetadataState.hasMetadata) {
+                return false;
+            }
+            return mapLayerToggleEls.frontiers.checked && snapshot.planner_mode === 'frontier';
+        }
+
         function ensurePlannerTelemetryOverlayCanvasSize() {
             const intrinsicSize = getPoseOverlayIntrinsicSize();
             if (!intrinsicSize) {
@@ -2593,6 +2604,20 @@
             }
             if (mapPlannerTelemetryOverlayEl.height !== intrinsicSize.height) {
                 mapPlannerTelemetryOverlayEl.height = intrinsicSize.height;
+            }
+            return intrinsicSize;
+        }
+
+        function ensureFrontierTelemetryOverlayCanvasSize() {
+            const intrinsicSize = getPoseOverlayIntrinsicSize();
+            if (!intrinsicSize) {
+                return null;
+            }
+            if (mapFrontierTelemetryOverlayEl.width !== intrinsicSize.width) {
+                mapFrontierTelemetryOverlayEl.width = intrinsicSize.width;
+            }
+            if (mapFrontierTelemetryOverlayEl.height !== intrinsicSize.height) {
+                mapFrontierTelemetryOverlayEl.height = intrinsicSize.height;
             }
             return intrinsicSize;
         }
@@ -2615,7 +2640,7 @@
             };
         }
 
-        function fillPlannerGridCells(cells, color) {
+        function fillPlannerGridCells(ctx, cells, color) {
             if (!Array.isArray(cells) || cells.length === 0) {
                 return;
             }
@@ -2624,13 +2649,13 @@
                 return;
             }
             const cellSize = Math.max(1, samplePixel.scale);
-            mapPlannerTelemetryOverlayCtx.fillStyle = color;
+            ctx.fillStyle = color;
             for (const cell of cells) {
                 const pixel = projectPlannerGridCellToOverlayPixel(cell);
                 if (!pixel) {
                     continue;
                 }
-                mapPlannerTelemetryOverlayCtx.fillRect(
+                ctx.fillRect(
                     pixel.x - (cellSize * 0.5),
                     pixel.y - (cellSize * 0.5),
                     cellSize,
@@ -2639,11 +2664,11 @@
             }
         }
 
-        function strokePlannerPath(cells, color, width) {
+        function strokePlannerPath(ctx, cells, color, width) {
             if (!Array.isArray(cells) || cells.length < 2) {
                 return;
             }
-            mapPlannerTelemetryOverlayCtx.beginPath();
+            ctx.beginPath();
             let started = false;
             for (const cell of cells) {
                 const pixel = projectPlannerGridCellToOverlayPixel(cell);
@@ -2651,55 +2676,55 @@
                     continue;
                 }
                 if (!started) {
-                    mapPlannerTelemetryOverlayCtx.moveTo(pixel.x, pixel.y);
+                    ctx.moveTo(pixel.x, pixel.y);
                     started = true;
                 } else {
-                    mapPlannerTelemetryOverlayCtx.lineTo(pixel.x, pixel.y);
+                    ctx.lineTo(pixel.x, pixel.y);
                 }
             }
             if (!started) {
                 return;
             }
-            mapPlannerTelemetryOverlayCtx.strokeStyle = color;
-            mapPlannerTelemetryOverlayCtx.lineWidth = width;
-            mapPlannerTelemetryOverlayCtx.lineJoin = 'round';
-            mapPlannerTelemetryOverlayCtx.lineCap = 'round';
-            mapPlannerTelemetryOverlayCtx.stroke();
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+            ctx.stroke();
         }
 
-        function drawPlannerMarker(cell, color, radius = 4) {
+        function drawPlannerMarker(ctx, cell, color, radius = 4) {
             const pixel = projectPlannerGridCellToOverlayPixel(cell);
             if (!pixel) {
                 return;
             }
-            mapPlannerTelemetryOverlayCtx.beginPath();
-            mapPlannerTelemetryOverlayCtx.arc(pixel.x, pixel.y, radius, 0, Math.PI * 2);
-            mapPlannerTelemetryOverlayCtx.fillStyle = color;
-            mapPlannerTelemetryOverlayCtx.fill();
+            ctx.beginPath();
+            ctx.arc(pixel.x, pixel.y, radius, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
         }
 
-        function drawPlannerMarkerSet(cells, color, radius = 4) {
+        function drawPlannerMarkerSet(ctx, cells, color, radius = 4) {
             if (!Array.isArray(cells) || cells.length === 0) {
                 return;
             }
             for (const cell of cells) {
-                drawPlannerMarker(cell, color, radius);
+                drawPlannerMarker(ctx, cell, color, radius);
             }
         }
 
-        function drawPlannerSeedMarker(cell, color) {
+        function drawPlannerSeedMarker(ctx, cell, color) {
             const pixel = projectPlannerGridCellToOverlayPixel(cell);
             if (!pixel) {
                 return;
             }
-            mapPlannerTelemetryOverlayCtx.beginPath();
-            mapPlannerTelemetryOverlayCtx.moveTo(pixel.x - 5, pixel.y - 5);
-            mapPlannerTelemetryOverlayCtx.lineTo(pixel.x + 5, pixel.y + 5);
-            mapPlannerTelemetryOverlayCtx.moveTo(pixel.x - 5, pixel.y + 5);
-            mapPlannerTelemetryOverlayCtx.lineTo(pixel.x + 5, pixel.y - 5);
-            mapPlannerTelemetryOverlayCtx.strokeStyle = color;
-            mapPlannerTelemetryOverlayCtx.lineWidth = 2;
-            mapPlannerTelemetryOverlayCtx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(pixel.x - 5, pixel.y - 5);
+            ctx.lineTo(pixel.x + 5, pixel.y + 5);
+            ctx.moveTo(pixel.x - 5, pixel.y + 5);
+            ctx.lineTo(pixel.x + 5, pixel.y - 5);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.stroke();
         }
 
         function schedulePlannerTelemetryOverlayRender() {
@@ -2712,6 +2737,49 @@
 
         function renderPlannerTelemetryOverlay() {
             plannerTelemetryState.renderQueued = false;
+
+            const frontierIntrinsicSize = ensureFrontierTelemetryOverlayCanvasSize();
+            if (!frontierIntrinsicSize) {
+                mapFrontierTelemetryOverlayEl.style.display = 'none';
+            } else {
+                mapFrontierTelemetryOverlayCtx.setTransform(1, 0, 0, 1, 0, 0);
+                mapFrontierTelemetryOverlayCtx.clearRect(
+                    0,
+                    0,
+                    mapFrontierTelemetryOverlayEl.width,
+                    mapFrontierTelemetryOverlayEl.height
+                );
+
+                if (shouldShowFrontierTelemetryOverlay()) {
+                    const frontierSnapshot = getDisplayedPlannerTelemetrySnapshot();
+                    if (frontierSnapshot) {
+                        mapFrontierTelemetryOverlayEl.style.display = 'block';
+                        drawPlannerMarkerSet(
+                            mapFrontierTelemetryOverlayCtx,
+                            frontierSnapshot.frontier_candidates,
+                            'rgba(18, 196, 184, 0.78)',
+                            2.25
+                        );
+                        drawPlannerMarkerSet(
+                            mapFrontierTelemetryOverlayCtx,
+                            frontierSnapshot.selected_frontier_cluster,
+                            'rgba(70, 136, 255, 0.94)',
+                            3.25
+                        );
+                        if (frontierSnapshot.selected_frontier_seed) {
+                            drawPlannerSeedMarker(
+                                mapFrontierTelemetryOverlayCtx,
+                                frontierSnapshot.selected_frontier_seed,
+                                'rgba(164, 206, 255, 0.98)'
+                            );
+                        }
+                    } else {
+                        mapFrontierTelemetryOverlayEl.style.display = 'none';
+                    }
+                } else {
+                    mapFrontierTelemetryOverlayEl.style.display = 'none';
+                }
+            }
 
             const intrinsicSize = ensurePlannerTelemetryOverlayCanvasSize();
             if (!intrinsicSize) {
@@ -2735,28 +2803,19 @@
 
             mapPlannerTelemetryOverlayEl.style.display = 'block';
 
-            if (snapshot.planner_mode === 'frontier') {
-                drawPlannerMarkerSet(
-                    snapshot.frontier_candidates,
-                    'rgba(18, 196, 184, 0.82)',
+            strokePlannerPath(
+                mapPlannerTelemetryOverlayCtx,
+                snapshot.path_grid,
+                'rgba(234, 53, 116, 0.98)',
+                2.5
+            );
+            if (snapshot.start_cell) {
+                drawPlannerMarker(
+                    mapPlannerTelemetryOverlayCtx,
+                    snapshot.start_cell,
+                    'rgba(255, 255, 255, 0.98)',
                     3.5
                 );
-                drawPlannerMarkerSet(
-                    snapshot.selected_frontier_cluster,
-                    'rgba(255, 166, 77, 0.94)',
-                    5
-                );
-                if (snapshot.selected_frontier_seed) {
-                    drawPlannerSeedMarker(
-                        snapshot.selected_frontier_seed,
-                        'rgba(255, 196, 77, 0.98)'
-                    );
-                }
-            }
-
-            strokePlannerPath(snapshot.path_grid, 'rgba(234, 53, 116, 0.98)', 2.5);
-            if (snapshot.start_cell) {
-                drawPlannerMarker(snapshot.start_cell, 'rgba(255, 255, 255, 0.98)', 3.5);
             }
             if (snapshot.goal_cell) {
                 const pixel = projectPlannerGridCellToOverlayPixel(snapshot.goal_cell);
@@ -3596,6 +3655,10 @@
             mapLivePoseOverlayEl.width = 0;
             mapLivePoseOverlayEl.height = 0;
             mapLivePoseOverlayEl.style.display = 'none';
+            mapFrontierTelemetryOverlayCtx.clearRect(0, 0, mapFrontierTelemetryOverlayEl.width, mapFrontierTelemetryOverlayEl.height);
+            mapFrontierTelemetryOverlayEl.width = 0;
+            mapFrontierTelemetryOverlayEl.height = 0;
+            mapFrontierTelemetryOverlayEl.style.display = 'none';
             mapPlannerTelemetryOverlayCtx.clearRect(0, 0, mapPlannerTelemetryOverlayEl.width, mapPlannerTelemetryOverlayEl.height);
             mapPlannerTelemetryOverlayEl.width = 0;
             mapPlannerTelemetryOverlayEl.height = 0;
@@ -4291,20 +4354,17 @@
                 !mapLayerState.hasEverSeenLayerFrames &&
                 !hasBaseMapLayer() &&
                 Boolean(mapPreviewEl.getAttribute('src'));
-            const useStructuredPlannerOverlay = plannerTelemetryState.hasStructuredTelemetry;
             Object.entries(mapLayerCanvasEls).forEach(([key, canvas]) => {
                 const shouldHideLayerForLivePose = key === 'odometry' && shouldShowLivePoseOverlay();
-                const shouldHideRasterPlannerLayer =
-                    useStructuredPlannerOverlay && key === 'frontiers';
                 canvas.style.display =
                     !shouldHideLayerForLivePose &&
-                    !shouldHideRasterPlannerLayer &&
                     mapLayerToggleEls[key].checked &&
                     canvas.dataset.loaded === '1'
                         ? 'block'
                         : 'none';
             });
             mapLivePoseOverlayEl.style.display = shouldShowLivePoseOverlay() ? 'block' : 'none';
+            mapFrontierTelemetryOverlayEl.style.display = shouldShowFrontierTelemetryOverlay() ? 'block' : 'none';
             mapPlannerTelemetryOverlayEl.style.display = shouldShowPlannerTelemetryOverlay() ? 'block' : 'none';
             mapPreviewEl.style.display = shouldShowBasePreviewFallback ? 'block' : 'none';
         }

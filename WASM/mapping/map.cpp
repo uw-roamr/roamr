@@ -79,6 +79,11 @@ void Map::reset_map() {
   map_origin_offset_y_ = 0.0f;
 }
 
+void Map::set_required_hit_confirmations(int32_t hit_count) {
+  const int32_t safe_hit_count = std::max(1, hit_count);
+  occupied_threshold_ = clamp_cell_score(safe_hit_count * kHitIncrement);
+}
+
 int32_t Map::get_occupancy_grid(int8_t* out_data, int32_t max_cells) const {
   const int32_t total = kMapSizeX * kMapSizeY;
   if (!out_data || max_cells < total) {
@@ -239,7 +244,7 @@ void Map::integrate_ray(
       visited_[idx] = 1;
       const int16_t count = clamp_cell_score(scan_count_[idx] + kHitIncrement);
       scan_count_[idx] = count;
-      if (count >= kOccupiedThreshold) {
+      if (count >= occupied_threshold_) {
         confirmed_[idx] = 1;
       }
       occupancy_[idx] = occupancy_value_for_cell(

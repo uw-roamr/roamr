@@ -1395,10 +1395,24 @@ int main(){
         }
 
         if (!g_initial_spin_done.load(std::memory_order_acquire)) {
+            {
+                std::lock_guard<std::mutex> lk(g_map_mutex);
+                mapping::initialize_map(g_map);
+                g_map.set_required_hit_confirmations(3);
+            }
+            {
+                std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+                g_latest_map_snapshot = mapping::MapSnapshot{};
+            }
+            g_map_update_revision.store(0, std::memory_order_release);
             set_autonomy_substate(autonomy::AutonomySubstate::SCANNING, "initial_spin");
             g_scan_active.store(true, std::memory_order_release);
             scan_4x90(motors, m_pose);
             g_scan_active.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> lk(g_map_mutex);
+                g_map.set_required_hit_confirmations(1);
+            }
             {
                 std::lock_guard<std::mutex> lk(m_pose);
                 record_completed_scan_pose(controls::Pose2D{
@@ -1694,6 +1708,7 @@ int main(){
       {
         std::lock_guard<std::mutex> lk(g_map_mutex);
         mapping::initialize_map(g_map);
+        g_map.set_required_hit_confirmations(3);
       }
       {
         std::lock_guard<std::mutex> lk(g_map_publish_mutex);

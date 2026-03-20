@@ -30,6 +30,7 @@ namespace mapping{
 
         void reset_points();
         void reset_map();
+        void set_required_hit_confirmations(int32_t hit_count);
         int32_t get_occupancy_grid(int8_t* out_data, int32_t max_cells) const;
         int32_t get_occupancy_meta(OccupancyGridMetadata* out_meta) const;
         void set_points_world(int32_t in_world);
@@ -107,6 +108,7 @@ namespace mapping{
         std::array<int8_t, kMapSizeX * kMapSizeY> occupancy_{};
         std::array<uint32_t, kMapSizeX * kMapSizeY> hit_cell_scan_stamp_{};
         uint32_t current_scan_stamp_ = 0;
+        int16_t occupied_threshold_ = kOccupiedThreshold;
 
         int32_t map_origin_initialized_ = 0;
         float map_origin_offset_x_ = 0.0f;
