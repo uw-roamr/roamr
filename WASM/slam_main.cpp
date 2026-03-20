@@ -84,6 +84,7 @@ static std::array<LidarSlotState, kLidarQueueCapacity> g_lc_slot_states{};
 static std::array<int, kLidarQueueCapacity> g_lc_ready_queue{};
 static size_t g_lc_ready_head = 0;
 static size_t g_lc_ready_size = 0;
+static double g_latest_queued_lidar_timestamp = -1.0;
 static std::atomic<bool> g_lc_ready{false};
 static std::mutex g_lc_cv_mutex;
 static std::condition_variable g_lc_cv;
@@ -105,6 +106,10 @@ static std::atomic<bool> g_scan_requested{false};
 static std::atomic<uint64_t> g_completed_scan_count{0};
 static std::atomic<bool> g_no_reachable_frontiers_terminal{false};
 static std::atomic<double> g_scan_map_skip_until_timestamp{-1.0};
+
+static bool suppress_runtime_logs_in_terminal_state() {
+    return g_no_reachable_frontiers_terminal.load(std::memory_order_acquire);
+}
 
 struct MappingStats {
     uint64_t integrated_lidar_frames = 0;
@@ -133,6 +138,10 @@ struct MappingStats {
     size_t max_selected_hit_bins = 0;
     size_t total_selected_free_bins = 0;
     size_t max_selected_free_bins = 0;
+    size_t total_queue_depth = 0;
+    size_t max_queue_depth = 0;
+    double total_lidar_backlog_seconds = 0.0;
+    double max_lidar_backlog_seconds = 0.0;
     double window_total_integrate_seconds = 0.0;
     double window_max_integrate_seconds = 0.0;
     double window_total_classify_seconds = 0.0;
@@ -157,6 +166,10 @@ struct MappingStats {
     size_t window_max_selected_hit_bins = 0;
     size_t window_total_selected_free_bins = 0;
     size_t window_max_selected_free_bins = 0;
+    size_t window_total_queue_depth = 0;
+    size_t window_max_queue_depth = 0;
+    double window_total_lidar_backlog_seconds = 0.0;
+    double window_max_lidar_backlog_seconds = 0.0;
     std::chrono::steady_clock::time_point start_time{};
     std::chrono::steady_clock::time_point last_summary_time{};
     bool started = false;
@@ -227,6 +240,14 @@ static void record_snapshot_consumer_summary_locked(
     const char* tag,
     double elapsed_since_summary) {
     if (!stats || !tag) {
+        return;
+    }
+    if (suppress_runtime_logs_in_terminal_state()) {
+        stats->window_ready = 0;
+        stats->window_rendered = 0;
+        stats->window_skipped = 0;
+        stats->window_total_lag_revision = 0;
+        stats->window_max_lag_revision = 0;
         return;
     }
     const uint64_t lag_samples = stats->window_ready + stats->window_skipped;
@@ -329,7 +350,12 @@ static void record_mapping_frame(
     double total_seconds,
     size_t point_count,
     size_t selected_hit_bins,
-    size_t selected_free_bins) {
+    size_t selected_free_bins,
+    size_t queue_depth,
+    double lidar_backlog_seconds) {
+    if (suppress_runtime_logs_in_terminal_state()) {
+        return;
+    }
     const auto now = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lk(g_mapping_stats_mutex);
     if (!g_mapping_stats.started) {
@@ -374,6 +400,12 @@ static void record_mapping_frame(
     g_mapping_stats.total_selected_free_bins += selected_free_bins;
     g_mapping_stats.max_selected_free_bins =
         std::max(g_mapping_stats.max_selected_free_bins, selected_free_bins);
+    g_mapping_stats.total_queue_depth += queue_depth;
+    g_mapping_stats.max_queue_depth =
+        std::max(g_mapping_stats.max_queue_depth, queue_depth);
+    g_mapping_stats.total_lidar_backlog_seconds += lidar_backlog_seconds;
+    g_mapping_stats.max_lidar_backlog_seconds =
+        std::max(g_mapping_stats.max_lidar_backlog_seconds, lidar_backlog_seconds);
     g_mapping_stats.window_total_integrate_seconds += integrate_seconds;
     g_mapping_stats.window_max_integrate_seconds =
         std::max(g_mapping_stats.window_max_integrate_seconds, integrate_seconds);
@@ -409,6 +441,14 @@ static void record_mapping_frame(
     g_mapping_stats.window_total_selected_free_bins += selected_free_bins;
     g_mapping_stats.window_max_selected_free_bins =
         std::max(g_mapping_stats.window_max_selected_free_bins, selected_free_bins);
+    g_mapping_stats.window_total_queue_depth += queue_depth;
+    g_mapping_stats.window_max_queue_depth =
+        std::max(g_mapping_stats.window_max_queue_depth, queue_depth);
+    g_mapping_stats.window_total_lidar_backlog_seconds += lidar_backlog_seconds;
+    g_mapping_stats.window_max_lidar_backlog_seconds =
+        std::max(
+            g_mapping_stats.window_max_lidar_backlog_seconds,
+            lidar_backlog_seconds);
     const double summary_interval_seconds = 3.0;
     const double elapsed_since_summary =
         std::chrono::duration<double>(now - g_mapping_stats.last_summary_time).count();
@@ -493,6 +533,16 @@ static void record_mapping_frame(
             ? (static_cast<double>(g_mapping_stats.window_total_selected_free_bins) /
                static_cast<double>(g_mapping_stats.window_lidar_frames))
             : 0.0;
+    const double avg_queue_depth =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (static_cast<double>(g_mapping_stats.window_total_queue_depth) /
+               static_cast<double>(g_mapping_stats.window_lidar_frames))
+            : 0.0;
+    const double avg_lidar_backlog_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_lidar_backlog_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
     std::ostringstream log;
     log << "[mapping][profile]"
         << " window=" << elapsed_since_summary << "s"
@@ -509,7 +559,10 @@ static void record_mapping_frame(
         << " total_ms=" << avg_total_ms << "/" << max_total_ms
         << " pts=" << avg_points << "/" << g_mapping_stats.window_max_points
         << " hit_bins=" << avg_selected_hit_bins << "/" << g_mapping_stats.window_max_selected_hit_bins
-        << " free_bins=" << avg_selected_free_bins << "/" << g_mapping_stats.window_max_selected_free_bins;
+        << " free_bins=" << avg_selected_free_bins << "/" << g_mapping_stats.window_max_selected_free_bins
+        << " queue_depth=" << avg_queue_depth << "/" << g_mapping_stats.window_max_queue_depth
+        << " backlog_ms=" << avg_lidar_backlog_ms << "/"
+        << (g_mapping_stats.window_max_lidar_backlog_seconds * 1000.0);
     g_mapping_stats.last_summary_time = now;
     g_mapping_stats.window_lidar_frames = 0;
     g_mapping_stats.window_total_integrate_seconds = 0.0;
@@ -536,6 +589,10 @@ static void record_mapping_frame(
     g_mapping_stats.window_max_selected_hit_bins = 0;
     g_mapping_stats.window_total_selected_free_bins = 0;
     g_mapping_stats.window_max_selected_free_bins = 0;
+    g_mapping_stats.window_total_queue_depth = 0;
+    g_mapping_stats.window_max_queue_depth = 0;
+    g_mapping_stats.window_total_lidar_backlog_seconds = 0.0;
+    g_mapping_stats.window_max_lidar_backlog_seconds = 0.0;
     wasm_log_line(log.str());
 }
 
@@ -819,6 +876,10 @@ static void push_lidar_ready_slot_locked(int slot_idx) {
     const size_t tail = (g_lc_ready_head + g_lc_ready_size) % g_lc_ready_queue.size();
     g_lc_ready_queue[tail] = slot_idx;
     ++g_lc_ready_size;
+    const double timestamp = g_lc_buffers[slot_idx].timestamp;
+    if (timestamp > g_latest_queued_lidar_timestamp) {
+        g_latest_queued_lidar_timestamp = timestamp;
+    }
 }
 
 static int pop_lidar_ready_slot_locked() {
@@ -954,7 +1015,7 @@ struct OuterLoopTurnPidConfig {
 };
 
 static constexpr OuterLoopTurnPidConfig kScan4x90TurnPidCfg{
-    4.0,
+    2.0,
     0.25,
     0.5,
     0.5 * core::pi,
@@ -1530,6 +1591,8 @@ int main(){
 
         // get a valid lidar-camera frame, then get the most recent pose
         int ready_idx = -1;
+        size_t queue_depth_before_pop = 0;
+        double newest_queued_lidar_timestamp = -1.0;
         {
             std::unique_lock<std::mutex> lk(g_lc_cv_mutex);
             if (!g_lc_cv.wait_for(
@@ -1550,6 +1613,8 @@ int main(){
                 }
                 continue;
             }
+            queue_depth_before_pop = g_lc_ready_size;
+            newest_queued_lidar_timestamp = g_latest_queued_lidar_timestamp;
             ready_idx = pop_lidar_ready_slot_locked();
             if (ready_idx >= 0) {
                 g_lc_slot_states[ready_idx] = LidarSlotState::READING;
@@ -1596,6 +1661,11 @@ int main(){
         body_to_world.translation = pose_snapshot.translation;
         const double pose_timestamp = pose_snapshot.timestamp;
         const double candidate_timestamp = std::max(lc_data.timestamp, pose_timestamp);
+        const double lidar_backlog_seconds =
+            (newest_queued_lidar_timestamp > 0.0 &&
+             newest_queued_lidar_timestamp > lc_data.timestamp)
+                ? (newest_queued_lidar_timestamp - lc_data.timestamp)
+                : 0.0;
         if (candidate_timestamp <= 0.0 ||
             (last_map_timestamp > 0.0 && candidate_timestamp <= last_map_timestamp)) {
             {
@@ -1687,7 +1757,9 @@ int main(){
             total_seconds,
             lc_data.points_size / sensors::float_per_point,
             map_update_perf.selected_hit_bins,
-            map_update_perf.selected_free_bins);
+            map_update_perf.selected_free_bins,
+            queue_depth_before_pop,
+            lidar_backlog_seconds);
 
         // wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
 
@@ -2122,6 +2194,9 @@ int main(){
                 bool scan_active,
                 bool goal_reached) {
                 if (!reason || odom.timestamp <= 0.0) {
+                    return;
+                }
+                if (suppress_runtime_logs_in_terminal_state()) {
                     return;
                 }
                 if (last_control_status_log_timestamp >= 0.0 &&
