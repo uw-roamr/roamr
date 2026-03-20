@@ -383,6 +383,68 @@ double path_length_m(const GridMap2D& map, const std::vector<GridCoord>& path_gr
   return length_m;
 }
 
+bool apply_goal_standoff(
+    const PlanResult& seed_plan,
+    double goal_standoff_m,
+    double min_progress_m,
+    PlanResult* standoff_plan,
+    double* applied_standoff_m) {
+  if (!standoff_plan) {
+    return false;
+  }
+  *standoff_plan = seed_plan;
+  if (applied_standoff_m) {
+    *applied_standoff_m = 0.0;
+  }
+  if (seed_plan.path_grid.size() != seed_plan.path_world.size() ||
+      seed_plan.path_grid.empty() ||
+      seed_plan.path_world.empty()) {
+    return false;
+  }
+  if (goal_standoff_m <= 0.0 || seed_plan.path_world.size() < 2) {
+    return true;
+  }
+
+  double total_length_m = 0.0;
+  for (size_t i = 1; i < seed_plan.path_world.size(); ++i) {
+    const double dx = seed_plan.path_world[i].x - seed_plan.path_world[i - 1].x;
+    const double dy = seed_plan.path_world[i].y - seed_plan.path_world[i - 1].y;
+    total_length_m += std::sqrt(dx * dx + dy * dy);
+  }
+  if (total_length_m <= goal_standoff_m + min_progress_m) {
+    return true;
+  }
+
+  double backtracked_m = 0.0;
+  size_t cut_index = seed_plan.path_world.size() - 1;
+  while (cut_index > 0 && backtracked_m < goal_standoff_m) {
+    const core::Vector3d& a = seed_plan.path_world[cut_index - 1];
+    const core::Vector3d& b = seed_plan.path_world[cut_index];
+    const double dx = b.x - a.x;
+    const double dy = b.y - a.y;
+    backtracked_m += std::sqrt(dx * dx + dy * dy);
+    --cut_index;
+  }
+
+  if (cut_index == 0) {
+    return true;
+  }
+
+  standoff_plan->path_grid.assign(
+      seed_plan.path_grid.begin(),
+      seed_plan.path_grid.begin() + static_cast<std::ptrdiff_t>(cut_index + 1));
+  standoff_plan->path_world.assign(
+      seed_plan.path_world.begin(),
+      seed_plan.path_world.begin() + static_cast<std::ptrdiff_t>(cut_index + 1));
+  if (standoff_plan->path_grid.empty() || standoff_plan->path_world.empty()) {
+    return false;
+  }
+  if (applied_standoff_m) {
+    *applied_standoff_m = std::min(backtracked_m, goal_standoff_m);
+  }
+  return true;
+}
+
 PlanResult plan_to_grid_with_clearance_cost(
     const GridMap2D& map,
     const PlannerConfig& cfg,
@@ -690,14 +752,14 @@ FrontierPlanResult plan_to_largest_frontier(
   result.perf.approach_ms = elapsed_ms(approach_start);
 
   const auto path_start = std::chrono::steady_clock::now();
-  const PlanResult planned = plan_to_grid_with_clearance_cost(
+  const PlanResult seed_plan = plan_to_grid_with_clearance_cost(
       map,
       planner_cfg,
       inflated_occupancy,
       start_cell,
       goal_cell);
   result.perf.path_ms = elapsed_ms(path_start);
-  if (!planned.success || planned.path_grid.empty() || planned.path_world.empty()) {
+  if (!seed_plan.success || seed_plan.path_grid.empty() || seed_plan.path_world.empty()) {
     if (best_cluster_index >= 0 &&
         static_cast<size_t>(best_cluster_index) < cluster_centroids.size()) {
       result.selected_cluster_cells = {
@@ -706,6 +768,26 @@ FrontierPlanResult plan_to_largest_frontier(
     result.message = "largest frontier cluster unreachable";
     return finish();
   }
+
+  PlanResult planned = seed_plan;
+  double applied_standoff_m = 0.0;
+  const auto standoff_start = std::chrono::steady_clock::now();
+  if (!apply_goal_standoff(
+          seed_plan,
+          cfg.goal_standoff_m,
+          cfg.min_standoff_path_progress_m,
+          &planned,
+          &applied_standoff_m)) {
+    result.perf.standoff_ms = elapsed_ms(standoff_start);
+    if (best_cluster_index >= 0 &&
+        static_cast<size_t>(best_cluster_index) < cluster_centroids.size()) {
+      result.selected_cluster_cells = {
+          cluster_centroids[static_cast<size_t>(best_cluster_index)]};
+    }
+    result.message = "largest frontier cluster standoff failed";
+    return finish();
+  }
+  result.perf.standoff_ms = elapsed_ms(standoff_start);
 
   result.success = true;
   result.message = "ok";
@@ -720,6 +802,7 @@ FrontierPlanResult plan_to_largest_frontier(
   }
   result.selected_cluster_size = best_cluster_size;
   result.selected_path_length_m = path_length_m(map, planned.path_grid);
+  result.selected_goal_standoff_m = applied_standoff_m;
 
   std::ostringstream log;
   log << "[planning][simplified] success=1"

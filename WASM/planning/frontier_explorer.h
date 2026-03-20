@@ -34,6 +34,7 @@ struct FrontierPlanResult {
     double centroid_ms = 0.0;
     double approach_ms = 0.0;
     double path_ms = 0.0;
+    double standoff_ms = 0.0;
     double total_ms = 0.0;
   };
 

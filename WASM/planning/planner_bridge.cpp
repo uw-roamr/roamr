@@ -67,6 +67,8 @@ struct FrontierProfileWindow {
   double approach_ms_max = 0.0;
   double path_ms_sum = 0.0;
   double path_ms_max = 0.0;
+  double standoff_ms_sum = 0.0;
+  double standoff_ms_max = 0.0;
   double publish_ms_sum = 0.0;
   double publish_ms_max = 0.0;
   double frontier_cell_count_sum = 0.0;
@@ -331,6 +333,7 @@ void record_frontier_profile(
   accumulate(planned.perf.centroid_ms, &window.centroid_ms_sum, &window.centroid_ms_max);
   accumulate(planned.perf.approach_ms, &window.approach_ms_sum, &window.approach_ms_max);
   accumulate(planned.perf.path_ms, &window.path_ms_sum, &window.path_ms_max);
+  accumulate(planned.perf.standoff_ms, &window.standoff_ms_sum, &window.standoff_ms_max);
   accumulate(publish_ms, &window.publish_ms_sum, &window.publish_ms_max);
   accumulate(
       static_cast<double>(planned.frontier_cell_count),
@@ -371,6 +374,8 @@ void record_frontier_profile(
       << " approach_ms=" << (window.approach_ms_sum / sample_count) << "/"
       << window.approach_ms_max
       << " path_ms=" << (window.path_ms_sum / sample_count) << "/" << window.path_ms_max
+      << " standoff_ms=" << (window.standoff_ms_sum / sample_count) << "/"
+      << window.standoff_ms_max
       << " publish_ms=" << (window.publish_ms_sum / sample_count) << "/" << window.publish_ms_max
       << " frontier_cells=" << (window.frontier_cell_count_sum / sample_count) << "/"
       << window.frontier_cell_count_max
