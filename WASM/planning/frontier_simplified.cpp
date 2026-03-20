@@ -563,7 +563,7 @@ bool apply_goal_standoff(
   return false;
 }
 
-PlanResult plan_to_grid_with_clearance_cost(
+PlanResult plan_to_grid_with_clearance_cost_impl(
     const GridMap2D& map,
     const PlannerConfig& cfg,
     const std::vector<int8_t>& occupancy,
@@ -752,6 +752,16 @@ PlanResult plan_to_grid_with_clearance_cost(
 
 }  // namespace
 
+PlanResult plan_to_grid_with_clearance_cost(
+    const GridMap2D& map,
+    const PlannerConfig& cfg,
+    const std::vector<int8_t>& occupancy,
+    const GridCoord& start_in,
+    const GridCoord& goal_in) {
+  return plan_to_grid_with_clearance_cost_impl(
+      map, cfg, occupancy, start_in, goal_in);
+}
+
 FrontierPlanResult plan_to_largest_frontier_in_window(
     const GridMap2D& map,
     const core::Vector3d& start_world,
@@ -870,7 +880,7 @@ FrontierPlanResult plan_to_largest_frontier_in_window(
   result.perf.approach_ms = elapsed_ms(approach_start);
 
   const auto path_start = std::chrono::steady_clock::now();
-  const PlanResult seed_plan = plan_to_grid_with_clearance_cost(
+  const PlanResult seed_plan = plan_to_grid_with_clearance_cost_impl(
       map,
       planner_cfg,
       inflated_occupancy,

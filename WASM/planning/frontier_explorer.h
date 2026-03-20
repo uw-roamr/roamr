@@ -82,6 +82,13 @@ bool is_frontier_goal_candidate(
 
 namespace planning::simplified {
 
+PlanResult plan_to_grid_with_clearance_cost(
+    const GridMap2D& map,
+    const PlannerConfig& cfg,
+    const std::vector<int8_t>& occupancy,
+    const GridCoord& start_in,
+    const GridCoord& goal_in);
+
 FrontierPlanResult plan_to_largest_frontier(
     const GridMap2D& map,
     const core::Vector3d& start_world,

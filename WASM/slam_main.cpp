@@ -1084,18 +1084,18 @@ struct OuterLoopTurnPidConfig {
 };
 
 static constexpr OuterLoopTurnPidConfig kScan4x90TurnPidCfg{
-    3.0,
+    2.5,
     0.25,
     0.5,
-    0.3 * core::pi,
-    0.12,
+    0.24 * core::pi,
+    0.10,
     0.6,
     1.5 * core::pi / 180.0};
 
 static constexpr double kScan4x90FinalMinOmegaRadS = 0.05;
 static constexpr double kScan4x90YawDeadzoneRad = 2.0 * core::pi / 180.0;
-static constexpr double kScan4x90SettleYawRateRadS = 6.0 * core::pi / 180.0;
-static constexpr int kScan4x90SettleSamplesRequired = 3;
+static constexpr double kScan4x90SettleYawRateRadS = 4.0 * core::pi / 180.0;
+static constexpr int kScan4x90SettleSamplesRequired = 4;
 
 static bool read_scan_odom_sample(sensors::WheelOdometryData* out) {
     return read_latest_wheel_odom_snapshot(out);

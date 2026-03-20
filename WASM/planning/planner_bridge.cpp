@@ -852,7 +852,16 @@ PlanningOverlay update_plan_overlay(
       return overlay;
     }
 
-    const PlanResult planned = g_planner.plan_to_grid(planner_map, start_cell, goal_cell);
+    const PlannerConfig planner_cfg = build_planner_config();
+    const std::vector<int8_t> inflated_occupancy =
+        inflate_obstacles(planner_map, planner_cfg);
+    const PlanResult planned =
+        simplified::plan_to_grid_with_clearance_cost(
+            planner_map,
+            planner_cfg,
+            inflated_occupancy,
+            start_cell,
+            goal_cell);
     publish_direct_planner_telemetry(
         snapshot.map_revision,
         g_goal_revision.load(std::memory_order_acquire),
@@ -875,6 +884,12 @@ PlanningOverlay update_plan_overlay(
     update_cached_path_world({});
     update_cached_overlay(overlay);
     return overlay;
+  }
+
+  PlanningOverlay cached = copy_cached_overlay();
+  if (!cached.path_grid.empty() && is_overlay_path_valid(snapshot, cached)) {
+    cached.source_map_revision = snapshot.map_revision;
+    return cached;
   }
 
   const auto now = std::chrono::steady_clock::now();
@@ -909,7 +924,6 @@ PlanningOverlay update_plan_overlay(
       }
       log << " elapsed_s=" << elapsed_sec;
       wasm_log_line(log.str());
-      PlanningOverlay cached = copy_cached_overlay();
       if (cached.source_map_revision != 0) {
         cached.source_map_revision = snapshot.map_revision;
       }
@@ -958,7 +972,6 @@ PlanningOverlay update_plan_overlay(
           << " message=" << planned.message;
       wasm_log_line(log.str());
     }
-    PlanningOverlay cached = copy_cached_overlay();
     if (!force_frontier_replan_for_large_move &&
         !cached.path_grid.empty() &&
         is_overlay_path_valid(snapshot, cached)) {
