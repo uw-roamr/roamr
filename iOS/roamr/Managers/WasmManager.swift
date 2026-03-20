@@ -38,6 +38,7 @@ final class WasmManager: ObservableObject {
     @Published var currentRunDisplayName: String?
     @Published var logLines: [String] = []
     @Published var latestMapJPEGData: Data?
+    @Published var latestBaseMapPNGData: Data?
     @Published var latestMapTimestamp: Double = 0
     @Published var latestMapFrameCount: Int = 0
     @Published private(set) var recordingEnabled: Bool
@@ -169,11 +170,13 @@ final class WasmManager: ObservableObject {
             NativeFunction(name: "ml_run_latest_camera_frame", signature: "(*)", impl: ml_run_latest_camera_frame_impl),
             NativeFunction(name: "ml_close_model", signature: "(*)", impl: ml_close_model_impl),
             NativeFunction(name: "wasm_log_text", signature: "(*)", impl: wasm_log_text_impl),
-            NativeFunction(name: "rerun_log_lidar_frame", signature: "(*)", impl: rerun_log_lidar_frame_impl),
-            NativeFunction(name: "rerun_log_map_frame", signature: "(*)", impl: rerun_log_map_frame_impl),
-            NativeFunction(name: "rerun_log_imu", signature: "(*)", impl: rerun_log_imu_impl),
-            NativeFunction(name: "rerun_log_pose", signature: "(*)", impl: rerun_log_pose_impl),
-            NativeFunction(name: "rerun_log_pose_wheel", signature: "(*)", impl: rerun_log_pose_wheel_impl),
+            NativeFunction(name: "host_log_lidar_frame", signature: "(*)", impl: host_log_lidar_frame_impl),
+            NativeFunction(name: "host_log_map_frame", signature: "(*)", impl: host_log_map_frame_impl),
+            NativeFunction(name: "host_log_map_metadata", signature: "(*)", impl: host_log_map_metadata_impl),
+            NativeFunction(name: "host_log_imu", signature: "(*)", impl: host_log_imu_impl),
+            NativeFunction(name: "host_log_pose", signature: "(*)", impl: host_log_pose_impl),
+            NativeFunction(name: "host_log_pose_wheel", signature: "(*)", impl: host_log_pose_wheel_impl),
+            NativeFunction(name: "host_log_planner_telemetry", signature: "(*)", impl: host_log_planner_telemetry_impl),
             NativeFunction(name: "write_motors", signature: "(*)", impl: write_motors_impl)
         ]
 
@@ -283,8 +286,8 @@ final class WasmManager: ObservableObject {
                 }
 
                 // Instantiate module
-                let stackSize: UInt32 = 65536  // 64KB for threading
-                let heapSize: UInt32 = 65536   // 64KB for threading
+                let stackSize: UInt32 = 524288   // 512KB for planner/mapping threads
+                let heapSize: UInt32 = 8388608   // 8MB for frontier planning and larger maps
                 let wasiOptions = prepareWASIRuntimeOptions()
 
                 guard let moduleInstance = instantiateModule(
@@ -392,8 +395,10 @@ final class WasmManager: ObservableObject {
 
     func clearMapPreview() {
         WebSocketManager.shared.publishMapFrameReset()
+        WebSocketManager.shared.publishPlannerTelemetryReset()
         DispatchQueue.main.async {
             self.latestMapJPEGData = nil
+            self.latestBaseMapPNGData = nil
             self.latestMapTimestamp = 0
             self.latestMapFrameCount = 0
         }
@@ -421,6 +426,13 @@ final class WasmManager: ObservableObject {
             self.latestMapJPEGData = jpegData
             self.latestMapTimestamp = timestamp
             self.latestMapFrameCount += 1
+        }
+    }
+
+    func updateBaseMapPreview(pngData: Data) {
+        guard !pngData.isEmpty else { return }
+        DispatchQueue.main.async {
+            self.latestBaseMapPNGData = pngData
         }
     }
 

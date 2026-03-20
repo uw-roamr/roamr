@@ -11,7 +11,7 @@ import Combine
 import CryptoKit
 
 private enum RoamrWebSocketCompatibility {
-    static let protocolVersion = "2026-03-17.1"
+    static let protocolVersion = "2026-03-19.1"
     static let webClientName = "roamr-web"
 }
 
@@ -134,6 +134,81 @@ private struct IncomingTeleopCommand {
     let holdMs: Int
 }
 
+struct MapMetadataSnapshot: Equatable {
+    let width: Int
+    let height: Int
+    let resolutionM: Double
+    let originXM: Double
+    let originYM: Double
+    let originInitialized: Bool
+}
+
+struct PlannerGridCell: Codable, Equatable, Hashable, Identifiable {
+    let x: Int
+    let y: Int
+
+    var id: String {
+        "\(x),\(y)"
+    }
+}
+
+enum PlannerTelemetryMode: String, Codable {
+    case none = "none"
+    case directGoalDStar = "direct_goal_dstar"
+    case frontier = "frontier"
+}
+
+struct PlannerTelemetrySnapshot: Codable, Equatable, Identifiable {
+    let sequence: UInt64
+    let plannerMode: PlannerTelemetryMode
+    let sourceMapRevision: UInt64
+    let goalRevision: UInt64
+    let timestamp: Double
+    let success: Bool
+    let goalEnabled: Bool
+    let startCell: PlannerGridCell?
+    let goalCell: PlannerGridCell?
+    let pathGrid: [PlannerGridCell]
+    let frontierCandidates: [PlannerGridCell]
+    let selectedFrontierCluster: [PlannerGridCell]
+    let selectedFrontierSeed: PlannerGridCell?
+    let changedCells: [PlannerGridCell]
+    let expandedCells: [PlannerGridCell]
+    let message: String
+
+    var id: UInt64 {
+        sequence
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case sequence
+        case plannerMode = "planner_mode"
+        case sourceMapRevision = "source_map_revision"
+        case goalRevision = "goal_revision"
+        case timestamp
+        case success
+        case goalEnabled = "goal_enabled"
+        case startCell = "start_cell"
+        case goalCell = "goal_cell"
+        case pathGrid = "path_grid"
+        case frontierCandidates = "frontier_candidates"
+        case selectedFrontierCluster = "selected_frontier_cluster"
+        case selectedFrontierSeed = "selected_frontier_seed"
+        case changedCells = "changed_cells"
+        case expandedCells = "expanded_cells"
+        case message
+    }
+}
+
+private struct PlannerTelemetryMessage: Encodable {
+    let type = "planner_telemetry"
+    let snapshot: PlannerTelemetrySnapshot
+}
+
+private struct PlannerTelemetryResetMessage: Encodable {
+    let type = "planner_reset"
+}
+
 class WebSocketManager: ObservableObject {
     static let shared = WebSocketManager()
     private static let maxRecentWasmLogs = 200
@@ -146,22 +221,32 @@ class WebSocketManager: ObservableObject {
     @Published var serverStatus: String = "Stopped"
     @Published var lastMessage: String = ""
     @Published var connectedClients: Int = 0
+    @Published private(set) var latestMapMetadata: MapMetadataSnapshot?
+    @Published private(set) var latestPlannerTelemetry: PlannerTelemetrySnapshot?
 
     private var listener: NWListener?
     private var connections: [NWConnection] = []
     private var connectionStates: [ObjectIdentifier: Bool] = [:] // Track handshake completion
+    private var incomingHandshakeBuffers: [ObjectIdentifier: Data] = [:]
     private var incomingFrameBuffers: [ObjectIdentifier: Data] = [:]
     private var partialIncomingMessages: [ObjectIdentifier: PartialIncomingWebSocketMessage] = [:]
     private var mediaSendStates: [ObjectIdentifier: MediaSendState] = [:]
+    private var keepaliveTimers: [ObjectIdentifier: DispatchSourceTimer] = [:]
     private var latestPointCloudData: Data?
     private var latestMapFrameMessage: String?
+    private var latestMapMetadataMessage: String?
     private var latestMapLayerPayloads: [String: Data] = [:]
     private var latestMlDetectionsMessage: String?
     private var latestWasmStateMessage: String?
+    private var latestPoseMessage: String?
+    private var latestPlannerTelemetryMessage: String?
+    private var latestMapMetadataSnapshot: MapMetadataSnapshot?
+    private var latestPlannerTelemetrySnapshot: PlannerTelemetrySnapshot?
     private var recentWasmLogMessages: [String] = []
     private var selectedWasmTargetId: String
     private var wasmUploadSessions: [ObjectIdentifier: WasmUploadSession] = [:]
     private let port: NWEndpoint.Port = 8080
+    private let keepalivePingInterval: TimeInterval = 15.0
     private let enablePointCloudProfiling = true
     private let pointCloudProfilingSummaryInterval: TimeInterval = 3.0
     private let pointCloudProfileLock = NSLock()
@@ -219,7 +304,16 @@ class WebSocketManager: ObservableObject {
         connections.forEach { $0.cancel() }
         connections.removeAll()
         connectionStates.removeAll()
+        incomingHandshakeBuffers.removeAll()
+        incomingFrameBuffers.removeAll()
+        partialIncomingMessages.removeAll()
         mediaSendStates.removeAll()
+        keepaliveTimers.values.forEach { timer in
+            timer.setEventHandler {}
+            timer.cancel()
+        }
+        keepaliveTimers.removeAll()
+        wasmUploadSessions.removeAll()
         isServerRunning = false
         serverStatus = "Stopped"
         connectedClients = 0
@@ -230,6 +324,7 @@ class WebSocketManager: ObservableObject {
         connectedClients = connections.count
         let connectionId = ObjectIdentifier(connection)
         connectionStates[connectionId] = false // Handshake not complete
+        incomingHandshakeBuffers[connectionId] = Data()
         incomingFrameBuffers[connectionId] = Data()
         mediaSendStates[connectionId] = MediaSendState()
 
@@ -255,27 +350,75 @@ class WebSocketManager: ObservableObject {
     }
 
     private func receiveHandshake(on connection: NWConnection) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, _ in
-            guard let self = self, let data = data, !data.isEmpty else { return }
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            guard let self = self else { return }
 
-            if let handshake = String(data: data, encoding: .utf8) {
+            let connectionId = ObjectIdentifier(connection)
+
+            if let error {
+                print("❌ Handshake receive error: \(error)")
+                self.removeConnection(connection)
+                return
+            }
+
+            if let data, !data.isEmpty {
+                var buffer = self.incomingHandshakeBuffers[connectionId] ?? Data()
+                buffer.append(data)
+
+                guard let terminatorRange = buffer.range(of: Data("\r\n\r\n".utf8)) else {
+                    self.incomingHandshakeBuffers[connectionId] = buffer
+                    if !isComplete {
+                        self.receiveHandshake(on: connection)
+                    } else {
+                        print("❌ Connection closed before WebSocket handshake completed")
+                        self.removeConnection(connection)
+                    }
+                    return
+                }
+
+                let headerEnd = terminatorRange.upperBound
+                let handshakeData = buffer.prefix(upTo: headerEnd)
+                let remainingData = Data(buffer.suffix(from: headerEnd))
+
+                guard let handshake = String(data: handshakeData, encoding: .utf8) else {
+                    print("❌ Invalid UTF-8 in WebSocket handshake")
+                    self.removeConnection(connection)
+                    return
+                }
+
                 print("📥 Received handshake:\n\(handshake)")
 
-                // Extract WebSocket key
-                if let wsKey = self.extractWebSocketKey(from: handshake) {
-                    print("🔑 WebSocket Key: \(wsKey)")
-                    self.sendHandshakeResponse(to: connection, key: wsKey)
-                    self.connectionStates[ObjectIdentifier(connection)] = true
-                    print("✅ WebSocket handshake complete")
-
-                    self.sendLatestTelemetryState(to: connection)
-
-                    // Start receiving WebSocket frames
-                    self.receiveWebSocketFrame(on: connection)
-                } else {
+                guard let wsKey = self.extractWebSocketKey(from: handshake) else {
                     print("❌ Failed to extract WebSocket key")
+                    self.removeConnection(connection)
+                    return
                 }
+
+                print("🔑 WebSocket Key: \(wsKey)")
+                self.incomingHandshakeBuffers.removeValue(forKey: connectionId)
+                self.sendHandshakeResponse(to: connection, key: wsKey)
+                self.connectionStates[connectionId] = true
+                self.startKeepalivePingTimer(for: connection)
+                print("✅ WebSocket handshake complete")
+
+                if !remainingData.isEmpty {
+                    var frameBuffer = self.incomingFrameBuffers[connectionId] ?? Data()
+                    frameBuffer.append(remainingData)
+                    self.incomingFrameBuffers[connectionId] = frameBuffer
+                }
+
+                self.sendLatestTelemetryState(to: connection)
+                self.receiveWebSocketFrame(on: connection)
+                return
             }
+
+            if isComplete {
+                print("❌ Connection closed before WebSocket handshake completed")
+                self.removeConnection(connection)
+                return
+            }
+
+            self.receiveHandshake(on: connection)
         }
     }
 
@@ -327,41 +470,42 @@ class WebSocketManager: ObservableObject {
                 return
             }
 
+            let connectionId = ObjectIdentifier(connection)
+            var buffer = self.incomingFrameBuffers[connectionId] ?? Data()
+
             if let data = data, !data.isEmpty {
-                let connectionId = ObjectIdentifier(connection)
-                var buffer = self.incomingFrameBuffers[connectionId] ?? Data()
                 buffer.append(data)
-
-                while let frame = self.decodeNextWebSocketFrame(from: &buffer) {
-                    guard let assembledFrame = self.assembleIncomingWebSocketFrame(
-                        frame,
-                        connectionId: connectionId
-                    ) else {
-                        continue
-                    }
-
-                    switch assembledFrame {
-                    case .text(let message):
-                        DispatchQueue.main.async {
-                            self.lastMessage = message
-                            print("📱 Received WebSocket message: \(message)")
-                            self.handleIncomingMessage(message)
-                        }
-                    case .binary(let payload):
-                        self.handleIncomingBinaryMessage(payload, from: connection)
-                    case .ping(let payload):
-                        self.sendControlFrame(opcode: 0xA, payload: payload, to: connection)
-                    case .pong:
-                        break
-                    case .close(let payload):
-                        self.sendControlFrame(opcode: 0x8, payload: payload, to: connection)
-                        connection.cancel()
-                        self.removeConnection(connection)
-                        return
-                    }
-                }
-                self.incomingFrameBuffers[connectionId] = buffer
             }
+
+            while let frame = self.decodeNextWebSocketFrame(from: &buffer) {
+                guard let assembledFrame = self.assembleIncomingWebSocketFrame(
+                    frame,
+                    connectionId: connectionId
+                ) else {
+                    continue
+                }
+
+                switch assembledFrame {
+                case .text(let message):
+                    DispatchQueue.main.async {
+                        self.lastMessage = message
+                        print("📱 Received WebSocket message: \(message)")
+                        self.handleIncomingMessage(message)
+                    }
+                case .binary(let payload):
+                    self.handleIncomingBinaryMessage(payload, from: connection)
+                case .ping(let payload):
+                    self.sendControlFrame(opcode: 0xA, payload: payload, to: connection)
+                case .pong:
+                    break
+                case .close(let payload):
+                    self.sendControlFrame(opcode: 0x8, payload: payload, to: connection)
+                    connection.cancel()
+                    self.removeConnection(connection)
+                    return
+                }
+            }
+            self.incomingFrameBuffers[connectionId] = buffer
 
             if !isComplete {
                 self.receiveWebSocketFrame(on: connection)
@@ -483,9 +627,11 @@ class WebSocketManager: ObservableObject {
         let connectionId = ObjectIdentifier(connection)
         connections.removeAll { $0 === connection }
         connectionStates.removeValue(forKey: connectionId)
+        incomingHandshakeBuffers.removeValue(forKey: connectionId)
         incomingFrameBuffers.removeValue(forKey: connectionId)
         partialIncomingMessages.removeValue(forKey: connectionId)
         mediaSendStates.removeValue(forKey: connectionId)
+        stopKeepalivePingTimer(for: connectionId)
         wasmUploadSessions.removeValue(forKey: connectionId)
         if connections.isEmpty {
             bluetoothManager?.sendMessage("0 0 0")
@@ -523,6 +669,38 @@ class WebSocketManager: ObservableObject {
         })
     }
 
+    private func startKeepalivePingTimer(for connection: NWConnection) {
+        let connectionId = ObjectIdentifier(connection)
+        stopKeepalivePingTimer(for: connectionId)
+
+        let timer = DispatchSource.makeTimerSource(queue: networkQueue)
+        timer.schedule(
+            deadline: .now() + keepalivePingInterval,
+            repeating: keepalivePingInterval
+        )
+        timer.setEventHandler { [weak self, weak connection] in
+            guard let self else { return }
+            guard let connection else {
+                self.stopKeepalivePingTimer(for: connectionId)
+                return
+            }
+            guard self.connectionStates[connectionId] == true else {
+                self.stopKeepalivePingTimer(for: connectionId)
+                return
+            }
+            self.sendControlFrame(opcode: 0x9, to: connection)
+        }
+        keepaliveTimers[connectionId] = timer
+        timer.resume()
+    }
+
+    private func stopKeepalivePingTimer(for connectionId: ObjectIdentifier) {
+        guard let timer = keepaliveTimers.removeValue(forKey: connectionId) else {
+            return
+        }
+        timer.setEventHandler {}
+        timer.cancel()
+    }
     private func shouldRemoveConnection(for error: NWError) -> Bool {
         switch error {
         case .posix(let posixError):
@@ -826,9 +1004,52 @@ class WebSocketManager: ObservableObject {
         broadcastTextMessage(payload)
     }
 
+    func publishMapMetadata(
+        width: Int,
+        height: Int,
+        resolutionM: Double,
+        originXM: Double,
+        originYM: Double,
+        originInitialized: Bool
+    ) {
+        guard width > 0,
+              height > 0,
+              resolutionM > 0,
+              let payload = makeJSONString([
+                "type": "map_meta",
+                "width": width,
+                "height": height,
+                "resolution_m": resolutionM,
+                "origin_x_m": originXM,
+                "origin_y_m": originYM,
+                "origin_initialized": originInitialized
+              ]) else {
+            return
+        }
+        let snapshot = MapMetadataSnapshot(
+            width: width,
+            height: height,
+            resolutionM: resolutionM,
+            originXM: originXM,
+            originYM: originYM,
+            originInitialized: originInitialized
+        )
+        latestMapMetadataSnapshot = snapshot
+        latestMapMetadataMessage = payload
+        DispatchQueue.main.async {
+            self.latestMapMetadata = snapshot
+        }
+        broadcastTextMessage(payload)
+    }
+
     func publishMapFrameReset() {
         latestMapFrameMessage = nil
+        latestMapMetadataMessage = nil
+        latestMapMetadataSnapshot = nil
         latestMapLayerPayloads.removeAll()
+        DispatchQueue.main.async {
+            self.latestMapMetadata = nil
+        }
         guard let payload = makeJSONString([
             "type": "map_frame_reset"
         ]) else {
@@ -859,6 +1080,54 @@ class WebSocketManager: ObservableObject {
         }
         latestMapLayerPayloads[layer] = payload
         broadcastBestEffortBinaryData(payload, topicKey: MediaTopicKey.mapLayer(layer))
+    }
+
+    func publishPose(
+        timestamp: Double,
+        translation: [Double],
+        quaternion: [Double],
+        source: String
+    ) {
+        guard timestamp > 0,
+              translation.count == 3,
+              quaternion.count == 4,
+              let payload = makeJSONString([
+                "type": "pose",
+                "timestamp": timestamp,
+                "translation": translation,
+                "quaternion": quaternion,
+                "pose_source": source
+              ]) else {
+            return
+        }
+        latestPoseMessage = payload
+        broadcastTextMessage(payload)
+    }
+
+    func publishPlannerTelemetry(_ snapshot: PlannerTelemetrySnapshot) {
+        latestPlannerTelemetrySnapshot = snapshot
+        guard let latestPayload = makeJSONText(PlannerTelemetryMessage(snapshot: snapshot)) else {
+            return
+        }
+
+        latestPlannerTelemetryMessage = latestPayload
+        DispatchQueue.main.async {
+            self.latestPlannerTelemetry = snapshot
+        }
+
+        broadcastTextMessage(latestPayload)
+    }
+
+    func publishPlannerTelemetryReset() {
+        latestPlannerTelemetrySnapshot = nil
+        latestPlannerTelemetryMessage = nil
+        DispatchQueue.main.async {
+            self.latestPlannerTelemetry = nil
+        }
+        guard let payload = makeJSONText(PlannerTelemetryResetMessage()) else {
+            return
+        }
+        broadcastTextMessage(payload)
     }
 
     func publishWasmControlState() {
@@ -1028,6 +1297,9 @@ class WebSocketManager: ObservableObject {
             }
         }
 
+        if let latestMapMetadataMessage {
+            sendTextFrame(latestMapMetadataMessage, to: connection, label: "latest map metadata")
+        }
         if let latestMapFrameMessage {
             sendTextFrame(latestMapFrameMessage, to: connection, label: "latest map frame")
         }
@@ -1048,6 +1320,14 @@ class WebSocketManager: ObservableObject {
 
         if let latestMlDetectionsMessage {
             sendTextFrame(latestMlDetectionsMessage, to: connection, label: "latest ml detections")
+        }
+
+        if let latestPoseMessage {
+            sendTextFrame(latestPoseMessage, to: connection, label: "latest pose")
+        }
+
+        if let latestPlannerTelemetryMessage {
+            sendTextFrame(latestPlannerTelemetryMessage, to: connection, label: "latest planner telemetry")
         }
 
         sendLatestPointCloud(to: connection)
@@ -1457,6 +1737,15 @@ class WebSocketManager: ObservableObject {
     private func makeJSONString(_ object: [String: Any]) -> String? {
         guard JSONSerialization.isValidJSONObject(object),
               let data = try? JSONSerialization.data(withJSONObject: object, options: []),
+              let text = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return text
+    }
+
+    private func makeJSONText<T: Encodable>(_ value: T) -> String? {
+        let encoder = JSONEncoder()
+        guard let data = try? encoder.encode(value),
               let text = String(data: data, encoding: .utf8) else {
             return nil
         }

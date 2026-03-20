@@ -13,7 +13,8 @@ docker run -v "$(pwd)":/src -w /src ghcr.io/webassembly/wasi-sdk /opt/wasi-sdk/b
 -Wl,--import-memory \
 -Wl,--export-memory \
 -Wl,--shared-memory \
--Wl,--max-memory=67108864 \
+-Wl,--initial-memory=67108864 \
+-Wl,--max-memory=134217728 \
 -I. -Icore -Icontrols -Imapping -Isensors -Iutils \
 -o slam_main.wasm \
 "$filename" \

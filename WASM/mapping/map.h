@@ -18,13 +18,13 @@ namespace mapping{
 
         // Map parameters (mirroring the ROS node)
         static constexpr float kGridResolution = 0.02f; // meters
-        static constexpr int32_t kMapSizeX = 150;
-        static constexpr int32_t kMapSizeY = 150;
+        static constexpr int32_t kMapSizeX = 200;
+        static constexpr int32_t kMapSizeY = 200;
         static constexpr int16_t kMinCellScore = -32;
         static constexpr int16_t kMaxCellScore = 32;
-        static constexpr int16_t kHitIncrement = 8;
-        static constexpr int16_t kFreeDecrement = 1;
-        static constexpr int16_t kOccupiedThreshold = 8;
+        static constexpr int16_t kHitIncrement = 6;
+        static constexpr int16_t kFreeDecrement = 2;
+        static constexpr int16_t kOccupiedThreshold = 6;
         static constexpr int16_t kClearThreshold = 0;
         static constexpr float kMinRange = 0.1f; // meters
 
@@ -66,6 +66,11 @@ namespace mapping{
 
         int32_t grid_index(int32_t gx, int32_t gy) const;
         void maybe_init_origin(double x, double y);
+        bool ray_reaches_endpoint_without_occlusion(
+            int32_t x0,
+            int32_t y0,
+            int32_t x1,
+            int32_t y1) const;
         void integrate_ray(
             int32_t x0,
             int32_t y0,
@@ -99,6 +104,7 @@ namespace mapping{
         std::array<int16_t, kMapSizeX * kMapSizeY> scan_count_{};
         std::array<uint8_t, kMapSizeX * kMapSizeY> confirmed_{};
         std::array<uint8_t, kMapSizeX * kMapSizeY> visited_{};
+        std::array<int8_t, kMapSizeX * kMapSizeY> occupancy_{};
         std::array<uint32_t, kMapSizeX * kMapSizeY> hit_cell_scan_stamp_{};
         uint32_t current_scan_stamp_ = 0;
 
@@ -109,5 +115,7 @@ namespace mapping{
         // 0 = points are in robot/laser frame (default), 1 = points already in world/map frame.
         int32_t points_in_world_ = 0;
     };
-  WASM_IMPORT("host", "rerun_log_map_frame") void rerun_log_map_frame(const MapImage *frame);
+  WASM_IMPORT("host", "host_log_map_frame") void host_log_map_frame(const MapImage *frame);
+  WASM_IMPORT("host", "host_log_map_metadata") void host_log_map_metadata(
+      const OccupancyGridMetadata* metadata);
 };

@@ -64,6 +64,8 @@ struct PlanResult {
   std::string message;
   std::vector<GridCoord> path_grid;
   std::vector<core::Vector3d> path_world;
+  std::vector<GridCoord> changed_cells;
+  std::vector<GridCoord> expanded_cells;
 };
 
 // Abstract interface shared by AStarPlanner and DStarLitePlanner.
@@ -548,13 +550,23 @@ class DStarLitePlanner : public GridPlanner {
       const GridMap2D& map,
       const GridCoord& start_in,
       const GridCoord& goal_in) override {
+    const std::vector<int8_t> new_occ = inflate_obstacles(map, cfg_);
+    return plan_to_grid(map, new_occ, start_in, goal_in);
+  }
+
+  PlanResult plan_to_grid(
+      const GridMap2D& map,
+      const std::vector<int8_t>& new_occ,
+      const GridCoord& start_in,
+      const GridCoord& goal_in) {
     PlanResult result;
     if (!map.valid()) { result.message = "invalid occupancy grid"; return result; }
     if (!map.in_bounds(start_in.x, start_in.y) || !map.in_bounds(goal_in.x, goal_in.y)) {
       result.message = "start or goal outside map bounds"; return result;
     }
-
-    const std::vector<int8_t> new_occ = inflate_obstacles(map, cfg_);
+    if (new_occ.size() != static_cast<size_t>(map.width * map.height)) {
+      result.message = "invalid inflated occupancy"; return result;
+    }
 
     GridCoord start = start_in;
     GridCoord goal  = goal_in;
@@ -622,6 +634,8 @@ class DStarLitePlanner : public GridPlanner {
   std::vector<int8_t>   occupancy_; // inflated occupancy from previous call
   std::vector<double>   g_, rhs_;
   std::vector<uint32_t> ver_;       // per-cell generation for lazy deletion
+  std::vector<GridCoord> last_changed_cells_;
+  std::vector<GridCoord> last_expanded_cells_;
   double    k_m_ = 0.0;
   MinHeap   U_;
 
@@ -696,6 +710,8 @@ class DStarLitePlanner : public GridPlanner {
     start_ = start;
     goal_  = goal;
     occupancy_ = occ;
+    last_changed_cells_.clear();
+    last_expanded_cells_.clear();
     const int32_t gi = map_w_ * goal.y + goal.x;
     rhs_[gi] = 0.0;
     ++ver_[gi];
@@ -708,6 +724,7 @@ class DStarLitePlanner : public GridPlanner {
                          const std::vector<int8_t>& new_occ) {
     const int32_t N = map_w_ * map_h_;
     std::vector<bool> dirty(static_cast<size_t>(N), false);
+    last_changed_cells_.clear();
 
     auto blocked_in = [this](const std::vector<int8_t>& v, int32_t x, int32_t y) {
       const int8_t c = v[static_cast<size_t>(map_w_ * y + x)];
@@ -718,6 +735,7 @@ class DStarLitePlanner : public GridPlanner {
     for (int32_t y = 0; y < map_h_; ++y) {
       for (int32_t x = 0; x < map_w_; ++x) {
         if (blocked_in(occupancy_, x, y) != blocked_in(new_occ, x, y)) {
+          last_changed_cells_.push_back(GridCoord{x, y});
           dirty[static_cast<size_t>(map_w_ * y + x)] = true;
           for (int32_t i = 0; i < nc(); ++i) {
             const int32_t nx = x + kDX[i], ny = y + kDY[i];
@@ -737,6 +755,7 @@ class DStarLitePlanner : public GridPlanner {
   void compute_shortest_path(const GridMap2D& map, const GridCoord& start) {
     const int32_t si = map_w_ * start.y + start.x;
     int32_t expanded = 0;
+    last_expanded_cells_.clear();
     while (true) {
       while (!U_.empty() && U_.top().gen != ver_[U_.top().idx]) U_.pop();
       if (U_.empty()) break;
@@ -749,6 +768,7 @@ class DStarLitePlanner : public GridPlanner {
 
       const HeapEntry e = U_.top(); U_.pop();
       if (e.gen != ver_[e.idx]) continue;
+      last_expanded_cells_.push_back(GridCoord{e.idx % map_w_, e.idx / map_w_});
 
       const Key k_new = key_of(e.idx, start);
       if (e.key < k_new) {
@@ -776,6 +796,8 @@ class DStarLitePlanner : public GridPlanner {
                           const GridCoord& start,
                           const GridCoord& goal) const {
     PlanResult result;
+    result.changed_cells = last_changed_cells_;
+    result.expanded_cells = last_expanded_cells_;
     if (g_[map_w_ * start.y + start.x] >= kInf * 0.5) {
       result.message = "no path found"; return result;
     }

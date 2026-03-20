@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "core/math_utils.h"
+#include "sensors/calibration.h"
 
 namespace semantic {
 namespace {
@@ -85,11 +86,10 @@ core::Vector3d lidar_point_to_body_point(float x, float y, float z) {
 core::Vector3d body_point_to_world_point(
     const core::Vector3d& body_point,
     const sensors::PoseLog& pose) {
-  core::Vector3d world_point = core::quat_rotate(
-      core::quat_normalize(pose.quaternion),
-      body_point);
-  world_point += pose.translation;
-  return world_point;
+  const core::PoseSE3d body_to_world{pose.translation, pose.quaternion};
+  const core::PoseSE3d lidar_to_world =
+      body_to_world * sensors::calibration::base_link_T_lidar;
+  return lidar_to_world * body_point;
 }
 
 bool query_lidar_bbox_coordinates(

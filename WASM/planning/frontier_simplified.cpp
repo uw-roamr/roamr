@@ -1,5 +1,6 @@
 #include "planning/frontier_explorer.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -13,6 +14,8 @@
 
 namespace planning::simplified {
 namespace {
+
+constexpr double kGoalEndpointExtraClearanceM = 0.03;
 
 PlannerConfig build_simple_planner_config(const FrontierExplorerConfig& cfg) {
   PlannerConfig planner_cfg;
@@ -34,6 +37,13 @@ PlannerConfig build_simple_detection_config(const FrontierExplorerConfig& cfg) {
   planner_cfg.inflation_radius_m = cfg.detection_inflation_radius_m;
   return planner_cfg;
 }
+
+struct GridWindowBounds {
+  int32_t min_x = 0;
+  int32_t min_y = 0;
+  int32_t width = 0;
+  int32_t height = 0;
+};
 
 void mark_reachable_cells_simple(
     const GridMap2D& map,
@@ -209,6 +219,100 @@ GridCoord select_cluster_centroid_cell(const std::vector<GridCoord>& cluster) {
   return best;
 }
 
+std::vector<GridCoord> compute_cluster_centroids(
+    const std::vector<std::vector<GridCoord>>& clusters) {
+  std::vector<GridCoord> centroids;
+  centroids.reserve(clusters.size());
+  for (const std::vector<GridCoord>& cluster : clusters) {
+    if (!cluster.empty()) {
+      centroids.push_back(select_cluster_centroid_cell(cluster));
+    }
+  }
+  return centroids;
+}
+
+GridCoord translate_to_global_cell(
+    const GridCoord& local_cell,
+    const GridWindowBounds& window) {
+  return GridCoord{
+      local_cell.x + window.min_x,
+      local_cell.y + window.min_y};
+}
+
+std::vector<GridCoord> translate_cells_to_global(
+    const std::vector<GridCoord>& local_cells,
+    const GridWindowBounds& window) {
+  std::vector<GridCoord> global_cells;
+  global_cells.reserve(local_cells.size());
+  for (const GridCoord& local_cell : local_cells) {
+    global_cells.push_back(translate_to_global_cell(local_cell, window));
+  }
+  return global_cells;
+}
+
+bool is_full_window(
+    const GridMap2D& map,
+    const GridWindowBounds& window) {
+  return window.min_x == 0 &&
+         window.min_y == 0 &&
+         window.width == map.width &&
+         window.height == map.height;
+}
+
+GridWindowBounds build_window_bounds(
+    const GridMap2D& map,
+    const GridCoord& center_cell,
+    int32_t target_width_cells,
+    int32_t target_height_cells) {
+  GridWindowBounds window;
+  if (!map.valid()) {
+    return window;
+  }
+  const int32_t clamped_target_width =
+      std::min<int32_t>(std::max<int32_t>(1, target_width_cells), map.width);
+  const int32_t clamped_target_height =
+      std::min<int32_t>(std::max<int32_t>(1, target_height_cells), map.height);
+  const int32_t half_width = clamped_target_width / 2;
+  const int32_t half_height = clamped_target_height / 2;
+
+  int32_t min_x = center_cell.x - half_width;
+  int32_t min_y = center_cell.y - half_height;
+  min_x = std::max<int32_t>(0, std::min<int32_t>(min_x, map.width - clamped_target_width));
+  min_y = std::max<int32_t>(0, std::min<int32_t>(min_y, map.height - clamped_target_height));
+
+  window.min_x = min_x;
+  window.min_y = min_y;
+  window.width = clamped_target_width;
+  window.height = clamped_target_height;
+  return window;
+}
+
+GridMap2D crop_grid_map(
+    const GridMap2D& map,
+    const GridWindowBounds& window) {
+  GridMap2D cropped;
+  if (!map.valid() || window.width <= 0 || window.height <= 0) {
+    return cropped;
+  }
+  cropped.width = window.width;
+  cropped.height = window.height;
+  cropped.resolution_m = map.resolution_m;
+  cropped.origin_x_m = map.origin_x_m + static_cast<double>(window.min_x) * map.resolution_m;
+  cropped.origin_y_m = map.origin_y_m + static_cast<double>(window.min_y) * map.resolution_m;
+  cropped.data.resize(static_cast<size_t>(window.width * window.height));
+
+  for (int32_t y = 0; y < window.height; ++y) {
+    const int32_t src_y = window.min_y + y;
+    const int32_t src_idx = map.index(window.min_x, src_y);
+    const int32_t dst_idx = y * window.width;
+    std::copy_n(
+        map.data.begin() + src_idx,
+        window.width,
+        cropped.data.begin() + dst_idx);
+  }
+  return cropped;
+}
+
 bool select_cluster_approach_goal_cell(
     const GridMap2D& map,
     const PlannerConfig& cfg,
@@ -370,7 +474,96 @@ double path_length_m(const GridMap2D& map, const std::vector<GridCoord>& path_gr
   return length_m;
 }
 
-PlanResult plan_to_grid_with_clearance_cost(
+bool apply_goal_standoff(
+    const GridMap2D& map,
+    const PlannerConfig& cfg,
+    const PlanResult& seed_plan,
+    double min_progress_m,
+    PlanResult* standoff_plan,
+    double* applied_standoff_m) {
+  if (!standoff_plan) {
+    return false;
+  }
+  *standoff_plan = seed_plan;
+  if (applied_standoff_m) {
+    *applied_standoff_m = 0.0;
+  }
+  if (seed_plan.path_grid.size() != seed_plan.path_world.size() ||
+      seed_plan.path_grid.empty() ||
+      seed_plan.path_world.empty()) {
+    return false;
+  }
+  if (!map.valid() || seed_plan.path_world.size() < 2) {
+    return true;
+  }
+
+  PlannerConfig endpoint_cfg = cfg;
+  endpoint_cfg.inflation_radius_m += kGoalEndpointExtraClearanceM;
+  const std::vector<int8_t> endpoint_safety_occupancy =
+      inflate_obstacles(map, endpoint_cfg);
+
+  double total_length_m = 0.0;
+  for (size_t i = 1; i < seed_plan.path_world.size(); ++i) {
+    const double dx = seed_plan.path_world[i].x - seed_plan.path_world[i - 1].x;
+    const double dy = seed_plan.path_world[i].y - seed_plan.path_world[i - 1].y;
+    total_length_m += std::sqrt(dx * dx + dy * dy);
+  }
+  if (total_length_m <= min_progress_m) {
+    return true;
+  }
+
+  double backtracked_m = 0.0;
+  for (size_t cut_index = seed_plan.path_grid.size(); cut_index-- > 1;) {
+    const GridCoord& candidate_goal = seed_plan.path_grid[cut_index];
+    if (is_cell_blocked(
+            map,
+            endpoint_cfg,
+            candidate_goal.x,
+            candidate_goal.y,
+            &endpoint_safety_occupancy)) {
+      continue;
+    }
+    const GridCoord& predecessor = seed_plan.path_grid[cut_index - 1];
+    if (!line_of_sight_free(
+            map,
+            endpoint_cfg,
+            endpoint_safety_occupancy,
+            predecessor,
+            candidate_goal)) {
+      continue;
+    }
+
+    double retained_length_m = 0.0;
+    for (size_t i = 1; i <= cut_index; ++i) {
+      const core::Vector3d& a = seed_plan.path_world[i - 1];
+      const core::Vector3d& b = seed_plan.path_world[i];
+      const double dx = b.x - a.x;
+      const double dy = b.y - a.y;
+      retained_length_m += std::sqrt(dx * dx + dy * dy);
+    }
+    if (retained_length_m < min_progress_m) {
+      continue;
+    }
+
+    standoff_plan->path_grid.assign(
+        seed_plan.path_grid.begin(),
+        seed_plan.path_grid.begin() + static_cast<std::ptrdiff_t>(cut_index + 1));
+    standoff_plan->path_world.assign(
+        seed_plan.path_world.begin(),
+        seed_plan.path_world.begin() + static_cast<std::ptrdiff_t>(cut_index + 1));
+    if (standoff_plan->path_grid.empty() || standoff_plan->path_world.empty()) {
+      return false;
+    }
+    backtracked_m = std::max(0.0, total_length_m - retained_length_m);
+    if (applied_standoff_m) {
+      *applied_standoff_m = backtracked_m;
+    }
+    return true;
+  }
+  return false;
+}
+
+PlanResult plan_to_grid_with_clearance_cost_impl(
     const GridMap2D& map,
     const PlannerConfig& cfg,
     const std::vector<int8_t>& occupancy,
@@ -559,25 +752,49 @@ PlanResult plan_to_grid_with_clearance_cost(
 
 }  // namespace
 
-FrontierPlanResult plan_to_largest_frontier(
+PlanResult plan_to_grid_with_clearance_cost(
+    const GridMap2D& map,
+    const PlannerConfig& cfg,
+    const std::vector<int8_t>& occupancy,
+    const GridCoord& start_in,
+    const GridCoord& goal_in) {
+  return plan_to_grid_with_clearance_cost_impl(
+      map, cfg, occupancy, start_in, goal_in);
+}
+
+FrontierPlanResult plan_to_largest_frontier_in_window(
     const GridMap2D& map,
     const core::Vector3d& start_world,
     const FrontierExplorerConfig& cfg) {
   FrontierPlanResult result;
+  const auto total_start = std::chrono::steady_clock::now();
+  auto elapsed_ms = [](const std::chrono::steady_clock::time_point& start) {
+    return std::chrono::duration<double, std::milli>(
+               std::chrono::steady_clock::now() - start)
+        .count();
+  };
+  auto finish = [&]() {
+    result.perf.total_ms = elapsed_ms(total_start);
+    return result;
+  };
   if (!map.valid()) {
     result.message = "invalid occupancy grid";
-    return result;
+    return finish();
   }
 
   const PlannerConfig detection_cfg = build_simple_detection_config(cfg);
   const PlannerConfig planner_cfg = build_simple_planner_config(cfg);
+  const auto inflate_detection_start = std::chrono::steady_clock::now();
   const std::vector<int8_t> inflated_detection = inflate_obstacles(map, detection_cfg);
+  result.perf.inflate_detection_ms = elapsed_ms(inflate_detection_start);
+  const auto inflate_planner_start = std::chrono::steady_clock::now();
   const std::vector<int8_t> inflated_occupancy = inflate_obstacles(map, planner_cfg);
+  result.perf.inflate_planner_ms = elapsed_ms(inflate_planner_start);
 
   GridCoord start_cell{};
   if (!world_to_grid(map, start_world.x, start_world.y, &start_cell)) {
     result.message = "robot pose outside map bounds";
-    return result;
+    return finish();
   }
   if (is_cell_blocked(map, detection_cfg, start_cell.x, start_cell.y, &inflated_detection)) {
     if (!detection_cfg.snap_start_to_free ||
@@ -589,45 +806,67 @@ FrontierPlanResult plan_to_largest_frontier(
             detection_cfg.snap_search_radius_cells,
             &start_cell)) {
       result.message = "robot start cell is blocked";
-      return result;
+      return finish();
     }
   }
 
   std::vector<uint8_t> reachable;
+  const auto reachable_start = std::chrono::steady_clock::now();
   mark_reachable_cells_simple(
       map,
       detection_cfg,
       inflated_detection,
       start_cell,
       &reachable);
+  result.perf.reachable_ms = elapsed_ms(reachable_start);
 
   std::vector<GridCoord> frontier_cells;
+  const auto detect_frontiers_start = std::chrono::steady_clock::now();
   detect_frontiers_simple(
       map,
       detection_cfg,
       inflated_detection,
       reachable,
       &frontier_cells);
+  result.perf.detect_frontiers_ms = elapsed_ms(detect_frontiers_start);
   result.frontier_cell_count = static_cast<int32_t>(frontier_cells.size());
-  result.frontier_cells = frontier_cells;
   if (frontier_cells.empty()) {
     result.message = "no reachable frontier cells";
-    return result;
+    return finish();
   }
 
   std::vector<std::vector<GridCoord>> clusters;
+  const auto cluster_start = std::chrono::steady_clock::now();
   cluster_frontiers_simple(map, frontier_cells, &clusters);
+  result.perf.cluster_ms = elapsed_ms(cluster_start);
   result.cluster_count = static_cast<int32_t>(clusters.size());
   if (clusters.empty()) {
     result.message = "no frontier clusters";
-    return result;
+    return finish();
   }
+  const auto centroid_start = std::chrono::steady_clock::now();
+  const std::vector<GridCoord> cluster_centroids = compute_cluster_centroids(clusters);
+  result.perf.centroid_ms = elapsed_ms(centroid_start);
+  result.frontier_cells = cluster_centroids;
 
   int32_t best_cluster_index = -1;
   int32_t best_cluster_size = -1;
+  double best_cluster_distance2 = std::numeric_limits<double>::infinity();
   for (size_t i = 0; i < clusters.size(); ++i) {
     const int32_t cluster_size = static_cast<int32_t>(clusters[i].size());
-    if (cluster_size > best_cluster_size) {
+    if (cluster_size <= 0) {
+      continue;
+    }
+    const GridCoord centroid = cluster_centroids[i];
+    const double dx = static_cast<double>(centroid.x - start_cell.x);
+    const double dy = static_cast<double>(centroid.y - start_cell.y);
+    const double distance2 = dx * dx + dy * dy;
+    const bool better_distance = distance2 + 1e-6 < best_cluster_distance2;
+    const bool near_equal_distance =
+        std::abs(distance2 - best_cluster_distance2) <= 1e-6;
+    if (better_distance ||
+        (near_equal_distance && cluster_size > best_cluster_size)) {
+      best_cluster_distance2 = distance2;
       best_cluster_size = cluster_size;
       best_cluster_index = static_cast<int32_t>(i);
     }
@@ -637,6 +876,7 @@ FrontierPlanResult plan_to_largest_frontier(
       clusters[static_cast<size_t>(best_cluster_index)];
   GridCoord goal_seed = select_cluster_centroid_cell(best_cluster);
   GridCoord goal_cell = goal_seed;
+  const auto approach_start = std::chrono::steady_clock::now();
   if (!select_cluster_approach_goal_cell(
           map,
           planner_cfg,
@@ -645,20 +885,51 @@ FrontierPlanResult plan_to_largest_frontier(
           planner_cfg.snap_search_radius_cells,
           &goal_seed,
           &goal_cell)) {
+    result.perf.approach_ms = elapsed_ms(approach_start);
+    result.selected_cluster_cells = {goal_seed};
     result.message = "largest frontier cluster has no nearby free approach cell";
-    return result;
+    return finish();
   }
+  result.perf.approach_ms = elapsed_ms(approach_start);
 
-  const PlanResult planned = plan_to_grid_with_clearance_cost(
+  const auto path_start = std::chrono::steady_clock::now();
+  const PlanResult seed_plan = plan_to_grid_with_clearance_cost_impl(
       map,
       planner_cfg,
       inflated_occupancy,
       start_cell,
       goal_cell);
-  if (!planned.success || planned.path_grid.empty() || planned.path_world.empty()) {
+  result.perf.path_ms = elapsed_ms(path_start);
+  if (!seed_plan.success || seed_plan.path_grid.empty() || seed_plan.path_world.empty()) {
+    if (best_cluster_index >= 0 &&
+        static_cast<size_t>(best_cluster_index) < cluster_centroids.size()) {
+      result.selected_cluster_cells = {
+          cluster_centroids[static_cast<size_t>(best_cluster_index)]};
+    }
     result.message = "largest frontier cluster unreachable";
-    return result;
+    return finish();
   }
+
+  PlanResult planned = seed_plan;
+  double applied_standoff_m = 0.0;
+  const auto standoff_start = std::chrono::steady_clock::now();
+  if (!apply_goal_standoff(
+          map,
+          planner_cfg,
+          seed_plan,
+          cfg.min_standoff_path_progress_m,
+          &planned,
+          &applied_standoff_m)) {
+    result.perf.standoff_ms = elapsed_ms(standoff_start);
+    if (best_cluster_index >= 0 &&
+        static_cast<size_t>(best_cluster_index) < cluster_centroids.size()) {
+      result.selected_cluster_cells = {
+          cluster_centroids[static_cast<size_t>(best_cluster_index)]};
+    }
+    result.message = "largest frontier cluster standoff failed";
+    return finish();
+  }
+  result.perf.standoff_ms = elapsed_ms(standoff_start);
 
   result.success = true;
   result.message = "ok";
@@ -666,9 +937,14 @@ FrontierPlanResult plan_to_largest_frontier(
   result.selected_seed = goal_seed;
   result.path_grid = planned.path_grid;
   result.path_world = planned.path_world;
-  result.selected_cluster_cells = best_cluster;
+  if (best_cluster_index >= 0 &&
+      static_cast<size_t>(best_cluster_index) < cluster_centroids.size()) {
+    result.selected_cluster_cells = {
+        cluster_centroids[static_cast<size_t>(best_cluster_index)]};
+  }
   result.selected_cluster_size = best_cluster_size;
   result.selected_path_length_m = path_length_m(map, planned.path_grid);
+  result.selected_goal_standoff_m = applied_standoff_m;
 
   std::ostringstream log;
   log << "[planning][simplified] success=1"
@@ -679,7 +955,95 @@ FrontierPlanResult plan_to_largest_frontier(
       << " selected_seed=(" << result.selected_seed.x << "," << result.selected_seed.y << ")";
   // wasm_log_line(log.str());
 
-  return result;
+  return finish();
+}
+
+void accumulate_perf(
+    const FrontierPlanResult::Perf& src,
+    FrontierPlanResult::Perf* dst) {
+  if (!dst) {
+    return;
+  }
+  dst->inflate_detection_ms += src.inflate_detection_ms;
+  dst->inflate_planner_ms += src.inflate_planner_ms;
+  dst->reachable_ms += src.reachable_ms;
+  dst->detect_frontiers_ms += src.detect_frontiers_ms;
+  dst->cluster_ms += src.cluster_ms;
+  dst->centroid_ms += src.centroid_ms;
+  dst->approach_ms += src.approach_ms;
+  dst->path_ms += src.path_ms;
+  dst->standoff_ms += src.standoff_ms;
+  dst->total_ms += src.total_ms;
+}
+
+FrontierPlanResult plan_to_largest_frontier(
+    const GridMap2D& map,
+    const core::Vector3d& start_world,
+    const FrontierExplorerConfig& cfg) {
+  FrontierPlanResult aggregated_result;
+  if (!map.valid()) {
+    aggregated_result.message = "invalid occupancy grid";
+    return aggregated_result;
+  }
+
+  GridCoord start_cell{};
+  if (!world_to_grid(map, start_world.x, start_world.y, &start_cell)) {
+    aggregated_result.message = "robot pose outside map bounds";
+    return aggregated_result;
+  }
+
+  constexpr double kLocalWindowSizeM = 3.0;
+  const int32_t local_window_cells = std::max<int32_t>(
+      1,
+      static_cast<int32_t>(std::ceil(kLocalWindowSizeM / map.resolution_m)));
+  const GridWindowBounds local_window = build_window_bounds(
+      map, start_cell, local_window_cells, local_window_cells);
+  const bool local_is_full_map = is_full_window(map, local_window);
+
+  auto finish_attempt = [&](FrontierPlanResult attempt_result,
+                            const GridWindowBounds& window,
+                            bool full_map_attempt,
+                            int32_t adaptive_attempts) {
+    attempt_result.perf.adaptive_attempts = adaptive_attempts;
+    attempt_result.perf.attempted_window_size_m =
+        std::max(window.width, window.height) * map.resolution_m;
+    attempt_result.perf.used_full_map_fallback = full_map_attempt ? 1 : 0;
+    return attempt_result;
+  };
+
+  {
+    const GridMap2D cropped_map = crop_grid_map(map, local_window);
+    FrontierPlanResult local_result =
+        plan_to_largest_frontier_in_window(cropped_map, start_world, cfg);
+    local_result.frontier_cells =
+        translate_cells_to_global(local_result.frontier_cells, local_window);
+    local_result.path_grid =
+        translate_cells_to_global(local_result.path_grid, local_window);
+    local_result.selected_cluster_cells =
+        translate_cells_to_global(local_result.selected_cluster_cells, local_window);
+    if (local_result.success) {
+      local_result.goal_cell =
+          translate_to_global_cell(local_result.goal_cell, local_window);
+    }
+    if (local_result.success || !local_result.selected_cluster_cells.empty()) {
+      local_result.selected_seed =
+          translate_to_global_cell(local_result.selected_seed, local_window);
+    }
+    if (local_result.success || local_is_full_map) {
+      return finish_attempt(std::move(local_result), local_window, local_is_full_map, 1);
+    }
+    aggregated_result = finish_attempt(std::move(local_result), local_window, false, 1);
+  }
+
+  GridWindowBounds full_window;
+  full_window.width = map.width;
+  full_window.height = map.height;
+  FrontierPlanResult full_result = plan_to_largest_frontier_in_window(map, start_world, cfg);
+  if (full_result.success) {
+    return finish_attempt(std::move(full_result), full_window, true, 2);
+  }
+  aggregated_result = finish_attempt(std::move(full_result), full_window, true, 2);
+  return aggregated_result;
 }
 
 }  // namespace planning::simplified

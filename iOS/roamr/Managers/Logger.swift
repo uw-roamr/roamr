@@ -50,6 +50,16 @@ private enum WasmMapLayout {
     static let totalByteCount = layerIdOffset + MemoryLayout<Int32>.size
 }
 
+private enum WasmMapMetadataLayout {
+    static let widthOffset = 0
+    static let heightOffset = widthOffset + MemoryLayout<Int32>.size
+    static let resolutionOffset = heightOffset + MemoryLayout<Int32>.size
+    static let originXOffset = resolutionOffset + MemoryLayout<Double>.size
+    static let originYOffset = originXOffset + MemoryLayout<Double>.size
+    static let originInitializedOffset = originYOffset + MemoryLayout<Double>.size
+    static let totalByteCount = originInitializedOffset + MemoryLayout<Int32>.size
+}
+
 private enum WasmMapLayerId: Int32 {
     case composite = 0
     case base = 1
@@ -95,6 +105,44 @@ private enum WasmPoseLayout {
     static let totalByteCount = quaternionOffset + quaternionCount * MemoryLayout<Double>.size
 }
 
+private enum WasmGridCoordLayout {
+    static let xOffset = 0
+    static let yOffset = xOffset + MemoryLayout<Int32>.size
+    static let totalByteCount = yOffset + MemoryLayout<Int32>.size
+}
+
+private enum WasmPlannerTelemetryLayout {
+    static let sequenceOffset = 0
+    static let sourceMapRevisionOffset = sequenceOffset + MemoryLayout<UInt64>.size
+    static let goalRevisionOffset = sourceMapRevisionOffset + MemoryLayout<UInt64>.size
+    static let timestampOffset = goalRevisionOffset + MemoryLayout<UInt64>.size
+    static let plannerModeOffset = timestampOffset + MemoryLayout<Double>.size
+    static let successOffset = plannerModeOffset + MemoryLayout<Int32>.size
+    static let goalEnabledOffset = successOffset + MemoryLayout<Int32>.size
+    static let startCellValidOffset = goalEnabledOffset + MemoryLayout<Int32>.size
+    static let startXOffset = startCellValidOffset + MemoryLayout<Int32>.size
+    static let startYOffset = startXOffset + MemoryLayout<Int32>.size
+    static let goalXOffset = startYOffset + MemoryLayout<Int32>.size
+    static let goalYOffset = goalXOffset + MemoryLayout<Int32>.size
+    static let selectedFrontierSeedEnabledOffset = goalYOffset + MemoryLayout<Int32>.size
+    static let selectedFrontierSeedXOffset = selectedFrontierSeedEnabledOffset + MemoryLayout<Int32>.size
+    static let selectedFrontierSeedYOffset = selectedFrontierSeedXOffset + MemoryLayout<Int32>.size
+    static let pathGridPtrOffset = selectedFrontierSeedYOffset + MemoryLayout<Int32>.size
+    static let pathGridCountOffset = pathGridPtrOffset + MemoryLayout<UInt32>.size
+    static let frontierCandidatesPtrOffset = pathGridCountOffset + MemoryLayout<Int32>.size
+    static let frontierCandidatesCountOffset = frontierCandidatesPtrOffset + MemoryLayout<UInt32>.size
+    static let selectedFrontierClusterPtrOffset = frontierCandidatesCountOffset + MemoryLayout<Int32>.size
+    static let selectedFrontierClusterCountOffset = selectedFrontierClusterPtrOffset + MemoryLayout<UInt32>.size
+    static let changedCellsPtrOffset = selectedFrontierClusterCountOffset + MemoryLayout<Int32>.size
+    static let changedCellsCountOffset = changedCellsPtrOffset + MemoryLayout<UInt32>.size
+    static let expandedCellsPtrOffset = changedCellsCountOffset + MemoryLayout<Int32>.size
+    static let expandedCellsCountOffset = expandedCellsPtrOffset + MemoryLayout<UInt32>.size
+    static let messageLengthOffset = expandedCellsCountOffset + MemoryLayout<Int32>.size
+    static let messageOffset = messageLengthOffset + MemoryLayout<UInt32>.size
+    static let messageCapacity = 128
+    static let totalByteCount = messageOffset + messageCapacity
+}
+
 private struct WasmMapFrameView {
     let timestamp: Double
     let width: Int
@@ -103,6 +151,15 @@ private struct WasmMapFrameView {
     let dataPointer: UnsafeMutablePointer<UInt8>
     let dataCount: Int
     let layerId: WasmMapLayerId
+}
+
+private struct WasmMapMetadataView: Equatable {
+    let width: Int
+    let height: Int
+    let resolutionM: Double
+    let originXM: Double
+    let originYM: Double
+    let originInitialized: Bool
 }
 
 private struct WasmImuView {
@@ -315,8 +372,8 @@ private final class RGBAImageEncoder {
     }
 }
 
-private final class WasmRerunTelemetryBridge {
-    static let shared = WasmRerunTelemetryBridge()
+private final class WasmTelemetryBridge {
+    static let shared = WasmTelemetryBridge()
 
     private let videoMinInterval = 1.0 / 10.0
     private let processingLock = NSLock()
@@ -506,7 +563,7 @@ private final class WasmRerunTelemetryBridge {
         defer { stateLock.unlock() }
         if warnedImageSizeZero { return }
         warnedImageSizeZero = true
-        print("rerun_log_lidar_frame_impl: image_size is 0 in WASM payload; skipping camera/image logging")
+        print("[host][ios][bridge] image_size is 0 in WASM payload; skipping camera/image logging")
     }
 
     private func recordPerf(decodeMs: Double, pointEmitMs: Double, frameTotalMs: Double) {
@@ -526,7 +583,7 @@ private final class WasmRerunTelemetryBridge {
         let avgFrameMs = perfFrameTotalMs / Double(frameCount)
         print(
             String(
-                format: "[rerun][ios][bridge] fps=%.1f decode=%.3fms point_emit=%.3fms frame=%.3fms",
+                format: "[ios][bridge] fps=%.1f decode=%.3fms point_emit=%.3fms frame=%.3fms",
                 fps,
                 avgDecodeMs,
                 avgPointEmitMs,
@@ -542,12 +599,14 @@ private final class WasmRerunTelemetryBridge {
     }
 }
 
-private final class WasmRerunMapBridge {
-    static let shared = WasmRerunMapBridge()
+private final class WasmMapBridge {
+    static let shared = WasmMapBridge()
 
     private let processingLock = NSLock()
     private let jpegEncoder = RGBJpegEncoder(quality: 0.7)
+    private let pngEncoder = RGBAImageEncoder()
     private var rgbScratch: [UInt8] = []
+    private var lastPublishedMetadata: WasmMapMetadataView?
 
     private init() {}
 
@@ -559,6 +618,27 @@ private final class WasmRerunMapBridge {
             return
         }
         logMapImage(frame)
+    }
+
+    func handleWasmMapMetadata(execEnv: wasm_exec_env_t?, payloadPointer: UnsafeMutableRawPointer?) {
+        processingLock.lock()
+        defer { processingLock.unlock() }
+
+        guard let metadata = decodeMetadata(execEnv: execEnv, payloadPointer: payloadPointer) else {
+            return
+        }
+        if metadata == lastPublishedMetadata {
+            return
+        }
+        lastPublishedMetadata = metadata
+        WebSocketManager.shared.publishMapMetadata(
+            width: metadata.width,
+            height: metadata.height,
+            resolutionM: metadata.resolutionM,
+            originXM: metadata.originXM,
+            originYM: metadata.originYM,
+            originInitialized: metadata.originInitialized
+        )
     }
 
     private func decodeFrame(
@@ -626,6 +706,58 @@ private final class WasmRerunMapBridge {
         )
     }
 
+    private func decodeMetadata(
+        execEnv: wasm_exec_env_t?,
+        payloadPointer: UnsafeMutableRawPointer?
+    ) -> WasmMapMetadataView? {
+        guard let execEnv = execEnv, let payloadPointer = payloadPointer else { return nil }
+
+        let basePointer = payloadPointer.assumingMemoryBound(to: UInt8.self)
+        guard let moduleInstance = wasm_runtime_get_module_inst(execEnv) else {
+            return nil
+        }
+
+        var nativeStart: UnsafeMutablePointer<UInt8>?
+        var nativeEnd: UnsafeMutablePointer<UInt8>?
+        guard wasm_runtime_get_native_addr_range(moduleInstance, basePointer, &nativeStart, &nativeEnd) else {
+            return nil
+        }
+
+        if let nativeEnd = nativeEnd {
+            let baseAddress = UInt(bitPattern: basePointer)
+            let endAddress = UInt(bitPattern: nativeEnd)
+            if baseAddress + UInt(WasmMapMetadataLayout.totalByteCount) > endAddress {
+                return nil
+            }
+        }
+
+        let width = basePointer.advanced(by: WasmMapMetadataLayout.widthOffset)
+            .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+        let height = basePointer.advanced(by: WasmMapMetadataLayout.heightOffset)
+            .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+        let resolutionM = basePointer.advanced(by: WasmMapMetadataLayout.resolutionOffset)
+            .withMemoryRebound(to: Double.self, capacity: 1) { $0.pointee }
+        let originXM = basePointer.advanced(by: WasmMapMetadataLayout.originXOffset)
+            .withMemoryRebound(to: Double.self, capacity: 1) { $0.pointee }
+        let originYM = basePointer.advanced(by: WasmMapMetadataLayout.originYOffset)
+            .withMemoryRebound(to: Double.self, capacity: 1) { $0.pointee }
+        let originInitialized = basePointer.advanced(by: WasmMapMetadataLayout.originInitializedOffset)
+            .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+
+        guard width > 0, height > 0, resolutionM > 0 else {
+            return nil
+        }
+
+        return WasmMapMetadataView(
+            width: Int(width),
+            height: Int(height),
+            resolutionM: resolutionM,
+            originXM: originXM,
+            originYM: originYM,
+            originInitialized: originInitialized != 0
+        )
+    }
+
     private func logMapImage(_ frame: WasmMapFrameView) {
         switch frame.layerId {
         case .composite:
@@ -667,6 +799,15 @@ private final class WasmRerunMapBridge {
             WebSocketManager.shared.publishMapFrame(timestamp: frame.timestamp, jpegData: jpegData)
         case .base, .odometry, .planning, .frontiers, .semantic:
             guard frame.channels >= 4 else { return }
+            if frame.layerId == .base,
+               let pngData = pngEncoder.encode(
+                rgbaPointer: frame.dataPointer,
+                byteCount: frame.dataCount,
+                width: frame.width,
+                height: frame.height
+               ) {
+                WasmManager.shared.updateBaseMapPreview(pngData: pngData)
+            }
             WebSocketManager.shared.publishMapLayerFrame(
                 timestamp: frame.timestamp,
                 layer: frame.layerId.websocketLayerName,
@@ -680,7 +821,175 @@ private final class WasmRerunMapBridge {
     }
 }
 
-private enum RerunMessage: Encodable {
+private func decodePlannerGridCells(
+    moduleInstance: OpaquePointer,
+    appPointer: UInt32,
+    count: Int32
+) -> [PlannerGridCell] {
+    guard appPointer > 0, count > 0 else {
+        return []
+    }
+    let safeCount = Int(count)
+    let totalByteCount = safeCount * WasmGridCoordLayout.totalByteCount
+    guard let nativePointer = wasm_runtime_addr_app_to_native(moduleInstance, UInt64(appPointer)) else {
+        return []
+    }
+    let gridPointer = nativePointer.assumingMemoryBound(to: UInt8.self)
+    guard wasm_runtime_validate_native_addr(moduleInstance, gridPointer, UInt64(totalByteCount)) else {
+        return []
+    }
+
+    var cells: [PlannerGridCell] = []
+    cells.reserveCapacity(safeCount)
+    for index in 0..<safeCount {
+        let cellBase = gridPointer.advanced(by: index * WasmGridCoordLayout.totalByteCount)
+        let x = cellBase.advanced(by: WasmGridCoordLayout.xOffset)
+            .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+        let y = cellBase.advanced(by: WasmGridCoordLayout.yOffset)
+            .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+        cells.append(PlannerGridCell(x: Int(x), y: Int(y)))
+    }
+    return cells
+}
+
+private func decodePlannerTelemetryMode(_ rawValue: Int32) -> PlannerTelemetryMode {
+    switch rawValue {
+    case 1:
+        return .directGoalDStar
+    case 2:
+        return .frontier
+    default:
+        return .none
+    }
+}
+
+private func decodePlannerTelemetrySnapshot(
+    execEnv: wasm_exec_env_t?,
+    payloadPointer: UnsafeMutableRawPointer?
+) -> PlannerTelemetrySnapshot? {
+    guard let execEnv, let payloadPointer else { return nil }
+    let basePointer = payloadPointer.assumingMemoryBound(to: UInt8.self)
+    guard let moduleInstance = wasm_runtime_get_module_inst(execEnv) else {
+        return nil
+    }
+
+    var nativeStart: UnsafeMutablePointer<UInt8>?
+    var nativeEnd: UnsafeMutablePointer<UInt8>?
+    guard wasm_runtime_get_native_addr_range(moduleInstance, basePointer, &nativeStart, &nativeEnd) else {
+        return nil
+    }
+
+    if let nativeEnd {
+        let baseAddress = UInt(bitPattern: basePointer)
+        let endAddress = UInt(bitPattern: nativeEnd)
+        if baseAddress + UInt(WasmPlannerTelemetryLayout.totalByteCount) > endAddress {
+            return nil
+        }
+    }
+
+    let sequence = basePointer.advanced(by: WasmPlannerTelemetryLayout.sequenceOffset)
+        .withMemoryRebound(to: UInt64.self, capacity: 1) { $0.pointee }
+    let sourceMapRevision = basePointer.advanced(by: WasmPlannerTelemetryLayout.sourceMapRevisionOffset)
+        .withMemoryRebound(to: UInt64.self, capacity: 1) { $0.pointee }
+    let goalRevision = basePointer.advanced(by: WasmPlannerTelemetryLayout.goalRevisionOffset)
+        .withMemoryRebound(to: UInt64.self, capacity: 1) { $0.pointee }
+    let timestamp = basePointer.advanced(by: WasmPlannerTelemetryLayout.timestampOffset)
+        .withMemoryRebound(to: Double.self, capacity: 1) { $0.pointee }
+    let plannerModeValue = basePointer.advanced(by: WasmPlannerTelemetryLayout.plannerModeOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let success = basePointer.advanced(by: WasmPlannerTelemetryLayout.successOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let goalEnabled = basePointer.advanced(by: WasmPlannerTelemetryLayout.goalEnabledOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let startCellValid = basePointer.advanced(by: WasmPlannerTelemetryLayout.startCellValidOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let startX = basePointer.advanced(by: WasmPlannerTelemetryLayout.startXOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let startY = basePointer.advanced(by: WasmPlannerTelemetryLayout.startYOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let goalX = basePointer.advanced(by: WasmPlannerTelemetryLayout.goalXOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let goalY = basePointer.advanced(by: WasmPlannerTelemetryLayout.goalYOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let selectedFrontierSeedEnabled = basePointer.advanced(by: WasmPlannerTelemetryLayout.selectedFrontierSeedEnabledOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let selectedFrontierSeedX = basePointer.advanced(by: WasmPlannerTelemetryLayout.selectedFrontierSeedXOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let selectedFrontierSeedY = basePointer.advanced(by: WasmPlannerTelemetryLayout.selectedFrontierSeedYOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let pathGridPtr = basePointer.advanced(by: WasmPlannerTelemetryLayout.pathGridPtrOffset)
+        .withMemoryRebound(to: UInt32.self, capacity: 1) { $0.pointee }
+    let pathGridCount = basePointer.advanced(by: WasmPlannerTelemetryLayout.pathGridCountOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let frontierCandidatesPtr = basePointer.advanced(by: WasmPlannerTelemetryLayout.frontierCandidatesPtrOffset)
+        .withMemoryRebound(to: UInt32.self, capacity: 1) { $0.pointee }
+    let frontierCandidatesCount = basePointer.advanced(by: WasmPlannerTelemetryLayout.frontierCandidatesCountOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let selectedFrontierClusterPtr = basePointer.advanced(by: WasmPlannerTelemetryLayout.selectedFrontierClusterPtrOffset)
+        .withMemoryRebound(to: UInt32.self, capacity: 1) { $0.pointee }
+    let selectedFrontierClusterCount = basePointer.advanced(by: WasmPlannerTelemetryLayout.selectedFrontierClusterCountOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let changedCellsPtr = basePointer.advanced(by: WasmPlannerTelemetryLayout.changedCellsPtrOffset)
+        .withMemoryRebound(to: UInt32.self, capacity: 1) { $0.pointee }
+    let changedCellsCount = basePointer.advanced(by: WasmPlannerTelemetryLayout.changedCellsCountOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let expandedCellsPtr = basePointer.advanced(by: WasmPlannerTelemetryLayout.expandedCellsPtrOffset)
+        .withMemoryRebound(to: UInt32.self, capacity: 1) { $0.pointee }
+    let expandedCellsCount = basePointer.advanced(by: WasmPlannerTelemetryLayout.expandedCellsCountOffset)
+        .withMemoryRebound(to: Int32.self, capacity: 1) { $0.pointee }
+    let messageLength = basePointer.advanced(by: WasmPlannerTelemetryLayout.messageLengthOffset)
+        .withMemoryRebound(to: UInt32.self, capacity: 1) { $0.pointee }
+
+    let messageCount = min(Int(messageLength), WasmPlannerTelemetryLayout.messageCapacity)
+    let messageData = Data(
+        bytes: basePointer.advanced(by: WasmPlannerTelemetryLayout.messageOffset),
+        count: messageCount
+    )
+    let message = String(data: messageData, encoding: .utf8) ?? ""
+
+    let startCell = startCellValid != 0 ? PlannerGridCell(x: Int(startX), y: Int(startY)) : nil
+    let goalCell = goalEnabled != 0 ? PlannerGridCell(x: Int(goalX), y: Int(goalY)) : nil
+    let selectedFrontierSeed = selectedFrontierSeedEnabled != 0
+        ? PlannerGridCell(x: Int(selectedFrontierSeedX), y: Int(selectedFrontierSeedY))
+        : nil
+
+    return PlannerTelemetrySnapshot(
+        sequence: sequence,
+        plannerMode: decodePlannerTelemetryMode(plannerModeValue),
+        sourceMapRevision: sourceMapRevision,
+        goalRevision: goalRevision,
+        timestamp: timestamp,
+        success: success != 0,
+        goalEnabled: goalEnabled != 0,
+        startCell: startCell,
+        goalCell: goalCell,
+        pathGrid: decodePlannerGridCells(moduleInstance: moduleInstance, appPointer: pathGridPtr, count: pathGridCount),
+        frontierCandidates: decodePlannerGridCells(
+            moduleInstance: moduleInstance,
+            appPointer: frontierCandidatesPtr,
+            count: frontierCandidatesCount
+        ),
+        selectedFrontierCluster: decodePlannerGridCells(
+            moduleInstance: moduleInstance,
+            appPointer: selectedFrontierClusterPtr,
+            count: selectedFrontierClusterCount
+        ),
+        selectedFrontierSeed: selectedFrontierSeed,
+        changedCells: decodePlannerGridCells(
+            moduleInstance: moduleInstance,
+            appPointer: changedCellsPtr,
+            count: changedCellsCount
+        ),
+        expandedCells: decodePlannerGridCells(
+            moduleInstance: moduleInstance,
+            appPointer: expandedCellsPtr,
+            count: expandedCellsCount
+        ),
+        message: message
+    )
+}
+
+private enum LogMessage: Encodable {
     case points(timestamp: Double, points: [Float], colors: [UInt8]?)
     case pose(timestamp: Double, translation: [Double], quaternion: [Double], source: String)
     case imu(timestamp: Double, accel: [Double], gyro: [Double], frameId: Int32)
@@ -730,7 +1039,7 @@ private enum RerunMessage: Encodable {
     }
 }
 
-private enum RerunBinaryPointsProtocol {
+private enum BinaryPointsProtocol {
     static let magic: [UInt8] = [0x52, 0x52, 0x42, 0x31]  // "RRB1"
     static let messageTypePoints: UInt8 = 1
     static let flagsOffset = 5
@@ -740,10 +1049,10 @@ private enum RerunBinaryPointsProtocol {
     static let hasColorsFlag: UInt8 = 1
 }
 
-final class RerunWebSocketClient {
-    static let shared = RerunWebSocketClient()
+final class WebSocketClient {
+    static let shared = WebSocketClient()
 
-    private static let serverURLDefaultsKey = "rerun_ws_server_url"
+    private static let serverURLDefaultsKey = "ws_server_url"
     static let defaultServerURLString = "ws://172.20.10.2:9877"
     private let queue = DispatchQueue(label: "com.roamr.rerun.ws")
     private let session = URLSession(configuration: .default)
@@ -764,7 +1073,7 @@ final class RerunWebSocketClient {
     private var perfBinarySendTotalMs = 0.0
     private var perfPendingHighWatermark = 0
 
-    var serverURLString = RerunWebSocketClient.defaultServerURLString
+    var serverURLString = WebSocketClient.defaultServerURLString
 
     private init() {
         if let stored = UserDefaults.standard.string(forKey: Self.serverURLDefaultsKey),
@@ -858,7 +1167,7 @@ final class RerunWebSocketClient {
         enqueue(.mapFrame(timestamp: timestamp, jpegBase64: jpegData.base64EncodedString()))
     }
 
-    private func enqueue(_ message: RerunMessage) {
+    private func enqueue(_ message: LogMessage) {
         queue.async { [weak self] in
             guard let self = self else { return }
             if self.shouldDrop(message) {
@@ -893,11 +1202,11 @@ final class RerunWebSocketClient {
         let normalized = normalizeURLString(serverURLString)
         serverURLString = normalized
         guard let url = URL(string: normalized) else {
-            print("Invalid rerun websocket URL: \(serverURLString)")
+            print("Invalid websocket URL: \(serverURLString)")
             return
         }
 
-        print("Rerun websocket connecting to: \(serverURLString)")
+        print("Websocket connecting to: \(serverURLString)")
         let task = session.webSocketTask(with: url)
         self.task = task
         task.resume()
@@ -905,7 +1214,7 @@ final class RerunWebSocketClient {
         listen()
     }
 
-    private func send(_ message: RerunMessage) {
+    private func send(_ message: LogMessage) {
         guard let task = task else { return }
         guard let payload = try? encoder.encode(message),
               let payloadString = String(data: payload, encoding: .utf8) else {
@@ -920,7 +1229,7 @@ final class RerunWebSocketClient {
                 self?.decrementPending()
             }
             if let error = error {
-                print("Rerun websocket send error: \(error)")
+                print("Websocket send error: \(error)")
                 self?.markDisconnected()
             }
         }
@@ -945,7 +1254,7 @@ final class RerunWebSocketClient {
                 self?.maybeReportBinaryPerf()
             }
             if let error = error {
-                print("Rerun websocket send error: \(error)")
+                print("Websocket send error: \(error)")
                 self?.markDisconnected()
             }
         }
@@ -958,7 +1267,7 @@ final class RerunWebSocketClient {
             case .success:
                 self.listen()
             case .failure(let error):
-                print("Rerun websocket receive error: \(error)")
+                print("Websocket receive error: \(error)")
                 self.markDisconnected()
             }
         }
@@ -975,7 +1284,7 @@ final class RerunWebSocketClient {
         }
     }
 
-    private func shouldDrop(_ message: RerunMessage) -> Bool {
+    private func shouldDrop(_ message: LogMessage) -> Bool {
         if pendingCount < maxPending {
             return false
         }
@@ -1008,22 +1317,22 @@ final class RerunWebSocketClient {
         let pointsByteCount = packedPointCount * MemoryLayout<Float32>.size
         let hasColors = (colors?.count ?? 0) >= packedPointCount
         let colorsByteCount = hasColors ? packedPointCount : 0
-        let totalByteCount = RerunBinaryPointsProtocol.headerSize + pointsByteCount + colorsByteCount
+        let totalByteCount = BinaryPointsProtocol.headerSize + pointsByteCount + colorsByteCount
 
         var payload = Data(count: totalByteCount)
         payload.withUnsafeMutableBytes { rawBuffer in
             guard let baseAddress = rawBuffer.baseAddress else { return }
             let rawPointer = baseAddress.assumingMemoryBound(to: UInt8.self)
 
-            RerunBinaryPointsProtocol.magic.withUnsafeBytes { magicBytes in
+            BinaryPointsProtocol.magic.withUnsafeBytes { magicBytes in
                 if let magicBase = magicBytes.baseAddress {
-                    memcpy(rawPointer, magicBase, RerunBinaryPointsProtocol.magic.count)
+                    memcpy(rawPointer, magicBase, BinaryPointsProtocol.magic.count)
                 }
             }
 
-            rawPointer[4] = RerunBinaryPointsProtocol.messageTypePoints
-            rawPointer[RerunBinaryPointsProtocol.flagsOffset] = hasColors
-                ? RerunBinaryPointsProtocol.hasColorsFlag
+            rawPointer[4] = BinaryPointsProtocol.messageTypePoints
+            rawPointer[BinaryPointsProtocol.flagsOffset] = hasColors
+                ? BinaryPointsProtocol.hasColorsFlag
                 : 0
             var reserved: UInt16 = 0
             withUnsafeBytes(of: &reserved) { bytes in
@@ -1035,7 +1344,7 @@ final class RerunWebSocketClient {
             withUnsafeBytes(of: &timestampBits) { bytes in
                 if let src = bytes.baseAddress {
                     memcpy(
-                        rawPointer.advanced(by: RerunBinaryPointsProtocol.timestampOffset),
+                        rawPointer.advanced(by: BinaryPointsProtocol.timestampOffset),
                         src,
                         MemoryLayout<UInt64>.size
                     )
@@ -1045,7 +1354,7 @@ final class RerunWebSocketClient {
             withUnsafeBytes(of: &pointCountLE) { bytes in
                 if let src = bytes.baseAddress {
                     memcpy(
-                        rawPointer.advanced(by: RerunBinaryPointsProtocol.pointCountOffset),
+                        rawPointer.advanced(by: BinaryPointsProtocol.pointCountOffset),
                         src,
                         MemoryLayout<UInt32>.size
                     )
@@ -1055,7 +1364,7 @@ final class RerunWebSocketClient {
             points.withUnsafeBytes { pointBytes in
                 if let pointsBase = pointBytes.baseAddress {
                     memcpy(
-                        rawPointer.advanced(by: RerunBinaryPointsProtocol.headerSize),
+                        rawPointer.advanced(by: BinaryPointsProtocol.headerSize),
                         pointsBase,
                         pointsByteCount
                     )
@@ -1066,7 +1375,7 @@ final class RerunWebSocketClient {
                 colors.withUnsafeBytes { colorBytes in
                     if let colorsBase = colorBytes.baseAddress {
                         memcpy(
-                            rawPointer.advanced(by: RerunBinaryPointsProtocol.headerSize + pointsByteCount),
+                            rawPointer.advanced(by: BinaryPointsProtocol.headerSize + pointsByteCount),
                             colorsBase,
                             colorsByteCount
                         )
@@ -1091,22 +1400,22 @@ final class RerunWebSocketClient {
         let pointsByteCount = packedPointCount * MemoryLayout<Float32>.size
         let hasColors = colorsPointer != nil && colorsCount >= packedPointCount
         let colorsByteCount = hasColors ? packedPointCount : 0
-        let totalByteCount = RerunBinaryPointsProtocol.headerSize + pointsByteCount + colorsByteCount
+        let totalByteCount = BinaryPointsProtocol.headerSize + pointsByteCount + colorsByteCount
 
         var payload = Data(count: totalByteCount)
         payload.withUnsafeMutableBytes { rawBuffer in
             guard let baseAddress = rawBuffer.baseAddress else { return }
             let rawPointer = baseAddress.assumingMemoryBound(to: UInt8.self)
 
-            RerunBinaryPointsProtocol.magic.withUnsafeBytes { magicBytes in
+            BinaryPointsProtocol.magic.withUnsafeBytes { magicBytes in
                 if let magicBase = magicBytes.baseAddress {
-                    memcpy(rawPointer, magicBase, RerunBinaryPointsProtocol.magic.count)
+                    memcpy(rawPointer, magicBase, BinaryPointsProtocol.magic.count)
                 }
             }
 
-            rawPointer[4] = RerunBinaryPointsProtocol.messageTypePoints
-            rawPointer[RerunBinaryPointsProtocol.flagsOffset] = hasColors
-                ? RerunBinaryPointsProtocol.hasColorsFlag
+            rawPointer[4] = BinaryPointsProtocol.messageTypePoints
+            rawPointer[BinaryPointsProtocol.flagsOffset] = hasColors
+                ? BinaryPointsProtocol.hasColorsFlag
                 : 0
             var reserved: UInt16 = 0
             withUnsafeBytes(of: &reserved) { bytes in
@@ -1118,7 +1427,7 @@ final class RerunWebSocketClient {
             withUnsafeBytes(of: &timestampBits) { bytes in
                 if let src = bytes.baseAddress {
                     memcpy(
-                        rawPointer.advanced(by: RerunBinaryPointsProtocol.timestampOffset),
+                        rawPointer.advanced(by: BinaryPointsProtocol.timestampOffset),
                         src,
                         MemoryLayout<UInt64>.size
                     )
@@ -1128,7 +1437,7 @@ final class RerunWebSocketClient {
             withUnsafeBytes(of: &pointCountLE) { bytes in
                 if let src = bytes.baseAddress {
                     memcpy(
-                        rawPointer.advanced(by: RerunBinaryPointsProtocol.pointCountOffset),
+                        rawPointer.advanced(by: BinaryPointsProtocol.pointCountOffset),
                         src,
                         MemoryLayout<UInt32>.size
                     )
@@ -1136,14 +1445,14 @@ final class RerunWebSocketClient {
             }
 
             memcpy(
-                rawPointer.advanced(by: RerunBinaryPointsProtocol.headerSize),
+                rawPointer.advanced(by: BinaryPointsProtocol.headerSize),
                 pointsPointer,
                 pointsByteCount
             )
 
             if hasColors, let colorsPointer {
                 memcpy(
-                    rawPointer.advanced(by: RerunBinaryPointsProtocol.headerSize + pointsByteCount),
+                    rawPointer.advanced(by: BinaryPointsProtocol.headerSize + pointsByteCount),
                     colorsPointer,
                     colorsByteCount
                 )
@@ -1167,7 +1476,7 @@ final class RerunWebSocketClient {
         }
         print(
             String(
-                format: "[rerun][ios][ws] enqueue=%.1f/s dropped=%d tx=%.2fMB/s send=%.3fms pending_hw=%d",
+                format: "[ios][ws] enqueue=%.1f/s dropped=%d tx=%.2fMB/s send=%.3fms pending_hw=%d",
                 enqueueRate,
                 perfBinaryDropped,
                 txMBps,
@@ -1186,7 +1495,7 @@ final class RerunWebSocketClient {
     }
 }
 
-extension RerunWebSocketClient {
+extension WebSocketClient {
     func updateServerURL(_ url: String) {
         queue.async {
             let normalized = self.normalizeURLString(url)
@@ -1204,7 +1513,7 @@ extension RerunWebSocketClient {
     }
 }
 
-private extension RerunWebSocketClient {
+private extension WebSocketClient {
     func normalizeURLString(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return trimmed }
@@ -1221,25 +1530,78 @@ private extension RerunWebSocketClient {
     }
 }
 
-func rerun_log_lidar_frame_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
-    WasmRerunTelemetryBridge.shared.handleWasmFrame(execEnv: exec_env, payloadPointer: ptr)
+func host_log_lidar_frame_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+    WasmTelemetryBridge.shared.handleWasmFrame(execEnv: exec_env, payloadPointer: ptr)
 }
 
-func rerun_log_map_frame_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
-    WasmRerunMapBridge.shared.handleWasmMapFrame(execEnv: exec_env, payloadPointer: ptr)
+func host_log_map_frame_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+    WasmMapBridge.shared.handleWasmMapFrame(execEnv: exec_env, payloadPointer: ptr)
 }
 
-func rerun_log_imu_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+func host_log_map_metadata_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+    WasmMapBridge.shared.handleWasmMapMetadata(execEnv: exec_env, payloadPointer: ptr)
+}
+
+func host_log_imu_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     _ = exec_env
     _ = ptr
 }
 
-func rerun_log_pose_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+func host_log_pose_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+    guard let exec_env, let ptr else { return }
+    let basePointer = ptr.assumingMemoryBound(to: UInt8.self)
+    guard let moduleInstance = wasm_runtime_get_module_inst(exec_env) else {
+        return
+    }
+
+    var nativeStart: UnsafeMutablePointer<UInt8>?
+    var nativeEnd: UnsafeMutablePointer<UInt8>?
+    guard wasm_runtime_get_native_addr_range(moduleInstance, basePointer, &nativeStart, &nativeEnd) else {
+        return
+    }
+
+    if let nativeEnd = nativeEnd {
+        let baseAddress = UInt(bitPattern: basePointer)
+        let endAddress = UInt(bitPattern: nativeEnd)
+        if baseAddress + UInt(WasmPoseLayout.totalByteCount) > endAddress {
+            return
+        }
+    }
+
+    let timestamp = basePointer.advanced(by: WasmPoseLayout.timestampOffset)
+        .withMemoryRebound(to: Double.self, capacity: 1) { $0.pointee }
+    let translationPointer = basePointer.advanced(by: WasmPoseLayout.translationOffset)
+        .withMemoryRebound(to: Double.self, capacity: WasmPoseLayout.translationCount) { $0 }
+    let quaternionPointer = basePointer.advanced(by: WasmPoseLayout.quaternionOffset)
+        .withMemoryRebound(to: Double.self, capacity: WasmPoseLayout.quaternionCount) { $0 }
+
+    let translation = [
+        translationPointer[0],
+        translationPointer[1],
+        translationPointer[2]
+    ]
+    let quaternion = [
+        quaternionPointer[0],
+        quaternionPointer[1],
+        quaternionPointer[2],
+        quaternionPointer[3]
+    ]
+    WebSocketManager.shared.publishPose(
+        timestamp: timestamp,
+        translation: translation,
+        quaternion: quaternion,
+        source: "fused"
+    )
+}
+
+func host_log_pose_wheel_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
     _ = exec_env
     _ = ptr
 }
 
-func rerun_log_pose_wheel_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
-    _ = exec_env
-    _ = ptr
+func host_log_planner_telemetry_impl(exec_env: wasm_exec_env_t?, ptr: UnsafeMutableRawPointer?) {
+    guard let snapshot = decodePlannerTelemetrySnapshot(execEnv: exec_env, payloadPointer: ptr) else {
+        return
+    }
+    WebSocketManager.shared.publishPlannerTelemetry(snapshot)
 }

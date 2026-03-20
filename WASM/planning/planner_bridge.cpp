@@ -4,6 +4,8 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstring>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <vector>
@@ -20,7 +22,9 @@ constexpr int32_t kRenderWidthDefault = 256;   // keep in sync with mapping/map_
 constexpr int32_t kRenderHeightDefault = 256;  // keep in sync with mapping/map_update.cpp
 constexpr int32_t kMaxPlannedPathCells = 4096; // keep in sync with mapping/map.cpp
 constexpr bool kEnableAutoFrontierExploration = true;
-constexpr double kAutoFrontierReplanIntervalSec = 0.75;
+constexpr double kVisitedFrontierRadiusM = 0.20;
+constexpr int32_t kFrontierMergeDistanceCells = 3;
+constexpr size_t kMaxFrontierPlanAttempts = 8;
 
 struct PlannerGoalPixel {
   bool active = false;
@@ -37,11 +41,59 @@ std::vector<GridCoord> g_persistent_frontier_goals;
 std::mutex g_overlay_cache_mutex;
 PlanningOverlay g_cached_overlay;
 std::atomic<uint64_t> g_cached_overlay_revision{0};
+std::mutex g_inflated_costmap_cache_mutex;
+struct InflatedCostmapCacheEntry {
+  uint64_t map_revision = 0;
+  PlannerConfig config{};
+  std::shared_ptr<const mapping::InflatedCostmap> costmap;
+};
+InflatedCostmapCacheEntry g_inflated_costmap_cache;
+std::atomic<uint64_t> g_planner_telemetry_sequence{0};
 std::mutex g_planned_path_mutex;
 std::vector<core::Vector3d> g_planned_path_world;
 uint64_t g_planned_path_revision = 0;
-std::chrono::steady_clock::time_point g_last_auto_frontier_plan_time =
-    std::chrono::steady_clock::time_point::min();
+struct FrontierProfileWindow {
+  std::chrono::steady_clock::time_point window_start =
+      std::chrono::steady_clock::time_point::min();
+  int32_t samples = 0;
+  double total_ms_sum = 0.0;
+  double total_ms_max = 0.0;
+  double inflate_detection_ms_sum = 0.0;
+  double inflate_detection_ms_max = 0.0;
+  double inflate_planner_ms_sum = 0.0;
+  double inflate_planner_ms_max = 0.0;
+  double reachable_ms_sum = 0.0;
+  double reachable_ms_max = 0.0;
+  double detect_frontiers_ms_sum = 0.0;
+  double detect_frontiers_ms_max = 0.0;
+  double cluster_ms_sum = 0.0;
+  double cluster_ms_max = 0.0;
+  double centroid_ms_sum = 0.0;
+  double centroid_ms_max = 0.0;
+  double approach_ms_sum = 0.0;
+  double approach_ms_max = 0.0;
+  double path_ms_sum = 0.0;
+  double path_ms_max = 0.0;
+  double standoff_ms_sum = 0.0;
+  double standoff_ms_max = 0.0;
+  double publish_ms_sum = 0.0;
+  double publish_ms_max = 0.0;
+  double frontier_cell_count_sum = 0.0;
+  double frontier_cell_count_max = 0.0;
+  double centroid_count_sum = 0.0;
+  double centroid_count_max = 0.0;
+  double cluster_count_sum = 0.0;
+  double cluster_count_max = 0.0;
+  double attempted_window_size_m_sum = 0.0;
+  double attempted_window_size_m_max = 0.0;
+  double adaptive_attempts_sum = 0.0;
+  double adaptive_attempts_max = 0.0;
+  double full_map_fallback_sum = 0.0;
+  double full_map_fallback_max = 0.0;
+};
+
+std::mutex g_frontier_profile_mutex;
+FrontierProfileWindow g_frontier_profile_window;
 
 PlannerConfig build_planner_config() {
   return mapping::default_navigation_costmap_config();
@@ -59,7 +111,7 @@ FrontierExplorerConfig build_frontier_config() {
   cfg.snap_goal_to_free = true;
   cfg.snap_search_radius_cells = 10;
   cfg.min_cluster_size = 4;
-  cfg.goal_standoff_m = 0.18;
+  cfg.goal_standoff_m = 0.12;
   cfg.min_standoff_path_progress_m = 0.10;
   return cfg;
 }
@@ -102,6 +154,148 @@ inline int32_t clampi(int32_t v, int32_t lo, int32_t hi) {
     return hi;
   }
   return v;
+}
+
+int32_t chebyshev_cell_distance(const GridCoord& a, const GridCoord& b) {
+  return std::max(std::abs(a.x - b.x), std::abs(a.y - b.y));
+}
+
+bool cells_within_distance(
+    const GridCoord& a,
+    const GridCoord& b,
+    int32_t max_distance_cells) {
+  return chebyshev_cell_distance(a, b) <= max_distance_cells;
+}
+
+bool frontier_goal_recently_visited(
+    const GridCoord& start_cell,
+    const GridCoord& goal_cell,
+    int32_t visited_radius_cells) {
+  return cells_within_distance(start_cell, goal_cell, visited_radius_cells);
+}
+
+bool frontier_goal_set_contains_near(
+    const std::vector<GridCoord>& goals,
+    const GridCoord& candidate,
+    int32_t merge_distance_cells) {
+  for (const GridCoord& goal : goals) {
+    if (cells_within_distance(goal, candidate, merge_distance_cells)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool same_planner_config(
+    const PlannerConfig& a,
+    const PlannerConfig& b);
+
+std::vector<GridCoord> copy_persistent_frontier_goals() {
+  std::lock_guard<std::mutex> lk(g_frontier_cache_mutex);
+  return g_persistent_frontier_goals;
+}
+
+FrontierPlanResult plan_to_persistent_frontier_goals(
+    const GridMap2D& planner_map,
+    const GridCoord& start_cell,
+    const core::Vector3d& start_world,
+    const FrontierExplorerConfig& frontier_cfg,
+    DStarLitePlanner* planner,
+    const std::vector<GridCoord>& persistent_goals) {
+  FrontierPlanResult result;
+  result.frontier_cells = persistent_goals;
+  result.frontier_cell_count = static_cast<int32_t>(persistent_goals.size());
+  result.cluster_count = static_cast<int32_t>(persistent_goals.size());
+  if (!planner_map.valid() || !planner || persistent_goals.empty()) {
+    result.message = "no persistent frontier goals";
+    return result;
+  }
+
+  const PlannerConfig planner_cfg = planner_config_from_frontier_config(frontier_cfg);
+  const std::vector<int8_t> inflated_occupancy = inflate_obstacles(planner_map, planner_cfg);
+  std::vector<GridCoord> ranked_goals = persistent_goals;
+  std::sort(
+      ranked_goals.begin(),
+      ranked_goals.end(),
+      [&](const GridCoord& a, const GridCoord& b) {
+        const int32_t da = chebyshev_cell_distance(start_cell, a);
+        const int32_t db = chebyshev_cell_distance(start_cell, b);
+        if (da != db) {
+          return da < db;
+        }
+        if (a.x != b.x) {
+          return a.x < b.x;
+        }
+        return a.y < b.y;
+      });
+
+  const size_t attempt_count = std::min(ranked_goals.size(), kMaxFrontierPlanAttempts);
+  for (size_t i = 0; i < attempt_count; ++i) {
+    GridCoord goal_cell = ranked_goals[i];
+    if (!planner_map.in_bounds(goal_cell.x, goal_cell.y)) {
+      continue;
+    }
+    if (is_cell_blocked(
+            planner_map, planner_cfg, goal_cell.x, goal_cell.y, &inflated_occupancy) &&
+        (!planner_cfg.snap_goal_to_free ||
+         !find_nearest_free_cell(
+             planner_map,
+             planner_cfg,
+             inflated_occupancy,
+             goal_cell,
+             planner_cfg.snap_search_radius_cells,
+             &goal_cell))) {
+      continue;
+    }
+
+    const PlanResult planned = planner->plan_to_grid(
+        planner_map,
+        inflated_occupancy,
+        start_cell,
+        goal_cell);
+    if (!planned.success || planned.path_grid.empty() || planned.path_world.empty()) {
+      continue;
+    }
+
+    result.success = true;
+    result.message = "ok";
+    result.goal_cell = planned.path_grid.back();
+    result.selected_seed = ranked_goals[i];
+    result.path_grid = planned.path_grid;
+    result.path_world = planned.path_world;
+    result.selected_cluster_cells = {ranked_goals[i]};
+    result.selected_cluster_size = 1;
+    result.selected_path_length_m = path_length_m(planned.path_world);
+    result.selected_heading_delta_rad =
+        std::abs(core::normalize_angle(
+            std::atan2(
+                planned.path_world.back().y - start_world.y,
+                planned.path_world.back().x - start_world.x) -
+            start_world.z));
+    return result;
+  }
+
+  result.message = "no reachable persistent frontier goal";
+  return result;
+}
+
+PlanResult plan_with_dstar_cached_costmap(
+    const mapping::InflatedCostmap& costmap,
+    const GridCoord& start_cell,
+    const GridCoord& goal_cell) {
+  if (!costmap.valid()) {
+    PlanResult result;
+    result.message = "invalid inflated costmap";
+    return result;
+  }
+  if (!same_planner_config(g_planner.config(), costmap.config)) {
+    g_planner.set_config(costmap.config);
+  }
+  return g_planner.plan_to_grid(
+      costmap.grid,
+      costmap.inflated_occupancy,
+      start_cell,
+      goal_cell);
 }
 
 bool is_path_segment_traversable(
@@ -257,6 +451,158 @@ bool same_path_world(
   return true;
 }
 
+bool same_planner_config(
+    const PlannerConfig& a,
+    const PlannerConfig& b) {
+  return a.occupied_threshold == b.occupied_threshold &&
+         a.treat_unknown_as_occupied == b.treat_unknown_as_occupied &&
+         a.allow_diagonal == b.allow_diagonal &&
+         a.prevent_corner_cutting == b.prevent_corner_cutting &&
+         std::abs(a.inflation_radius_m - b.inflation_radius_m) <= 1e-9 &&
+         a.simplify_path == b.simplify_path &&
+         a.snap_start_to_free == b.snap_start_to_free &&
+         a.snap_goal_to_free == b.snap_goal_to_free &&
+         a.snap_search_radius_cells == b.snap_search_radius_cells &&
+         a.max_expanded_nodes == b.max_expanded_nodes;
+}
+
+std::shared_ptr<const mapping::InflatedCostmap> get_inflated_costmap_cached(
+    const mapping::MapSnapshot& snapshot,
+    const PlannerConfig& cfg) {
+  if (!snapshot.valid()) {
+    return nullptr;
+  }
+  {
+    std::lock_guard<std::mutex> lk(g_inflated_costmap_cache_mutex);
+    if (g_inflated_costmap_cache.costmap &&
+        g_inflated_costmap_cache.map_revision == snapshot.map_revision &&
+        same_planner_config(g_inflated_costmap_cache.config, cfg)) {
+      return g_inflated_costmap_cache.costmap;
+    }
+  }
+
+  auto rebuilt = std::make_shared<mapping::InflatedCostmap>();
+  if (!mapping::build_inflated_costmap(snapshot, cfg, rebuilt.get())) {
+    return nullptr;
+  }
+
+  std::lock_guard<std::mutex> lk(g_inflated_costmap_cache_mutex);
+  g_inflated_costmap_cache.map_revision = snapshot.map_revision;
+  g_inflated_costmap_cache.config = cfg;
+  g_inflated_costmap_cache.costmap = rebuilt;
+  return rebuilt;
+}
+
+void record_frontier_profile(
+    const FrontierPlanResult& planned,
+    double publish_ms) {
+  constexpr double kFrontierProfileWindowSec = 3.0;
+  std::lock_guard<std::mutex> lk(g_frontier_profile_mutex);
+  FrontierProfileWindow& window = g_frontier_profile_window;
+  const auto now = std::chrono::steady_clock::now();
+  if (window.window_start == std::chrono::steady_clock::time_point::min()) {
+    window.window_start = now;
+  }
+
+  auto accumulate = [](double value, double* sum, double* max_value) {
+    *sum += value;
+    if (value > *max_value) {
+      *max_value = value;
+    }
+  };
+
+  ++window.samples;
+  accumulate(planned.perf.total_ms, &window.total_ms_sum, &window.total_ms_max);
+  accumulate(
+      planned.perf.inflate_detection_ms,
+      &window.inflate_detection_ms_sum,
+      &window.inflate_detection_ms_max);
+  accumulate(
+      planned.perf.inflate_planner_ms,
+      &window.inflate_planner_ms_sum,
+      &window.inflate_planner_ms_max);
+  accumulate(planned.perf.reachable_ms, &window.reachable_ms_sum, &window.reachable_ms_max);
+  accumulate(
+      planned.perf.detect_frontiers_ms,
+      &window.detect_frontiers_ms_sum,
+      &window.detect_frontiers_ms_max);
+  accumulate(planned.perf.cluster_ms, &window.cluster_ms_sum, &window.cluster_ms_max);
+  accumulate(planned.perf.centroid_ms, &window.centroid_ms_sum, &window.centroid_ms_max);
+  accumulate(planned.perf.approach_ms, &window.approach_ms_sum, &window.approach_ms_max);
+  accumulate(planned.perf.path_ms, &window.path_ms_sum, &window.path_ms_max);
+  accumulate(planned.perf.standoff_ms, &window.standoff_ms_sum, &window.standoff_ms_max);
+  accumulate(publish_ms, &window.publish_ms_sum, &window.publish_ms_max);
+  accumulate(
+      static_cast<double>(planned.frontier_cell_count),
+      &window.frontier_cell_count_sum,
+      &window.frontier_cell_count_max);
+  accumulate(
+      static_cast<double>(planned.frontier_cells.size()),
+      &window.centroid_count_sum,
+      &window.centroid_count_max);
+  accumulate(
+      static_cast<double>(planned.cluster_count),
+      &window.cluster_count_sum,
+      &window.cluster_count_max);
+  accumulate(
+      planned.perf.attempted_window_size_m,
+      &window.attempted_window_size_m_sum,
+      &window.attempted_window_size_m_max);
+  accumulate(
+      static_cast<double>(planned.perf.adaptive_attempts),
+      &window.adaptive_attempts_sum,
+      &window.adaptive_attempts_max);
+  accumulate(
+      static_cast<double>(planned.perf.used_full_map_fallback),
+      &window.full_map_fallback_sum,
+      &window.full_map_fallback_max);
+
+  const double window_sec = std::chrono::duration<double>(now - window.window_start).count();
+  if (window_sec < kFrontierProfileWindowSec) {
+    return;
+  }
+
+  const double sample_count = std::max(1, window.samples);
+  std::ostringstream log;
+  log << "[planning][frontier_profile]"
+      << " window=" << window_sec << "s"
+      << " samples=" << window.samples
+      << " total_ms=" << (window.total_ms_sum / sample_count) << "/" << window.total_ms_max
+      << " inflate_detect_ms=" << (window.inflate_detection_ms_sum / sample_count) << "/"
+      << window.inflate_detection_ms_max
+      << " inflate_plan_ms=" << (window.inflate_planner_ms_sum / sample_count) << "/"
+      << window.inflate_planner_ms_max
+      << " reachable_ms=" << (window.reachable_ms_sum / sample_count) << "/"
+      << window.reachable_ms_max
+      << " detect_ms=" << (window.detect_frontiers_ms_sum / sample_count) << "/"
+      << window.detect_frontiers_ms_max
+      << " cluster_ms=" << (window.cluster_ms_sum / sample_count) << "/"
+      << window.cluster_ms_max
+      << " centroid_ms=" << (window.centroid_ms_sum / sample_count) << "/"
+      << window.centroid_ms_max
+      << " approach_ms=" << (window.approach_ms_sum / sample_count) << "/"
+      << window.approach_ms_max
+      << " path_ms=" << (window.path_ms_sum / sample_count) << "/" << window.path_ms_max
+      << " standoff_ms=" << (window.standoff_ms_sum / sample_count) << "/"
+      << window.standoff_ms_max
+      << " publish_ms=" << (window.publish_ms_sum / sample_count) << "/" << window.publish_ms_max
+      << " frontier_cells=" << (window.frontier_cell_count_sum / sample_count) << "/"
+      << window.frontier_cell_count_max
+      << " centroids=" << (window.centroid_count_sum / sample_count) << "/"
+      << window.centroid_count_max
+      << " clusters=" << (window.cluster_count_sum / sample_count) << "/"
+      << window.cluster_count_max
+      << " window_m=" << (window.attempted_window_size_m_sum / sample_count) << "/"
+      << window.attempted_window_size_m_max
+      << " attempts=" << (window.adaptive_attempts_sum / sample_count) << "/"
+      << window.adaptive_attempts_max
+      << " full_map=" << (window.full_map_fallback_sum / sample_count) << "/"
+      << window.full_map_fallback_max;
+  // wasm_log_line(log.str());
+  window = FrontierProfileWindow{};
+  window.window_start = now;
+}
+
 bool same_overlay_content(
     const PlanningOverlay& a,
     const PlanningOverlay& b) {
@@ -293,6 +639,96 @@ PlanningOverlay copy_cached_overlay() {
   return g_cached_overlay;
 }
 
+uint32_t vector_app_ptr(const std::vector<GridCoord>& cells) {
+  if (cells.empty()) {
+    return 0;
+  }
+  return static_cast<uint32_t>(
+      reinterpret_cast<uintptr_t>(cells.data()));
+}
+
+int32_t vector_count(const std::vector<GridCoord>& cells) {
+  return static_cast<int32_t>(cells.size());
+}
+
+void fill_message(const std::string& message, PlannerTelemetryFrame* frame) {
+  if (!frame) {
+    return;
+  }
+  frame->message_length = static_cast<uint32_t>(
+      std::min<size_t>(message.size(), sizeof(frame->message) - 1));
+  if (frame->message_length > 0) {
+    std::memcpy(frame->message, message.data(), frame->message_length);
+  }
+  frame->message[frame->message_length] = '\0';
+}
+
+void publish_direct_planner_telemetry(
+    uint64_t map_revision,
+    uint64_t goal_revision,
+    double timestamp,
+    const GridCoord& start_cell,
+    bool goal_enabled,
+    const GridCoord& goal_cell,
+    const PlanResult& planned) {
+  PlannerTelemetryFrame frame{};
+  frame.sequence = g_planner_telemetry_sequence.fetch_add(1, std::memory_order_acq_rel) + 1;
+  frame.source_map_revision = map_revision;
+  frame.goal_revision = goal_revision;
+  frame.timestamp = timestamp;
+  frame.planner_mode = static_cast<int32_t>(PlannerTelemetryMode::DirectGoalDStar);
+  frame.success = planned.success ? 1 : 0;
+  frame.goal_enabled = goal_enabled ? 1 : 0;
+  frame.start_cell_valid = 1;
+  frame.start_x = start_cell.x;
+  frame.start_y = start_cell.y;
+  frame.goal_x = goal_cell.x;
+  frame.goal_y = goal_cell.y;
+  frame.path_grid_ptr = vector_app_ptr(planned.path_grid);
+  frame.path_grid_count = vector_count(planned.path_grid);
+  frame.changed_cells_ptr = vector_app_ptr(planned.changed_cells);
+  frame.changed_cells_count = vector_count(planned.changed_cells);
+  frame.expanded_cells_ptr = vector_app_ptr(planned.expanded_cells);
+  frame.expanded_cells_count = vector_count(planned.expanded_cells);
+  fill_message(planned.message, &frame);
+  host_log_planner_telemetry(&frame);
+}
+
+void publish_frontier_planner_telemetry(
+    uint64_t map_revision,
+    uint64_t goal_revision,
+    double timestamp,
+    const GridCoord& start_cell,
+    const FrontierPlanResult& planned) {
+  PlannerTelemetryFrame frame{};
+  frame.sequence = g_planner_telemetry_sequence.fetch_add(1, std::memory_order_acq_rel) + 1;
+  frame.source_map_revision = map_revision;
+  frame.goal_revision = goal_revision;
+  frame.timestamp = timestamp;
+  frame.planner_mode = static_cast<int32_t>(PlannerTelemetryMode::Frontier);
+  frame.success = planned.success ? 1 : 0;
+  frame.goal_enabled = (planned.success && !planned.path_grid.empty()) ? 1 : 0;
+  frame.start_cell_valid = 1;
+  frame.start_x = start_cell.x;
+  frame.start_y = start_cell.y;
+  frame.goal_x = planned.goal_cell.x;
+  frame.goal_y = planned.goal_cell.y;
+  frame.selected_frontier_seed_enabled =
+      (planned.success || !planned.selected_cluster_cells.empty()) ? 1 : 0;
+  frame.selected_frontier_seed_x = planned.selected_seed.x;
+  frame.selected_frontier_seed_y = planned.selected_seed.y;
+  frame.path_grid_ptr = vector_app_ptr(planned.path_grid);
+  frame.path_grid_count = vector_count(planned.path_grid);
+  frame.frontier_candidates_ptr = vector_app_ptr(planned.frontier_cells);
+  frame.frontier_candidates_count = vector_count(planned.frontier_cells);
+  frame.selected_frontier_cluster_ptr =
+      vector_app_ptr(planned.selected_cluster_cells);
+  frame.selected_frontier_cluster_count =
+      vector_count(planned.selected_cluster_cells);
+  fill_message(planned.message, &frame);
+  host_log_planner_telemetry(&frame);
+}
+
 PlanningOverlay overlay_from_plan_result(
     uint64_t map_revision,
     const PlanResult& planned) {
@@ -319,6 +755,7 @@ PlanningOverlay overlay_from_plan_result(
 
 PlanningOverlay overlay_from_frontier_result(
     uint64_t map_revision,
+    const GridCoord& start_cell,
     const FrontierPlanResult& planned) {
   PlanningOverlay overlay;
   overlay.source_map_revision = map_revision;
@@ -400,14 +837,15 @@ bool is_overlay_path_valid(
     return false;
   }
   const PlannerConfig cfg = build_planner_config();
-  mapping::InflatedCostmap costmap;
-  if (!mapping::build_inflated_costmap(snapshot, cfg, &costmap)) {
+  const std::shared_ptr<const mapping::InflatedCostmap> costmap =
+      get_inflated_costmap_cached(snapshot, cfg);
+  if (!costmap || !costmap->valid()) {
     return false;
   }
   return is_path_grid_traversable(
-      costmap.grid,
-      costmap.config,
-      costmap.inflated_occupancy,
+      costmap->grid,
+      costmap->config,
+      costmap->inflated_occupancy,
       overlay.path_grid);
 }
 
@@ -421,36 +859,37 @@ bool does_new_occupancy_intersect_overlay_path(
     return false;
   }
   const PlannerConfig cfg = build_planner_config();
-  mapping::InflatedCostmap costmap;
-  if (!mapping::build_inflated_costmap(snapshot, cfg, &costmap)) {
+  const std::shared_ptr<const mapping::InflatedCostmap> costmap =
+      get_inflated_costmap_cached(snapshot, cfg);
+  if (!costmap || !costmap->valid()) {
     return false;
   }
   const int32_t radius_cells = std::max<int32_t>(
       1,
       static_cast<int32_t>(
-          std::ceil(cfg.inflation_radius_m / costmap.grid.resolution_m)) + 1);
+          std::ceil(cfg.inflation_radius_m / costmap->grid.resolution_m)) + 1);
   std::vector<uint8_t> path_mask(
-      static_cast<size_t>(costmap.grid.width * costmap.grid.height),
+      static_cast<size_t>(costmap->grid.width * costmap->grid.height),
       0);
   mark_inflated_cell(
-      costmap.grid,
+      costmap->grid,
       overlay.path_grid.front().x,
       overlay.path_grid.front().y,
       radius_cells,
       &path_mask);
   for (size_t i = 1; i < overlay.path_grid.size(); ++i) {
     mark_inflated_segment(
-        costmap.grid,
+        costmap->grid,
         overlay.path_grid[i - 1],
         overlay.path_grid[i],
         radius_cells,
         &path_mask);
   }
   for (const GridCoord& cell : newly_occupied_cells) {
-    if (!costmap.grid.in_bounds(cell.x, cell.y)) {
+    if (!costmap->grid.in_bounds(cell.x, cell.y)) {
       continue;
     }
-    if (path_mask[static_cast<size_t>(costmap.grid.index(cell.x, cell.y))] != 0) {
+    if (path_mask[static_cast<size_t>(costmap->grid.index(cell.x, cell.y))] != 0) {
       return true;
     }
   }
@@ -467,6 +906,8 @@ void invalidate_current_plan() {
   }
   update_cached_overlay(PlanningOverlay{});
   g_planner.invalidate();
+  std::lock_guard<std::mutex> lk(g_inflated_costmap_cache_mutex);
+  g_inflated_costmap_cache = InflatedCostmapCacheEntry{};
 }
 
 void refresh_persistent_frontier_goals(
@@ -479,24 +920,30 @@ void refresh_persistent_frontier_goals(
     g_persistent_frontier_goals.clear();
     return;
   }
-  AStarPlanner planner(planner_config_from_frontier_config(cfg));
+  const int32_t visited_radius_cells = std::max<int32_t>(
+      1,
+      static_cast<int32_t>(std::ceil(kVisitedFrontierRadiusM / planner_map.resolution_m)));
   std::vector<GridCoord> discovered =
       collect_frontier_goal_cells(planner_map, start_world, cfg);
   std::lock_guard<std::mutex> lk(g_frontier_cache_mutex);
   std::vector<GridCoord> merged;
   merged.reserve(g_persistent_frontier_goals.size() + discovered.size());
   for (const GridCoord& goal : g_persistent_frontier_goals) {
+    if (frontier_goal_recently_visited(start_cell, goal, visited_radius_cells)) {
+      continue;
+    }
     if (!is_frontier_goal_candidate(planner_map, goal, cfg)) {
       continue;
     }
-    const PlanResult planned = planner.plan_to_grid(planner_map, start_cell, goal);
-    if (planned.success && !planned.path_grid.empty()) {
+    if (!frontier_goal_set_contains_near(merged, goal, kFrontierMergeDistanceCells)) {
       merged.push_back(goal);
     }
   }
   for (const GridCoord& goal : discovered) {
-    const auto it = std::find(merged.begin(), merged.end(), goal);
-    if (it == merged.end()) {
+    if (frontier_goal_recently_visited(start_cell, goal, visited_radius_cells)) {
+      continue;
+    }
+    if (!frontier_goal_set_contains_near(merged, goal, kFrontierMergeDistanceCells)) {
       merged.push_back(goal);
     }
   }
@@ -558,12 +1005,45 @@ PlanningOverlay update_plan_overlay(
             render_width,
             render_height,
             &goal_cell)) {
+      publish_direct_planner_telemetry(
+          snapshot.map_revision,
+          g_goal_revision.load(std::memory_order_acquire),
+          snapshot.timestamp,
+          start_cell,
+          false,
+          goal_cell,
+          PlanResult{});
       update_cached_path_world({});
       update_cached_overlay(overlay);
       return overlay;
     }
 
-    const PlanResult planned = g_planner.plan_to_grid(planner_map, start_cell, goal_cell);
+    const PlannerConfig planner_cfg = build_planner_config();
+    const std::shared_ptr<const mapping::InflatedCostmap> costmap =
+        get_inflated_costmap_cached(snapshot, planner_cfg);
+    if (!costmap || !costmap->valid()) {
+      publish_direct_planner_telemetry(
+          snapshot.map_revision,
+          g_goal_revision.load(std::memory_order_acquire),
+          snapshot.timestamp,
+          start_cell,
+          true,
+          goal_cell,
+          PlanResult{});
+      update_cached_path_world({});
+      update_cached_overlay(overlay);
+      return overlay;
+    }
+    const PlanResult planned =
+        plan_with_dstar_cached_costmap(*costmap, start_cell, goal_cell);
+    publish_direct_planner_telemetry(
+        snapshot.map_revision,
+        g_goal_revision.load(std::memory_order_acquire),
+        snapshot.timestamp,
+        start_cell,
+        true,
+        goal_cell,
+        planned);
     std::ostringstream plan_log;
     plan_log << "[planning] direct goal result success=" << (planned.success ? 1 : 0)
              << " start=(" << start_cell.x << "," << start_cell.y << ")"
@@ -580,24 +1060,41 @@ PlanningOverlay update_plan_overlay(
     return overlay;
   }
 
-  const auto now = std::chrono::steady_clock::now();
-  const double elapsed_sec = std::chrono::duration<double>(
-      now - g_last_auto_frontier_plan_time).count();
-  if (g_last_auto_frontier_plan_time != std::chrono::steady_clock::time_point::min() &&
-      elapsed_sec < kAutoFrontierReplanIntervalSec) {
-    PlanningOverlay cached = copy_cached_overlay();
-    if (cached.source_map_revision != 0) {
-      cached.source_map_revision = snapshot.map_revision;
-    }
+  PlanningOverlay cached = copy_cached_overlay();
+  if (!cached.path_grid.empty() && is_overlay_path_valid(snapshot, cached)) {
+    cached.source_map_revision = snapshot.map_revision;
     return cached;
   }
-  g_last_auto_frontier_plan_time = now;
 
   const FrontierExplorerConfig frontier_cfg = build_frontier_config();
-  const FrontierPlanResult planned = planning::simplified::plan_to_largest_frontier(
-      planner_map,
-      core::Vector3d{snapshot.pose.x, snapshot.pose.y, snapshot.pose.theta},
-      frontier_cfg);
+  const core::Vector3d start_world{
+      snapshot.pose.x,
+      snapshot.pose.y,
+      snapshot.pose.theta};
+  const PlannerConfig frontier_planner_cfg =
+      planner_config_from_frontier_config(frontier_cfg);
+  const std::shared_ptr<const mapping::InflatedCostmap> frontier_costmap =
+      get_inflated_costmap_cached(snapshot, frontier_planner_cfg);
+  if (!frontier_costmap || !frontier_costmap->valid()) {
+    update_cached_path_world({});
+    update_cached_overlay(overlay);
+    return overlay;
+  }
+  refresh_persistent_frontier_goals(planner_map, start_world, frontier_cfg);
+  const std::vector<GridCoord> persistent_goals = copy_persistent_frontier_goals();
+  FrontierPlanResult planned = plan_to_persistent_frontier_goals(
+      frontier_costmap->grid,
+      start_cell,
+      start_world,
+      frontier_cfg,
+      &g_planner,
+      persistent_goals);
+  publish_frontier_planner_telemetry(
+      snapshot.map_revision,
+      g_goal_revision.load(std::memory_order_acquire),
+      snapshot.timestamp,
+      start_cell,
+      planned);
   std::ostringstream frontier_log;
   frontier_log << "[planning] frontier result success=" << (planned.success ? 1 : 0)
                << " start=(" << start_cell.x << "," << start_cell.y << ")"
@@ -611,7 +1108,24 @@ PlanningOverlay update_plan_overlay(
                << planned.selected_seed.y << ")"
                << " message=" << planned.message;
   // wasm_log_line(frontier_log.str());
-  overlay = overlay_from_frontier_result(snapshot.map_revision, planned);
+  if (!planned.success || planned.path_grid.empty()) {
+    if (!cached.path_grid.empty() &&
+        is_overlay_path_valid(snapshot, cached)) {
+      overlay = cached;
+      overlay.source_map_revision = snapshot.map_revision;
+      overlay.frontier_candidates = planned.frontier_cells;
+      overlay.selected_frontier_cluster = planned.selected_cluster_cells;
+      overlay.selected_frontier_seed_enabled = false;
+      overlay.selected_frontier_seed = GridCoord{};
+      if (planned.success || !planned.selected_cluster_cells.empty()) {
+        overlay.selected_frontier_seed_enabled = true;
+        overlay.selected_frontier_seed = planned.selected_seed;
+      }
+      update_cached_overlay(overlay);
+      return overlay;
+    }
+  }
+  overlay = overlay_from_frontier_result(snapshot.map_revision, start_cell, planned);
   update_cached_overlay(overlay);
   return overlay;
 }
