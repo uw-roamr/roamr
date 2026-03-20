@@ -81,6 +81,12 @@ struct FrontierProfileWindow {
   double centroid_count_max = 0.0;
   double cluster_count_sum = 0.0;
   double cluster_count_max = 0.0;
+  double attempted_window_size_m_sum = 0.0;
+  double attempted_window_size_m_max = 0.0;
+  double adaptive_attempts_sum = 0.0;
+  double adaptive_attempts_max = 0.0;
+  double full_map_fallback_sum = 0.0;
+  double full_map_fallback_max = 0.0;
 };
 
 std::mutex g_frontier_profile_mutex;
@@ -355,6 +361,18 @@ void record_frontier_profile(
       static_cast<double>(planned.cluster_count),
       &window.cluster_count_sum,
       &window.cluster_count_max);
+  accumulate(
+      planned.perf.attempted_window_size_m,
+      &window.attempted_window_size_m_sum,
+      &window.attempted_window_size_m_max);
+  accumulate(
+      static_cast<double>(planned.perf.adaptive_attempts),
+      &window.adaptive_attempts_sum,
+      &window.adaptive_attempts_max);
+  accumulate(
+      static_cast<double>(planned.perf.used_full_map_fallback),
+      &window.full_map_fallback_sum,
+      &window.full_map_fallback_max);
 
   const double window_sec = std::chrono::duration<double>(now - window.window_start).count();
   if (window_sec < kFrontierProfileWindowSec) {
@@ -390,7 +408,13 @@ void record_frontier_profile(
       << " centroids=" << (window.centroid_count_sum / sample_count) << "/"
       << window.centroid_count_max
       << " clusters=" << (window.cluster_count_sum / sample_count) << "/"
-      << window.cluster_count_max;
+      << window.cluster_count_max
+      << " window_m=" << (window.attempted_window_size_m_sum / sample_count) << "/"
+      << window.attempted_window_size_m_max
+      << " attempts=" << (window.adaptive_attempts_sum / sample_count) << "/"
+      << window.adaptive_attempts_max
+      << " full_map=" << (window.full_map_fallback_sum / sample_count) << "/"
+      << window.full_map_fallback_max;
   wasm_log_line(log.str());
   window = FrontierProfileWindow{};
   window.window_start = now;

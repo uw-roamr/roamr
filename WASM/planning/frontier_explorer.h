@@ -36,6 +36,9 @@ struct FrontierPlanResult {
     double path_ms = 0.0;
     double standoff_ms = 0.0;
     double total_ms = 0.0;
+    double attempted_window_size_m = 0.0;
+    int32_t adaptive_attempts = 0;
+    int32_t used_full_map_fallback = 0;
   };
 
   bool success = false;
