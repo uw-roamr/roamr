@@ -227,6 +227,7 @@ class WebSocketManager: ObservableObject {
     private var listener: NWListener?
     private var connections: [NWConnection] = []
     private var connectionStates: [ObjectIdentifier: Bool] = [:] // Track handshake completion
+    private var incomingHandshakeBuffers: [ObjectIdentifier: Data] = [:]
     private var incomingFrameBuffers: [ObjectIdentifier: Data] = [:]
     private var partialIncomingMessages: [ObjectIdentifier: PartialIncomingWebSocketMessage] = [:]
     private var mediaSendStates: [ObjectIdentifier: MediaSendState] = [:]
@@ -303,12 +304,16 @@ class WebSocketManager: ObservableObject {
         connections.forEach { $0.cancel() }
         connections.removeAll()
         connectionStates.removeAll()
+        incomingHandshakeBuffers.removeAll()
+        incomingFrameBuffers.removeAll()
+        partialIncomingMessages.removeAll()
         mediaSendStates.removeAll()
         keepaliveTimers.values.forEach { timer in
             timer.setEventHandler {}
             timer.cancel()
         }
         keepaliveTimers.removeAll()
+        wasmUploadSessions.removeAll()
         isServerRunning = false
         serverStatus = "Stopped"
         connectedClients = 0
@@ -319,6 +324,7 @@ class WebSocketManager: ObservableObject {
         connectedClients = connections.count
         let connectionId = ObjectIdentifier(connection)
         connectionStates[connectionId] = false // Handshake not complete
+        incomingHandshakeBuffers[connectionId] = Data()
         incomingFrameBuffers[connectionId] = Data()
         mediaSendStates[connectionId] = MediaSendState()
 
@@ -344,28 +350,75 @@ class WebSocketManager: ObservableObject {
     }
 
     private func receiveHandshake(on connection: NWConnection) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, _ in
-            guard let self = self, let data = data, !data.isEmpty else { return }
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            guard let self = self else { return }
 
-            if let handshake = String(data: data, encoding: .utf8) {
+            let connectionId = ObjectIdentifier(connection)
+
+            if let error {
+                print("❌ Handshake receive error: \(error)")
+                self.removeConnection(connection)
+                return
+            }
+
+            if let data, !data.isEmpty {
+                var buffer = self.incomingHandshakeBuffers[connectionId] ?? Data()
+                buffer.append(data)
+
+                guard let terminatorRange = buffer.range(of: Data("\r\n\r\n".utf8)) else {
+                    self.incomingHandshakeBuffers[connectionId] = buffer
+                    if !isComplete {
+                        self.receiveHandshake(on: connection)
+                    } else {
+                        print("❌ Connection closed before WebSocket handshake completed")
+                        self.removeConnection(connection)
+                    }
+                    return
+                }
+
+                let headerEnd = terminatorRange.upperBound
+                let handshakeData = buffer.prefix(upTo: headerEnd)
+                let remainingData = Data(buffer.suffix(from: headerEnd))
+
+                guard let handshake = String(data: handshakeData, encoding: .utf8) else {
+                    print("❌ Invalid UTF-8 in WebSocket handshake")
+                    self.removeConnection(connection)
+                    return
+                }
+
                 print("📥 Received handshake:\n\(handshake)")
 
-                // Extract WebSocket key
-                if let wsKey = self.extractWebSocketKey(from: handshake) {
-                    print("🔑 WebSocket Key: \(wsKey)")
-                    self.sendHandshakeResponse(to: connection, key: wsKey)
-                    self.connectionStates[ObjectIdentifier(connection)] = true
-                    self.startKeepalivePingTimer(for: connection)
-                    print("✅ WebSocket handshake complete")
-
-                    self.sendLatestTelemetryState(to: connection)
-
-                    // Start receiving WebSocket frames
-                    self.receiveWebSocketFrame(on: connection)
-                } else {
+                guard let wsKey = self.extractWebSocketKey(from: handshake) else {
                     print("❌ Failed to extract WebSocket key")
+                    self.removeConnection(connection)
+                    return
                 }
+
+                print("🔑 WebSocket Key: \(wsKey)")
+                self.incomingHandshakeBuffers.removeValue(forKey: connectionId)
+                self.sendHandshakeResponse(to: connection, key: wsKey)
+                self.connectionStates[connectionId] = true
+                self.startKeepalivePingTimer(for: connection)
+                print("✅ WebSocket handshake complete")
+
+                if !remainingData.isEmpty {
+                    var frameBuffer = self.incomingFrameBuffers[connectionId] ?? Data()
+                    frameBuffer.append(remainingData)
+                    self.incomingFrameBuffers[connectionId] = frameBuffer
+                }
+
+                self.sendLatestTelemetryState(to: connection)
+                self.receiveWebSocketFrame(on: connection)
+                return
             }
+
+            if isComplete {
+                print("❌ Connection closed before WebSocket handshake completed")
+                self.removeConnection(connection)
+                return
+            }
+
+            self.receiveHandshake(on: connection)
         }
     }
 
@@ -417,41 +470,42 @@ class WebSocketManager: ObservableObject {
                 return
             }
 
+            let connectionId = ObjectIdentifier(connection)
+            var buffer = self.incomingFrameBuffers[connectionId] ?? Data()
+
             if let data = data, !data.isEmpty {
-                let connectionId = ObjectIdentifier(connection)
-                var buffer = self.incomingFrameBuffers[connectionId] ?? Data()
                 buffer.append(data)
-
-                while let frame = self.decodeNextWebSocketFrame(from: &buffer) {
-                    guard let assembledFrame = self.assembleIncomingWebSocketFrame(
-                        frame,
-                        connectionId: connectionId
-                    ) else {
-                        continue
-                    }
-
-                    switch assembledFrame {
-                    case .text(let message):
-                        DispatchQueue.main.async {
-                            self.lastMessage = message
-                            print("📱 Received WebSocket message: \(message)")
-                            self.handleIncomingMessage(message)
-                        }
-                    case .binary(let payload):
-                        self.handleIncomingBinaryMessage(payload, from: connection)
-                    case .ping(let payload):
-                        self.sendControlFrame(opcode: 0xA, payload: payload, to: connection)
-                    case .pong:
-                        break
-                    case .close(let payload):
-                        self.sendControlFrame(opcode: 0x8, payload: payload, to: connection)
-                        connection.cancel()
-                        self.removeConnection(connection)
-                        return
-                    }
-                }
-                self.incomingFrameBuffers[connectionId] = buffer
             }
+
+            while let frame = self.decodeNextWebSocketFrame(from: &buffer) {
+                guard let assembledFrame = self.assembleIncomingWebSocketFrame(
+                    frame,
+                    connectionId: connectionId
+                ) else {
+                    continue
+                }
+
+                switch assembledFrame {
+                case .text(let message):
+                    DispatchQueue.main.async {
+                        self.lastMessage = message
+                        print("📱 Received WebSocket message: \(message)")
+                        self.handleIncomingMessage(message)
+                    }
+                case .binary(let payload):
+                    self.handleIncomingBinaryMessage(payload, from: connection)
+                case .ping(let payload):
+                    self.sendControlFrame(opcode: 0xA, payload: payload, to: connection)
+                case .pong:
+                    break
+                case .close(let payload):
+                    self.sendControlFrame(opcode: 0x8, payload: payload, to: connection)
+                    connection.cancel()
+                    self.removeConnection(connection)
+                    return
+                }
+            }
+            self.incomingFrameBuffers[connectionId] = buffer
 
             if !isComplete {
                 self.receiveWebSocketFrame(on: connection)
@@ -573,6 +627,7 @@ class WebSocketManager: ObservableObject {
         let connectionId = ObjectIdentifier(connection)
         connections.removeAll { $0 === connection }
         connectionStates.removeValue(forKey: connectionId)
+        incomingHandshakeBuffers.removeValue(forKey: connectionId)
         incomingFrameBuffers.removeValue(forKey: connectionId)
         partialIncomingMessages.removeValue(forKey: connectionId)
         mediaSendStates.removeValue(forKey: connectionId)
