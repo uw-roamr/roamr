@@ -843,7 +843,6 @@ void refresh_persistent_frontier_goals(
     g_persistent_frontier_goals.clear();
     return;
   }
-  AStarPlanner planner(planner_config_from_frontier_config(cfg));
   const int32_t visited_radius_cells = std::max<int32_t>(
       1,
       static_cast<int32_t>(std::ceil(kVisitedFrontierRadiusM / planner_map.resolution_m)));
@@ -859,11 +858,8 @@ void refresh_persistent_frontier_goals(
     if (!is_frontier_goal_candidate(planner_map, goal, cfg)) {
       continue;
     }
-    const PlanResult planned = planner.plan_to_grid(planner_map, start_cell, goal);
-    if (planned.success && !planned.path_grid.empty()) {
-      if (!frontier_goal_set_contains_near(merged, goal, kFrontierMergeDistanceCells)) {
-        merged.push_back(goal);
-      }
+    if (!frontier_goal_set_contains_near(merged, goal, kFrontierMergeDistanceCells)) {
+      merged.push_back(goal);
     }
   }
   for (const GridCoord& goal : discovered) {

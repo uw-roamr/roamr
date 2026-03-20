@@ -24,7 +24,7 @@ namespace mapping{
         static constexpr int16_t kMaxCellScore = 32;
         static constexpr int16_t kHitIncrement = 6;
         static constexpr int16_t kFreeDecrement = 2;
-        static constexpr int16_t kOccupiedThreshold = 10;
+        static constexpr int16_t kOccupiedThreshold = 7;
         static constexpr int16_t kClearThreshold = 0;
         static constexpr float kMinRange = 0.1f; // meters
 
