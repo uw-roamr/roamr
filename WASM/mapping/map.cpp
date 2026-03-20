@@ -177,6 +177,44 @@ bool Map::begin_scan_integration(
   return world_to_grid(pose.x, pose.y, start_x, start_y) != 0;
 }
 
+bool Map::ray_reaches_endpoint_without_occlusion(
+    int32_t x0,
+    int32_t y0,
+    int32_t x1,
+    int32_t y1) const {
+  int dx = (x1 > x0) ? (x1 - x0) : (x0 - x1);
+  int sx = (x0 < x1) ? 1 : -1;
+  int dy = (y1 > y0) ? (y0 - y1) : (y1 - y0);
+  int sy = (y0 < y1) ? 1 : -1;
+  int err = dx + dy;
+
+  int x = x0;
+  int y = y0;
+  while (true) {
+    if (x == x1 && y == y1) {
+      return true;
+    }
+
+    const int e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      x += sx;
+    }
+    if (e2 <= dx) {
+      err += dx;
+      y += sy;
+    }
+
+    if (x == x1 && y == y1) {
+      return true;
+    }
+
+    if (confirmed_[grid_index(x, y)] != 0) {
+      return false;
+    }
+  }
+}
+
 void Map::integrate_ray(
     int32_t x0,
     int32_t y0,
@@ -310,6 +348,9 @@ void Map::integrate_hit_world(
   if (hit_cell_scan_stamp_[end_idx] == current_scan_stamp_) {
     return;
   }
+  if (!ray_reaches_endpoint_without_occlusion(start_x, start_y, end_x, end_y)) {
+    return;
+  }
   hit_cell_scan_stamp_[end_idx] = current_scan_stamp_;
   integrate_ray(
       start_x,
@@ -329,6 +370,9 @@ void Map::integrate_free_world(
   int32_t end_x = 0;
   int32_t end_y = 0;
   if (!world_to_grid(wx, wy, &end_x, &end_y)) {
+    return;
+  }
+  if (!ray_reaches_endpoint_without_occlusion(start_x, start_y, end_x, end_y)) {
     return;
   }
 

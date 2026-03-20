@@ -1800,6 +1800,7 @@ int main(){
         double map_lock_seconds = 0.0;
         double publish_seconds = 0.0;
         bool snapshot_ready = false;
+        bool path_invalidated_by_new_occupancy = false;
         newly_occupied_cells.clear();
         {
             const auto map_lock_started_at = std::chrono::steady_clock::now();
@@ -1841,6 +1842,22 @@ int main(){
             g_lc_cv.notify_one();
             continue;
         }
+        if (!newly_occupied_cells.empty()) {
+            planning::bridge::PlanningOverlay active_overlay;
+            {
+                std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
+                active_overlay = g_latest_plan_overlay;
+            }
+            if (active_overlay.source_map_revision > 0 &&
+                !active_overlay.path_grid.empty() &&
+                planning::bridge::does_new_occupancy_intersect_overlay_path(
+                    staged_snapshot,
+                    active_overlay,
+                    newly_occupied_cells)) {
+                planning::bridge::invalidate_current_plan();
+                path_invalidated_by_new_occupancy = true;
+            }
+        }
         {
             const auto publish_started_at = std::chrono::steady_clock::now();
             std::lock_guard<std::mutex> lk(g_map_publish_mutex);
@@ -1858,6 +1875,11 @@ int main(){
             map_revision,
             candidate_timestamp,
             std::move(newly_occupied_cells));
+        if (path_invalidated_by_new_occupancy) {
+            set_autonomy_substate(
+                autonomy::AutonomySubstate::WAITING_FOR_PATH,
+                "path_obstructed_by_new_occupancy");
+        }
         const double total_seconds =
             std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - frame_started_at).count();

@@ -66,6 +66,11 @@ namespace mapping{
 
         int32_t grid_index(int32_t gx, int32_t gy) const;
         void maybe_init_origin(double x, double y);
+        bool ray_reaches_endpoint_without_occlusion(
+            int32_t x0,
+            int32_t y0,
+            int32_t x1,
+            int32_t y1) const;
         void integrate_ray(
             int32_t x0,
             int32_t y0,
