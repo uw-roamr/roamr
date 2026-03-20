@@ -32,30 +32,37 @@ struct BluetoothView: View {
 
             // Scan Button
             if !bluetoothManager.isConnected {
-				List {
-					ForEach(bluetoothManager.discoveredDevices, id: \.identifier) { device in
-						Button(action: {
-							bluetoothManager.connect(to: device)
-						}) {
-							HStack {
-								Image(systemName: "antenna.radiowaves.left.and.right")
-									.foregroundColor(.blue)
-								VStack(alignment: .leading) {
-									Text(device.name ?? "Unknown Device")
-										.font(.headline)
-									Text(device.identifier.uuidString)
-										.font(.caption)
-										.foregroundColor(.gray)
-								}
-								Spacer()
-								Image(systemName: "chevron.right")
-									.foregroundColor(.gray)
-							}
-						}
-					}
-				}
-				.listStyle(.plain)
-				.scrollContentBackground(.hidden)
+				ScrollView {
+                    LazyVStack(spacing: 12) {
+                        ForEach(bluetoothManager.discoveredDevices.filter { $0.name != nil }, id: \.identifier) { device in
+                            Button(action: {
+                                bluetoothManager.connect(to: device)
+                            }) {
+                                HStack {
+                                    Image(systemName: "antenna.radiowaves.left.and.right")
+                                        .foregroundColor(.blue)
+                                    VStack(alignment: .leading) {
+                                        Text(device.name ?? "Unknown Device")
+                                            .font(.headline)
+                                        Text(device.identifier.uuidString)
+                                            .font(.caption)
+                                            .foregroundColor(.gray)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .foregroundColor(.gray)
+                                }
+                                .padding()
+                                .background(Color(.secondarySystemBackground))
+                                .cornerRadius(12)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal)
+                    .padding(.bottom, safeAreaInsets.bottom + AppConstants.shared.tabBarHeight)
+                }
+				.scrollIndicators(.hidden)
             } else {
 				// DEVICE CONNECTED
                 VStack(spacing: 20) {

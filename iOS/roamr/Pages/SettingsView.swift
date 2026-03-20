@@ -34,15 +34,11 @@ struct SettingsPage: View {
                 ProfileButton(isAuthenticated: authManager.isAuthenticated)
             }
 
-            ScrollView {
                 VStack(spacing: 24) {
-                    recordingSection
                     appInfoSection
                     accountSection
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical)
-            }
+				.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(.top, safeAreaInsets.top)
         .padding(.bottom, safeAreaInsets.bottom + AppConstants.shared.tabBarHeight)
@@ -65,82 +61,6 @@ struct SettingsPage: View {
                 errorMessage = "Folder selection failed: \(error.localizedDescription)"
             }
         }
-    }
-
-    @ViewBuilder
-    private var recordingSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("WASM Recording")
-                .font(.headline)
-
-            Toggle("Enable sensor recording", isOn: $recordingEnabled)
-                .onChange(of: recordingEnabled) { _, isEnabled in
-                    WasmManager.shared.setRecordingEnabled(isEnabled)
-                }
-
-            TextField("Recording path", text: $recordingPath)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled(true)
-                .textFieldStyle(.roundedBorder)
-
-            HStack(spacing: 12) {
-                Button("Apply Path") {
-                    WasmManager.shared.setRecordingPath(recordingPath)
-                    recordingPath = WasmManager.shared.recordingPath
-                }
-                .buttonStyle(.borderedProminent)
-
-                Button("Reset Path") {
-                    WasmManager.shared.resetRecordingPath()
-                    recordingPath = WasmManager.shared.recordingPath
-                }
-                .buttonStyle(.bordered)
-            }
-
-            HStack(spacing: 12) {
-                Button("Choose Folder") {
-                    isShowingRecordingFolderPicker = true
-                }
-                .buttonStyle(.borderedProminent)
-
-                Button("Clear Folder") {
-                    WasmManager.shared.clearRecordingFolderSelection()
-                    selectedRecordingFolderPath = WasmManager.shared.selectedRecordingFolderPath
-                }
-                .buttonStyle(.bordered)
-                .disabled(selectedRecordingFolderPath == nil)
-            }
-
-            Text("Writes IMU, pose, RGB image, and colored point-cloud logs from inside the WASM runtime.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            Text("Choose Folder lets you target Files locations such as Downloads. If no folder is selected, the text path below uses an app-local directory.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            Text("Selected folder: \(selectedRecordingFolderPath ?? "None")")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .textSelection(.enabled)
-
-            Text("Guest path: \(WasmManager.shared.recordingGuestDirectoryPath())")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            Text("Host path: \(WasmManager.shared.recordingsDirectoryURL()?.path ?? "Unavailable")")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .textSelection(.enabled)
-
-            Text("Applies the next time a WASM module starts.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-        .padding()
-        .background(Color(.systemGray6))
-        .cornerRadius(12)
-        .padding(.horizontal)
     }
 
     @ViewBuilder
