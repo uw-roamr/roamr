@@ -1,5 +1,6 @@
 #include "planning/frontier_explorer.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -207,6 +208,18 @@ GridCoord select_cluster_centroid_cell(const std::vector<GridCoord>& cluster) {
     }
   }
   return best;
+}
+
+std::vector<GridCoord> compute_cluster_centroids(
+    const std::vector<std::vector<GridCoord>>& clusters) {
+  std::vector<GridCoord> centroids;
+  centroids.reserve(clusters.size());
+  for (const std::vector<GridCoord>& cluster : clusters) {
+    if (!cluster.empty()) {
+      centroids.push_back(select_cluster_centroid_cell(cluster));
+    }
+  }
+  return centroids;
 }
 
 bool select_cluster_approach_goal_cell(
@@ -564,20 +577,34 @@ FrontierPlanResult plan_to_largest_frontier(
     const core::Vector3d& start_world,
     const FrontierExplorerConfig& cfg) {
   FrontierPlanResult result;
+  const auto total_start = std::chrono::steady_clock::now();
+  auto elapsed_ms = [](const std::chrono::steady_clock::time_point& start) {
+    return std::chrono::duration<double, std::milli>(
+               std::chrono::steady_clock::now() - start)
+        .count();
+  };
+  auto finish = [&]() {
+    result.perf.total_ms = elapsed_ms(total_start);
+    return result;
+  };
   if (!map.valid()) {
     result.message = "invalid occupancy grid";
-    return result;
+    return finish();
   }
 
   const PlannerConfig detection_cfg = build_simple_detection_config(cfg);
   const PlannerConfig planner_cfg = build_simple_planner_config(cfg);
+  const auto inflate_detection_start = std::chrono::steady_clock::now();
   const std::vector<int8_t> inflated_detection = inflate_obstacles(map, detection_cfg);
+  result.perf.inflate_detection_ms = elapsed_ms(inflate_detection_start);
+  const auto inflate_planner_start = std::chrono::steady_clock::now();
   const std::vector<int8_t> inflated_occupancy = inflate_obstacles(map, planner_cfg);
+  result.perf.inflate_planner_ms = elapsed_ms(inflate_planner_start);
 
   GridCoord start_cell{};
   if (!world_to_grid(map, start_world.x, start_world.y, &start_cell)) {
     result.message = "robot pose outside map bounds";
-    return result;
+    return finish();
   }
   if (is_cell_blocked(map, detection_cfg, start_cell.x, start_cell.y, &inflated_detection)) {
     if (!detection_cfg.snap_start_to_free ||
@@ -589,39 +616,48 @@ FrontierPlanResult plan_to_largest_frontier(
             detection_cfg.snap_search_radius_cells,
             &start_cell)) {
       result.message = "robot start cell is blocked";
-      return result;
+      return finish();
     }
   }
 
   std::vector<uint8_t> reachable;
+  const auto reachable_start = std::chrono::steady_clock::now();
   mark_reachable_cells_simple(
       map,
       detection_cfg,
       inflated_detection,
       start_cell,
       &reachable);
+  result.perf.reachable_ms = elapsed_ms(reachable_start);
 
   std::vector<GridCoord> frontier_cells;
+  const auto detect_frontiers_start = std::chrono::steady_clock::now();
   detect_frontiers_simple(
       map,
       detection_cfg,
       inflated_detection,
       reachable,
       &frontier_cells);
+  result.perf.detect_frontiers_ms = elapsed_ms(detect_frontiers_start);
   result.frontier_cell_count = static_cast<int32_t>(frontier_cells.size());
-  result.frontier_cells = frontier_cells;
   if (frontier_cells.empty()) {
     result.message = "no reachable frontier cells";
-    return result;
+    return finish();
   }
 
   std::vector<std::vector<GridCoord>> clusters;
+  const auto cluster_start = std::chrono::steady_clock::now();
   cluster_frontiers_simple(map, frontier_cells, &clusters);
+  result.perf.cluster_ms = elapsed_ms(cluster_start);
   result.cluster_count = static_cast<int32_t>(clusters.size());
   if (clusters.empty()) {
     result.message = "no frontier clusters";
-    return result;
+    return finish();
   }
+  const auto centroid_start = std::chrono::steady_clock::now();
+  const std::vector<GridCoord> cluster_centroids = compute_cluster_centroids(clusters);
+  result.perf.centroid_ms = elapsed_ms(centroid_start);
+  result.frontier_cells = cluster_centroids;
 
   int32_t best_cluster_index = -1;
   int32_t best_cluster_size = -1;
@@ -637,6 +673,7 @@ FrontierPlanResult plan_to_largest_frontier(
       clusters[static_cast<size_t>(best_cluster_index)];
   GridCoord goal_seed = select_cluster_centroid_cell(best_cluster);
   GridCoord goal_cell = goal_seed;
+  const auto approach_start = std::chrono::steady_clock::now();
   if (!select_cluster_approach_goal_cell(
           map,
           planner_cfg,
@@ -645,19 +682,29 @@ FrontierPlanResult plan_to_largest_frontier(
           planner_cfg.snap_search_radius_cells,
           &goal_seed,
           &goal_cell)) {
+    result.perf.approach_ms = elapsed_ms(approach_start);
+    result.selected_cluster_cells = {goal_seed};
     result.message = "largest frontier cluster has no nearby free approach cell";
-    return result;
+    return finish();
   }
+  result.perf.approach_ms = elapsed_ms(approach_start);
 
+  const auto path_start = std::chrono::steady_clock::now();
   const PlanResult planned = plan_to_grid_with_clearance_cost(
       map,
       planner_cfg,
       inflated_occupancy,
       start_cell,
       goal_cell);
+  result.perf.path_ms = elapsed_ms(path_start);
   if (!planned.success || planned.path_grid.empty() || planned.path_world.empty()) {
+    if (best_cluster_index >= 0 &&
+        static_cast<size_t>(best_cluster_index) < cluster_centroids.size()) {
+      result.selected_cluster_cells = {
+          cluster_centroids[static_cast<size_t>(best_cluster_index)]};
+    }
     result.message = "largest frontier cluster unreachable";
-    return result;
+    return finish();
   }
 
   result.success = true;
@@ -666,7 +713,11 @@ FrontierPlanResult plan_to_largest_frontier(
   result.selected_seed = goal_seed;
   result.path_grid = planned.path_grid;
   result.path_world = planned.path_world;
-  result.selected_cluster_cells = best_cluster;
+  if (best_cluster_index >= 0 &&
+      static_cast<size_t>(best_cluster_index) < cluster_centroids.size()) {
+    result.selected_cluster_cells = {
+        cluster_centroids[static_cast<size_t>(best_cluster_index)]};
+  }
   result.selected_cluster_size = best_cluster_size;
   result.selected_path_length_m = path_length_m(map, planned.path_grid);
 
@@ -679,7 +730,7 @@ FrontierPlanResult plan_to_largest_frontier(
       << " selected_seed=(" << result.selected_seed.x << "," << result.selected_seed.y << ")";
   // wasm_log_line(log.str());
 
-  return result;
+  return finish();
 }
 
 }  // namespace planning::simplified

@@ -25,6 +25,18 @@ struct FrontierExplorerConfig {
 };
 
 struct FrontierPlanResult {
+  struct Perf {
+    double inflate_detection_ms = 0.0;
+    double inflate_planner_ms = 0.0;
+    double reachable_ms = 0.0;
+    double detect_frontiers_ms = 0.0;
+    double cluster_ms = 0.0;
+    double centroid_ms = 0.0;
+    double approach_ms = 0.0;
+    double path_ms = 0.0;
+    double total_ms = 0.0;
+  };
+
   bool success = false;
   std::string message;
   GridCoord goal_cell{};
@@ -39,6 +51,7 @@ struct FrontierPlanResult {
   double selected_path_length_m = 0.0;
   double selected_heading_delta_rad = 0.0;
   double selected_goal_standoff_m = 0.0;
+  Perf perf;
 };
 
 FrontierPlanResult plan_to_nearest_frontier(
