@@ -21,6 +21,9 @@ constexpr int32_t kRenderWidthDefault = 256;   // keep in sync with mapping/map_
 constexpr int32_t kRenderHeightDefault = 256;  // keep in sync with mapping/map_update.cpp
 constexpr int32_t kMaxPlannedPathCells = 4096; // keep in sync with mapping/map.cpp
 constexpr bool kEnableAutoFrontierExploration = true;
+constexpr double kVisitedFrontierRadiusM = 0.20;
+constexpr int32_t kFrontierMergeDistanceCells = 3;
+constexpr size_t kMaxFrontierPlanAttempts = 8;
 
 struct PlannerGoalPixel {
   bool active = false;
@@ -147,6 +150,121 @@ inline int32_t clampi(int32_t v, int32_t lo, int32_t hi) {
 
 int32_t chebyshev_cell_distance(const GridCoord& a, const GridCoord& b) {
   return std::max(std::abs(a.x - b.x), std::abs(a.y - b.y));
+}
+
+bool cells_within_distance(
+    const GridCoord& a,
+    const GridCoord& b,
+    int32_t max_distance_cells) {
+  return chebyshev_cell_distance(a, b) <= max_distance_cells;
+}
+
+bool frontier_goal_recently_visited(
+    const GridCoord& start_cell,
+    const GridCoord& goal_cell,
+    int32_t visited_radius_cells) {
+  return cells_within_distance(start_cell, goal_cell, visited_radius_cells);
+}
+
+bool frontier_goal_set_contains_near(
+    const std::vector<GridCoord>& goals,
+    const GridCoord& candidate,
+    int32_t merge_distance_cells) {
+  for (const GridCoord& goal : goals) {
+    if (cells_within_distance(goal, candidate, merge_distance_cells)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::vector<GridCoord> copy_persistent_frontier_goals() {
+  std::lock_guard<std::mutex> lk(g_frontier_cache_mutex);
+  return g_persistent_frontier_goals;
+}
+
+FrontierPlanResult plan_to_persistent_frontier_goals(
+    const GridMap2D& planner_map,
+    const GridCoord& start_cell,
+    const core::Vector3d& start_world,
+    const FrontierExplorerConfig& frontier_cfg,
+    const std::vector<GridCoord>& persistent_goals) {
+  FrontierPlanResult result;
+  result.frontier_cells = persistent_goals;
+  result.frontier_cell_count = static_cast<int32_t>(persistent_goals.size());
+  result.cluster_count = static_cast<int32_t>(persistent_goals.size());
+  if (!planner_map.valid() || persistent_goals.empty()) {
+    result.message = "no persistent frontier goals";
+    return result;
+  }
+
+  const PlannerConfig planner_cfg = planner_config_from_frontier_config(frontier_cfg);
+  const std::vector<int8_t> inflated_occupancy = inflate_obstacles(planner_map, planner_cfg);
+  std::vector<GridCoord> ranked_goals = persistent_goals;
+  std::sort(
+      ranked_goals.begin(),
+      ranked_goals.end(),
+      [&](const GridCoord& a, const GridCoord& b) {
+        const int32_t da = chebyshev_cell_distance(start_cell, a);
+        const int32_t db = chebyshev_cell_distance(start_cell, b);
+        if (da != db) {
+          return da < db;
+        }
+        if (a.x != b.x) {
+          return a.x < b.x;
+        }
+        return a.y < b.y;
+      });
+
+  const size_t attempt_count = std::min(ranked_goals.size(), kMaxFrontierPlanAttempts);
+  for (size_t i = 0; i < attempt_count; ++i) {
+    GridCoord goal_cell = ranked_goals[i];
+    if (!planner_map.in_bounds(goal_cell.x, goal_cell.y)) {
+      continue;
+    }
+    if (is_cell_blocked(
+            planner_map, planner_cfg, goal_cell.x, goal_cell.y, &inflated_occupancy) &&
+        (!planner_cfg.snap_goal_to_free ||
+         !find_nearest_free_cell(
+             planner_map,
+             planner_cfg,
+             inflated_occupancy,
+             goal_cell,
+             planner_cfg.snap_search_radius_cells,
+             &goal_cell))) {
+      continue;
+    }
+
+    const PlanResult planned = simplified::plan_to_grid_with_clearance_cost(
+        planner_map,
+        planner_cfg,
+        inflated_occupancy,
+        start_cell,
+        goal_cell);
+    if (!planned.success || planned.path_grid.empty() || planned.path_world.empty()) {
+      continue;
+    }
+
+    result.success = true;
+    result.message = "ok";
+    result.goal_cell = planned.path_grid.back();
+    result.selected_seed = ranked_goals[i];
+    result.path_grid = planned.path_grid;
+    result.path_world = planned.path_world;
+    result.selected_cluster_cells = {ranked_goals[i]};
+    result.selected_cluster_size = 1;
+    result.selected_path_length_m = path_length_m(planned.path_world);
+    result.selected_heading_delta_rad =
+        std::abs(core::normalize_angle(
+            std::atan2(
+                planned.path_world.back().y - start_world.y,
+                planned.path_world.back().x - start_world.x) -
+            start_world.z));
+    return result;
+  }
+
+  result.message = "no reachable persistent frontier goal";
+  return result;
 }
 
 bool is_path_segment_traversable(
@@ -726,23 +844,33 @@ void refresh_persistent_frontier_goals(
     return;
   }
   AStarPlanner planner(planner_config_from_frontier_config(cfg));
+  const int32_t visited_radius_cells = std::max<int32_t>(
+      1,
+      static_cast<int32_t>(std::ceil(kVisitedFrontierRadiusM / planner_map.resolution_m)));
   std::vector<GridCoord> discovered =
       collect_frontier_goal_cells(planner_map, start_world, cfg);
   std::lock_guard<std::mutex> lk(g_frontier_cache_mutex);
   std::vector<GridCoord> merged;
   merged.reserve(g_persistent_frontier_goals.size() + discovered.size());
   for (const GridCoord& goal : g_persistent_frontier_goals) {
+    if (frontier_goal_recently_visited(start_cell, goal, visited_radius_cells)) {
+      continue;
+    }
     if (!is_frontier_goal_candidate(planner_map, goal, cfg)) {
       continue;
     }
     const PlanResult planned = planner.plan_to_grid(planner_map, start_cell, goal);
     if (planned.success && !planned.path_grid.empty()) {
-      merged.push_back(goal);
+      if (!frontier_goal_set_contains_near(merged, goal, kFrontierMergeDistanceCells)) {
+        merged.push_back(goal);
+      }
     }
   }
   for (const GridCoord& goal : discovered) {
-    const auto it = std::find(merged.begin(), merged.end(), goal);
-    if (it == merged.end()) {
+    if (frontier_goal_recently_visited(start_cell, goal, visited_radius_cells)) {
+      continue;
+    }
+    if (!frontier_goal_set_contains_near(merged, goal, kFrontierMergeDistanceCells)) {
       merged.push_back(goal);
     }
   }
@@ -858,10 +986,24 @@ PlanningOverlay update_plan_overlay(
   }
 
   const FrontierExplorerConfig frontier_cfg = build_frontier_config();
-  const FrontierPlanResult planned = planning::simplified::plan_to_largest_frontier(
+  const core::Vector3d start_world{
+      snapshot.pose.x,
+      snapshot.pose.y,
+      snapshot.pose.theta};
+  refresh_persistent_frontier_goals(planner_map, start_world, frontier_cfg);
+  const std::vector<GridCoord> persistent_goals = copy_persistent_frontier_goals();
+  FrontierPlanResult planned = plan_to_persistent_frontier_goals(
       planner_map,
-      core::Vector3d{snapshot.pose.x, snapshot.pose.y, snapshot.pose.theta},
-      frontier_cfg);
+      start_cell,
+      start_world,
+      frontier_cfg,
+      persistent_goals);
+  if (!planned.success && persistent_goals.empty()) {
+    planned = planning::simplified::plan_to_largest_frontier(
+        planner_map,
+        start_world,
+        frontier_cfg);
+  }
   publish_frontier_planner_telemetry(
       snapshot.map_revision,
       g_goal_revision.load(std::memory_order_acquire),

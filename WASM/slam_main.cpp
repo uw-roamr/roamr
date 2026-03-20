@@ -1106,15 +1106,17 @@ struct OuterLoopTurnPidConfig {
 };
 
 static constexpr OuterLoopTurnPidConfig kScan4x90TurnPidCfg{
-    2.5,
+    4.0,
     0.25,
     0.5,
-    0.24 * core::pi,
-    0.10,
+    0.5 * core::pi,
+    0.2,
     0.6,
     1.5 * core::pi / 180.0};
 
 static constexpr double kScan4x90FinalMinOmegaRadS = 0.05;
+static constexpr double kScan4x90SlowdownWindowRad = 12.0 * core::pi / 180.0;
+static constexpr double kScan4x90IntegralResetWindowRad = 6.0 * core::pi / 180.0;
 static constexpr double kScan4x90YawDeadzoneRad = 2.0 * core::pi / 180.0;
 static constexpr double kScan4x90SettleYawRateRadS = 4.0 * core::pi / 180.0;
 static constexpr int kScan4x90SettleSamplesRequired = 4;
@@ -1291,6 +1293,9 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
             }
             settle_samples = 0;
 
+            if (std::abs(yaw_error) <= kScan4x90IntegralResetWindowRad) {
+                integral_term = 0.0;
+            }
             integral_term += yaw_error * dt_seconds;
             const double max_integral_term = kScan4x90TurnPidCfg.integral_limit_rad_s /
                 std::max(1e-6, kScan4x90TurnPidCfg.ki_omega_per_rad_s);
@@ -1303,12 +1308,23 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
                 (kScan4x90TurnPidCfg.kp_omega_per_rad * yaw_error) +
                 (kScan4x90TurnPidCfg.ki_omega_per_rad_s * integral_term) +
                 (kScan4x90TurnPidCfg.kd_omega_per_rad * derivative);
+            double max_omega = kScan4x90TurnPidCfg.max_omega_rad_s;
+            double min_omega = kScan4x90TurnPidCfg.min_omega_rad_s;
+            if (std::abs(yaw_error) < kScan4x90SlowdownWindowRad) {
+                const double alpha =
+                    std::clamp(std::abs(yaw_error) / kScan4x90SlowdownWindowRad, 0.0, 1.0);
+                max_omega =
+                    kScan4x90FinalMinOmegaRadS +
+                    alpha * (kScan4x90TurnPidCfg.max_omega_rad_s - kScan4x90FinalMinOmegaRadS);
+                min_omega =
+                    kScan4x90FinalMinOmegaRadS +
+                    alpha * (kScan4x90TurnPidCfg.min_omega_rad_s - kScan4x90FinalMinOmegaRadS);
+            }
             omega_cmd = std::clamp(
                 omega_cmd,
-                -kScan4x90TurnPidCfg.max_omega_rad_s,
-                kScan4x90TurnPidCfg.max_omega_rad_s);
+                -max_omega,
+                max_omega);
 
-            double min_omega = kScan4x90TurnPidCfg.min_omega_rad_s;
             if (std::abs(omega_cmd) < min_omega) {
                 omega_cmd = std::copysign(min_omega, yaw_error);
             }
