@@ -1308,6 +1308,24 @@
 
     <script>
         let ws = null;
+        const WS_DEBUG_IDLE_WARN_MS = 5000;
+        const WS_DEBUG_RECENT_LIMIT = 24;
+        const wsDebugState = {
+            connectAttempt: 0,
+            url: '',
+            connectStartedAtMs: 0,
+            connectedAtMs: 0,
+            lastMessageAtMs: 0,
+            lastCloseAtMs: 0,
+            lastErrorAtMs: 0,
+            lastClose: null,
+            lastError: null,
+            textMessages: 0,
+            binaryMessages: 0,
+            bytesIn: 0,
+            recentEvents: [],
+            idleWarned: false
+        };
         const appContainer = document.getElementById('appContainer');
         const statusEl = document.getElementById('status');
         const connectBtn = document.getElementById('connectBtn');
@@ -1571,6 +1589,104 @@
             models: []
         };
 
+        function pushWsDebugEvent(type, details = {}) {
+            const event = {
+                at: new Date().toISOString(),
+                type,
+                ...details
+            };
+            wsDebugState.recentEvents.unshift(event);
+            if (wsDebugState.recentEvents.length > WS_DEBUG_RECENT_LIMIT) {
+                wsDebugState.recentEvents.length = WS_DEBUG_RECENT_LIMIT;
+            }
+            return event;
+        }
+
+        function logWsDebug(message, details = {}) {
+            pushWsDebugEvent(message, details);
+            addLog(`[ws-debug] ${message}`);
+        }
+
+        function describeWebSocketReadyState(socket) {
+            if (!socket) {
+                return 'none';
+            }
+            switch (socket.readyState) {
+                case WebSocket.CONNECTING:
+                    return 'connecting';
+                case WebSocket.OPEN:
+                    return 'open';
+                case WebSocket.CLOSING:
+                    return 'closing';
+                case WebSocket.CLOSED:
+                    return 'closed';
+                default:
+                    return `unknown(${socket.readyState})`;
+            }
+        }
+
+        function updateWsMessageDebug(kind, size, parsedType = '') {
+            const nowMs = performance.now();
+            wsDebugState.lastMessageAtMs = nowMs;
+            wsDebugState.idleWarned = false;
+            if (kind === 'binary') {
+                wsDebugState.binaryMessages += 1;
+            } else {
+                wsDebugState.textMessages += 1;
+            }
+            wsDebugState.bytesIn += Number.isFinite(size) ? size : 0;
+            if ((wsDebugState.textMessages + wsDebugState.binaryMessages) <= 5) {
+                pushWsDebugEvent('message', {
+                    kind,
+                    size,
+                    parsedType
+                });
+            }
+        }
+
+        function startWsDebugTimer(socket) {
+            stopWsDebugTimer();
+            wsDebugState.debugTimer = window.setInterval(() => {
+                if (ws !== socket || socket.readyState !== WebSocket.OPEN) {
+                    return;
+                }
+                const nowMs = performance.now();
+                const idleMs = wsDebugState.lastMessageAtMs > 0
+                    ? nowMs - wsDebugState.lastMessageAtMs
+                    : nowMs - wsDebugState.connectedAtMs;
+                if (!wsDebugState.idleWarned && idleMs >= WS_DEBUG_IDLE_WARN_MS) {
+                    wsDebugState.idleWarned = true;
+                    logWsDebug(
+                        `idle for ${(idleMs / 1000).toFixed(1)}s state=${describeWebSocketReadyState(socket)}`
+                    );
+                }
+            }, 1000);
+        }
+
+        function stopWsDebugTimer() {
+            if (wsDebugState.debugTimer) {
+                clearInterval(wsDebugState.debugTimer);
+                wsDebugState.debugTimer = null;
+            }
+        }
+
+        window.__roamrWsDebug = function() {
+            const nowMs = performance.now();
+            return {
+                attempt: wsDebugState.connectAttempt,
+                url: wsDebugState.url,
+                readyState: describeWebSocketReadyState(ws),
+                connectedForMs: wsDebugState.connectedAtMs > 0 ? nowMs - wsDebugState.connectedAtMs : 0,
+                idleForMs: wsDebugState.lastMessageAtMs > 0 ? nowMs - wsDebugState.lastMessageAtMs : null,
+                textMessages: wsDebugState.textMessages,
+                binaryMessages: wsDebugState.binaryMessages,
+                bytesIn: wsDebugState.bytesIn,
+                lastClose: wsDebugState.lastClose,
+                lastError: wsDebugState.lastError,
+                recentEvents: [...wsDebugState.recentEvents]
+            };
+        };
+
         function updateStatus(connected) {
             appContainer.classList.toggle('disconnected-layout', !connected);
             if (connected) {
@@ -1688,6 +1804,21 @@
             shouldReconnect = true;
             clearReconnectTimer();
             addLog(`${isReconnect ? 'Reconnecting' : 'Connecting'} to ${wsUrl}...`);
+            wsDebugState.connectAttempt += 1;
+            wsDebugState.url = wsUrl;
+            wsDebugState.connectStartedAtMs = performance.now();
+            wsDebugState.connectedAtMs = 0;
+            wsDebugState.lastMessageAtMs = 0;
+            wsDebugState.textMessages = 0;
+            wsDebugState.binaryMessages = 0;
+            wsDebugState.bytesIn = 0;
+            wsDebugState.idleWarned = false;
+            pushWsDebugEvent('connect_attempt', {
+                attempt: wsDebugState.connectAttempt,
+                reconnect: isReconnect,
+                online: navigator.onLine,
+                visibility: document.visibilityState
+            });
 
             try {
                 const socket = new WebSocket(wsUrl);
@@ -1699,8 +1830,18 @@
                         return;
                     }
                     reconnectAttempts = 0;
+                    wsDebugState.connectedAtMs = performance.now();
+                    pushWsDebugEvent('open', {
+                        connectLatencyMs: wsDebugState.connectedAtMs - wsDebugState.connectStartedAtMs,
+                        protocol: socket.protocol || '',
+                        extensions: socket.extensions || ''
+                    });
+                    startWsDebugTimer(socket);
                     updateStatus(true);
                     addLog(isReconnect ? '✅ Reconnected to iPhone!' : '✅ Connected to iPhone!');
+                    logWsDebug(
+                        `open latency=${(wsDebugState.connectedAtMs - wsDebugState.connectStartedAtMs).toFixed(1)}ms protocol=${socket.protocol || 'none'}`
+                    );
                     refreshWasmPrograms();
                 };
 
@@ -1709,8 +1850,21 @@
                         return;
                     }
                     if (event.data instanceof ArrayBuffer) {
+                        updateWsMessageDebug('binary', event.data.byteLength);
                         handleBinaryMessage(event.data);
                     } else {
+                        let parsedType = '';
+                        if (typeof event.data === 'string') {
+                            try {
+                                const parsed = JSON.parse(event.data);
+                                parsedType = parsed && typeof parsed.type === 'string' ? parsed.type : '';
+                            } catch (_) {
+                                parsedType = '';
+                            }
+                            updateWsMessageDebug('text', event.data.length, parsedType);
+                        } else {
+                            updateWsMessageDebug('text', 0);
+                        }
                         handleServerTextMessage(event.data);
                     }
                 };
@@ -1719,7 +1873,18 @@
                     if (ws !== socket) {
                         return;
                     }
+                    wsDebugState.lastErrorAtMs = performance.now();
+                    wsDebugState.lastError = {
+                        readyState: describeWebSocketReadyState(socket),
+                        sinceOpenMs: wsDebugState.connectedAtMs > 0
+                            ? wsDebugState.lastErrorAtMs - wsDebugState.connectedAtMs
+                            : null
+                    };
+                    pushWsDebugEvent('error', wsDebugState.lastError);
                     addLog('❌ Connection error');
+                    logWsDebug(
+                        `error state=${describeWebSocketReadyState(socket)} since_open_ms=${wsDebugState.lastError.sinceOpenMs ?? 'n/a'}`
+                    );
                     console.error('WebSocket error:', error);
                 };
 
@@ -1727,16 +1892,34 @@
                     if (ws !== socket) {
                         return;
                     }
+                    stopWsDebugTimer();
                     ws = null;
                     updateStatus(false);
                     const closeCode = typeof event.code === 'number' ? event.code : 0;
                     const closeReason = event.reason ? ` (${event.reason})` : '';
                     const closeClean = event.wasClean ? 'clean' : 'unclean';
+                    const nowMs = performance.now();
+                    const sinceOpenMs = wsDebugState.connectedAtMs > 0 ? nowMs - wsDebugState.connectedAtMs : null;
+                    const sinceLastMessageMs = wsDebugState.lastMessageAtMs > 0 ? nowMs - wsDebugState.lastMessageAtMs : null;
+                    wsDebugState.lastCloseAtMs = nowMs;
+                    wsDebugState.lastClose = {
+                        code: closeCode,
+                        reason: event.reason || '',
+                        clean: event.wasClean,
+                        sinceOpenMs,
+                        sinceLastMessageMs
+                    };
+                    pushWsDebugEvent('close', wsDebugState.lastClose);
                     addLog(`❌ Disconnected from iPhone [code=${closeCode}, ${closeClean}]${closeReason}`);
+                    logWsDebug(
+                        `close code=${closeCode} clean=${event.wasClean ? 1 : 0} since_open_ms=${sinceOpenMs ?? 'n/a'} since_last_msg_ms=${sinceLastMessageMs ?? 'n/a'}`
+                    );
                     scheduleReconnect();
                 };
             } catch (error) {
+                stopWsDebugTimer();
                 addLog(`❌ Failed to connect: ${error.message}`);
+                pushWsDebugEvent('connect_exception', { message: error.message || String(error) });
                 console.error('Connection error:', error);
                 scheduleReconnect();
             }
@@ -1801,6 +1984,7 @@
             shouldReconnect = false;
             reconnectAttempts = 0;
             clearReconnectTimer();
+            stopWsDebugTimer();
 
             const socket = ws;
             ws = null;
