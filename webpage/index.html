@@ -1461,6 +1461,7 @@
         const requiredMapLayers = ['base', 'odometry', 'planning', 'frontiers', 'semantic'];
         const mapLayerState = {
             hasLayerFrames: false,
+            hasEverSeenLayerFrames: false,
             displayedTimestamp: null,
             latestTimestampByLayer: {
                 base: null,
@@ -1616,7 +1617,7 @@
                 pointCloudState.lastFpsUpdateMs = performance.now();
                 clearPointCloudDiagnosticTimer();
                 resetPointCloudData();
-                resetMapPreview();
+                resetMapPreview({ resetLayerTransport: true });
                 resetConsoleOutput();
                 resetWasmControlState();
                 pendingTeleopSamples.clear();
@@ -2590,7 +2591,7 @@
                 return;
             }
 
-            if (mapLayerState.hasLayerFrames) {
+            if (mapLayerState.hasLayerFrames || mapLayerState.hasEverSeenLayerFrames) {
                 return;
             }
             mapPreviewEl.src = `data:image/jpeg;base64,${message.jpeg_b64}`;
@@ -2650,6 +2651,7 @@
 
         function applyBinaryMapLayerUpdate(layer, timestamp, width, height, channels, encodedSize, arrayBuffer) {
             mapLayerState.hasLayerFrames = true;
+            mapLayerState.hasEverSeenLayerFrames = true;
             const layerCanvas = mapLayerCanvasEls[layer];
             const layerCtx = mapLayerCtxByLayer[layer];
             if (!layerCanvas || !layerCtx) {
@@ -3346,9 +3348,13 @@
             schedulePointCloudRender();
         }
 
-        function resetMapPreview() {
+        function resetMapPreview(options = {}) {
+            const { resetLayerTransport = false } = options;
             mapFrameCount = 0;
             mapLayerState.hasLayerFrames = false;
+            if (resetLayerTransport) {
+                mapLayerState.hasEverSeenLayerFrames = false;
+            }
             mapLayerState.displayedTimestamp = null;
             mapLayerState.latestTimestampByLayer = {
                 base: null,
@@ -4098,6 +4104,7 @@
             }
             const shouldShowBasePreviewFallback =
                 mapLayerToggleEls.base.checked &&
+                !mapLayerState.hasEverSeenLayerFrames &&
                 !hasBaseMapLayer() &&
                 Boolean(mapPreviewEl.getAttribute('src'));
             const useStructuredPlannerOverlay = plannerTelemetryState.hasStructuredTelemetry;
@@ -4267,7 +4274,7 @@
             updateTeleopMetricDisplay();
             initPointCloudViewer();
             resetPointCloudData();
-            resetMapPreview();
+            resetMapPreview({ resetLayerTransport: true });
             resetMlOverlay();
             resetConsoleOutput();
             resetWasmControlState();
