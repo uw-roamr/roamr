@@ -15,7 +15,7 @@ namespace mapping {
   constexpr int mapHeight = 256;
 
   constexpr float mapMaxRangeMeters = 1.8f;
-  constexpr float mapMinZ = 0.07f; // drop ground (world Z up)
+  constexpr float mapMinZ = 0.03f; // drop ground (world Z up)
   constexpr float mapMaxZ = 0.25f; // drop ceiling/background
   // Sensor height above world origin (meters). Use to convert sensor-relative Z to world Z.
   constexpr float sensorHeightMeters = 0.20f;
