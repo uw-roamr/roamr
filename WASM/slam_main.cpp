@@ -101,6 +101,8 @@ static sensors::WheelOdometryData g_latest_wheel_odom = {0.0, -1, 0, 0, 0};
 static sensors::PoseLog g_pose{-1.0, core::Vector3d{}, core::Vector4d{0.0, 0.0, 0.0, 1.0}};
 static constexpr size_t kPoseHistoryCapacity = 256;
 static core::RingBuffer<sensors::PoseLog, kPoseHistoryCapacity> g_pose_history;
+static constexpr size_t kImuPoseHistoryCapacity = 512;
+static core::RingBuffer<sensors::PoseLog, kImuPoseHistoryCapacity> g_imu_pose_history;
 static std::atomic<bool> g_scan_active{false};
 static std::atomic<bool> g_scan_requested{false};
 static std::atomic<uint64_t> g_completed_scan_count{0};
@@ -769,6 +771,23 @@ static void record_pose_history_locked(const sensors::PoseLog& pose) {
     g_pose_history.push(pose);
 }
 
+static void record_imu_pose_history_locked(const sensors::PoseLog& pose) {
+    if (pose.timestamp <= 0.0) {
+        return;
+    }
+    if (!g_imu_pose_history.empty()) {
+        sensors::PoseLog& back = g_imu_pose_history.back();
+        if (pose.timestamp < back.timestamp) {
+            return;
+        }
+        if (pose.timestamp == back.timestamp) {
+            back = pose;
+            return;
+        }
+    }
+    g_imu_pose_history.push(pose);
+}
+
 static bool sample_pose_at_timestamp_locked(double timestamp, sensors::PoseLog* out) {
     if (!out || timestamp <= 0.0 || g_pose_history.empty()) {
         return false;
@@ -802,6 +821,44 @@ static bool sample_pose_at_timestamp_locked(double timestamp, sensors::PoseLog* 
             prev.translation.x + (next.translation.x - prev.translation.x) * alpha,
             prev.translation.y + (next.translation.y - prev.translation.y) * alpha,
             prev.translation.z + (next.translation.z - prev.translation.z) * alpha};
+        out->quaternion = quat_nlerp(prev.quaternion, next.quaternion, alpha);
+        return true;
+    }
+
+    *out = back;
+    return true;
+}
+
+static bool sample_imu_pose_at_timestamp_locked(double timestamp, sensors::PoseLog* out) {
+    if (!out || timestamp <= 0.0 || g_imu_pose_history.empty()) {
+        return false;
+    }
+    const size_t history_size = g_imu_pose_history.size();
+    const sensors::PoseLog& front = g_imu_pose_history.front();
+    if (timestamp <= front.timestamp || history_size == 1) {
+        *out = front;
+        return true;
+    }
+    const sensors::PoseLog& back = g_imu_pose_history.back();
+    if (timestamp >= back.timestamp) {
+        *out = back;
+        return true;
+    }
+
+    for (size_t i = 1; i < history_size; ++i) {
+        const sensors::PoseLog& prev = g_imu_pose_history.at(i - 1);
+        const sensors::PoseLog& next = g_imu_pose_history.at(i);
+        if (timestamp > next.timestamp) {
+            continue;
+        }
+        const double span = next.timestamp - prev.timestamp;
+        if (span <= 1e-6) {
+            *out = next;
+            return true;
+        }
+        const double alpha = std::clamp((timestamp - prev.timestamp) / span, 0.0, 1.0);
+        out->timestamp = timestamp;
+        out->translation = core::Vector3d{};
         out->quaternion = quat_nlerp(prev.quaternion, next.quaternion, alpha);
         return true;
     }
@@ -872,6 +929,17 @@ static int claim_lidar_free_slot_locked() {
     return -1;
 }
 
+static void refresh_latest_queued_lidar_timestamp_locked() {
+    if (g_lc_ready_size == 0) {
+        g_latest_queued_lidar_timestamp = -1.0;
+        return;
+    }
+    const size_t newest_idx =
+        (g_lc_ready_head + g_lc_ready_size - 1) % g_lc_ready_queue.size();
+    g_latest_queued_lidar_timestamp =
+        g_lc_buffers[g_lc_ready_queue[newest_idx]].timestamp;
+}
+
 static void push_lidar_ready_slot_locked(int slot_idx) {
     const size_t tail = (g_lc_ready_head + g_lc_ready_size) % g_lc_ready_queue.size();
     g_lc_ready_queue[tail] = slot_idx;
@@ -889,7 +957,36 @@ static int pop_lidar_ready_slot_locked() {
     const int slot_idx = g_lc_ready_queue[g_lc_ready_head];
     g_lc_ready_head = (g_lc_ready_head + 1) % g_lc_ready_queue.size();
     --g_lc_ready_size;
+    refresh_latest_queued_lidar_timestamp_locked();
     return slot_idx;
+}
+
+static double queued_lidar_backlog_seconds_locked() {
+    if (g_lc_ready_size <= 1 || g_latest_queued_lidar_timestamp <= 0.0) {
+        return 0.0;
+    }
+    const int oldest_slot_idx = g_lc_ready_queue[g_lc_ready_head];
+    const double oldest_timestamp = g_lc_buffers[oldest_slot_idx].timestamp;
+    if (oldest_timestamp <= 0.0 || oldest_timestamp >= g_latest_queued_lidar_timestamp) {
+        return 0.0;
+    }
+    return g_latest_queued_lidar_timestamp - oldest_timestamp;
+}
+
+static size_t drop_oldest_queued_lidar_frames_locked(size_t frames_to_keep) {
+    if (frames_to_keep == 0) {
+        frames_to_keep = 1;
+    }
+    size_t dropped = 0;
+    while (g_lc_ready_size > frames_to_keep) {
+        const int slot_idx = pop_lidar_ready_slot_locked();
+        if (slot_idx < 0) {
+            break;
+        }
+        g_lc_slot_states[slot_idx] = LidarSlotState::FREE;
+        ++dropped;
+    }
+    return dropped;
 }
 
 static core::PoseSE2d pose_log_to_se2(const sensors::PoseLog& pose) {
@@ -1003,8 +1100,10 @@ static constexpr double kTelemetryPoseRenderMinIntervalSec = 0.03;
 static constexpr double kPoseTrailMinDistanceM = 0.015;
 static constexpr double kPoseTrailMinYawDeltaRad = 3.0 * core::pi / 180.0;
 static constexpr double kPoseTrailMinIntervalSec = 0.03;
-static constexpr double kTelemetryStaticRenderMinIntervalSec = 0.15;
+static constexpr double kTelemetryStaticRenderMinIntervalSec = 0.08;
 static constexpr int32_t kSemanticMappingLoopSleepMs = 125;
+static constexpr double kLidarQueueCoalesceBacklogSec = 0.08;
+static constexpr size_t kLidarQueueCoalesceKeepFrames = 1;
 
 struct OuterLoopTurnPidConfig {
     double kp_omega_per_rad;
@@ -1360,6 +1459,7 @@ int main(){
                     {
                         std::lock_guard<std::mutex> lk(m_pose);
                         g_pose.quaternion = pose_copy.quaternion;
+                        record_imu_pose_history_locked(pose_copy);
                         if (pose_source == PoseSource::IMU) {
                             g_pose.timestamp = pose_copy.timestamp;
                         }
@@ -1595,6 +1695,7 @@ int main(){
         int ready_idx = -1;
         size_t queue_depth_before_pop = 0;
         double newest_queued_lidar_timestamp = -1.0;
+        size_t dropped_stale_queue_frames = 0;
         {
             std::unique_lock<std::mutex> lk(g_lc_cv_mutex);
             if (!g_lc_cv.wait_for(
@@ -1615,12 +1716,25 @@ int main(){
                 }
                 continue;
             }
+            const bool should_coalesce_queue =
+                g_lc_ready_size > 1 &&
+                (g_scan_active.load(std::memory_order_acquire) ||
+                 g_lc_ready_size >= 3 ||
+                 queued_lidar_backlog_seconds_locked() >=
+                     kLidarQueueCoalesceBacklogSec);
+            if (should_coalesce_queue) {
+                dropped_stale_queue_frames = drop_oldest_queued_lidar_frames_locked(
+                    kLidarQueueCoalesceKeepFrames);
+            }
             queue_depth_before_pop = g_lc_ready_size;
             newest_queued_lidar_timestamp = g_latest_queued_lidar_timestamp;
             ready_idx = pop_lidar_ready_slot_locked();
             if (ready_idx >= 0) {
                 g_lc_slot_states[ready_idx] = LidarSlotState::READING;
             }
+        }
+        if (dropped_stale_queue_frames > 0) {
+            g_lc_cv.notify_all();
         }
         if (ready_idx < 0) {
             std::this_thread::yield();
@@ -2311,14 +2425,21 @@ int main(){
                 continue;
             }
 
+            core::Vector4d fused_imu_quaternion{};
+            bool have_fused_imu_quaternion = false;
             if (pose_source == PoseSource::fused_IMU_wheel_odom) {
-                core::Vector4d imu_quat_copy;
+                sensors::PoseLog imu_pose_sample{};
                 {
                     std::lock_guard<std::mutex> lk(m_pose);
-                    imu_quat_copy = g_pose.quaternion;
+                    if (!sample_imu_pose_at_timestamp_locked(odom.timestamp, &imu_pose_sample)) {
+                        imu_pose_sample.quaternion = g_pose.quaternion;
+                        imu_pose_sample.timestamp = odom.timestamp;
+                    }
                 }
+                fused_imu_quaternion = imu_pose_sample.quaternion;
+                have_fused_imu_quaternion = true;
                 const double imu_yaw = core::quat_to_euler_yaw(
-                        core::quat_normalize(imu_quat_copy));
+                        core::quat_normalize(imu_pose_sample.quaternion));
                 // In fused mode, wheel odometry contributes distance while IMU yaw
                 // is used continuously as the robot heading.
                 sensors::integrate_wheel_odometry(odom, imu_yaw, wheel_pose);
@@ -2336,6 +2457,9 @@ int main(){
                     const core::Vector4d wheel_quaternion{
                         0.0, 0.0, std::sin(wheel_pose.theta * 0.5), std::cos(wheel_pose.theta * 0.5)};
                     g_pose.quaternion = wheel_quaternion;
+                } else if (pose_source == PoseSource::fused_IMU_wheel_odom &&
+                           have_fused_imu_quaternion) {
+                    g_pose.quaternion = fused_imu_quaternion;
                 }
                 pose_copy = g_pose;
                 record_pose_history_locked(pose_copy);

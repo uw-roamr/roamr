@@ -201,27 +201,15 @@ void draw_map_pixels(
     float scale,
     float off_x,
     float off_y) {
-  for (int32_t py = 0; py < s_cur_h; ++py) {
-    for (int32_t px = 0; px < s_cur_w; ++px) {
-      const int32_t gx = static_cast<int32_t>(
-          (static_cast<float>(px) - off_x) / scale);
-      const int32_t gy = snapshot.meta.height - 1 - static_cast<int32_t>(
-          (static_cast<float>(py) - off_y) / scale);
-
-      uint8_t r = 128;
-      uint8_t g = 128;
-      uint8_t b = 128;
-      if (gx >= 0 && gx < snapshot.meta.width &&
-          gy >= 0 && gy < snapshot.meta.height) {
-        const int32_t idx = gx + gy * snapshot.meta.width;
-        const int8_t occ = snapshot.occupancy[static_cast<size_t>(idx)];
-        if (occ >= 0) {
-          r = occ >= 50 ? 255 : 0;
-          g = r;
-          b = r;
-        }
+  for (int32_t gy = 0; gy < snapshot.meta.height; ++gy) {
+    for (int32_t gx = 0; gx < snapshot.meta.width; ++gx) {
+      const int32_t idx = gx + gy * snapshot.meta.width;
+      const int8_t occ = snapshot.occupancy[static_cast<size_t>(idx)];
+      if (occ < 0) {
+        continue;
       }
-      paint_pixel(px, py, r, g, b, 255);
+      const uint8_t value = occ >= 50 ? 255 : 0;
+      paint_grid_cell(snapshot, gx, gy, scale, off_x, off_y, value, value, value, 255);
     }
   }
 }
@@ -233,20 +221,12 @@ void draw_inflation_pixels(
     float off_x,
     float off_y,
     uint8_t alpha) {
-  for (int32_t py = 0; py < s_cur_h; ++py) {
-    for (int32_t px = 0; px < s_cur_w; ++px) {
-      const int32_t gx = static_cast<int32_t>(
-          (static_cast<float>(px) - off_x) / scale);
-      const int32_t gy = snapshot.meta.height - 1 - static_cast<int32_t>(
-          (static_cast<float>(py) - off_y) / scale);
-      if (gx < 0 || gx >= snapshot.meta.width ||
-          gy < 0 || gy >= snapshot.meta.height) {
-        continue;
-      }
+  for (int32_t gy = 0; gy < snapshot.meta.height; ++gy) {
+    for (int32_t gx = 0; gx < snapshot.meta.width; ++gx) {
       if (!costmap.is_inflated_blocked(gx, gy) || costmap.is_source_occupied(gx, gy)) {
         continue;
       }
-      paint_pixel(px, py, 210, 140, 140, alpha);
+      paint_grid_cell(snapshot, gx, gy, scale, off_x, off_y, 210, 140, 140, alpha);
     }
   }
 }

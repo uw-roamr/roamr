@@ -31,6 +31,9 @@ namespace mapping {
   constexpr int kFreeRayBins = 512;
   constexpr int kMaxRawPointsPerScan = 12000;
   constexpr int kMapPreprocessSlices = 1;
+  constexpr float kAlwaysKeepHitRangeMeters = 0.35f;
+  constexpr float kPrimaryHitSupportRangeToleranceMeters = 0.12f;
+  constexpr float kSecondaryHitSupportRangeToleranceMeters = 0.18f;
 
 
   struct MapPerfWindow {
@@ -133,6 +136,64 @@ namespace mapping {
     const int hit_end = ((free_bin + 1) * kHitRayBins + kFreeRayBins - 1) / kFreeRayBins;
     for (int hit_bin = hit_begin; hit_bin < std::min(hit_end, kHitRayBins); ++hit_bin) {
       if (hit_bins[hit_bin].has_hit) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  inline int wrap_bin_index(int bin, int bin_count) {
+    if (bin_count <= 0) {
+      return 0;
+    }
+    bin %= bin_count;
+    if (bin < 0) {
+      bin += bin_count;
+    }
+    return bin;
+  }
+
+  inline bool hit_bin_has_neighbor_support(
+      int hit_bin,
+      const std::array<HitDirectionalBinSample, kHitRayBins>& hit_bins) {
+    const HitDirectionalBinSample& center = hit_bins[hit_bin];
+    if (!center.has_hit) {
+      return false;
+    }
+    if (center.hit_range2 <=
+        static_cast<double>(kAlwaysKeepHitRangeMeters * kAlwaysKeepHitRangeMeters)) {
+      return true;
+    }
+
+    const double center_range = std::sqrt(center.hit_range2);
+    for (int offset = 1; offset <= 2; ++offset) {
+      const double max_range_delta =
+          (offset == 1)
+              ? static_cast<double>(kPrimaryHitSupportRangeToleranceMeters)
+              : static_cast<double>(kSecondaryHitSupportRangeToleranceMeters);
+      for (const int direction : {-1, 1}) {
+        const HitDirectionalBinSample& neighbor =
+            hit_bins[wrap_bin_index(hit_bin + direction * offset, kHitRayBins)];
+        if (!neighbor.has_hit) {
+          continue;
+        }
+        const double neighbor_range = std::sqrt(neighbor.hit_range2);
+        if (std::abs(neighbor_range - center_range) <= max_range_delta) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  inline bool free_bin_overlaps_supported_hit(
+      int free_bin,
+      const std::array<HitDirectionalBinSample, kHitRayBins>& hit_bins,
+      const std::array<uint8_t, kHitRayBins>& supported_hit_bins) {
+    const int hit_begin = (free_bin * kHitRayBins) / kFreeRayBins;
+    const int hit_end = ((free_bin + 1) * kHitRayBins + kFreeRayBins - 1) / kFreeRayBins;
+    for (int hit_bin = hit_begin; hit_bin < std::min(hit_end, kHitRayBins); ++hit_bin) {
+      if (supported_hit_bins[hit_bin] != 0 && hit_bins[hit_bin].has_hit) {
         return true;
       }
     }
@@ -324,6 +385,7 @@ namespace mapping {
     int free_points = 0;
     std::array<HitDirectionalBinSample, kHitRayBins> hit_ray_bins{};
     std::array<FreeDirectionalBinSample, kFreeRayBins> free_ray_bins{};
+    std::array<uint8_t, kHitRayBins> supported_hit_bins{};
     reset_directional_bins(&hit_ray_bins);
     reset_directional_bins(&free_ray_bins);
     int32_t start_x = 0;
@@ -403,9 +465,16 @@ namespace mapping {
             std::chrono::steady_clock::now() - classify_started_at)
             .count();
 
+    for (int hit_bin = 0; hit_bin < kHitRayBins; ++hit_bin) {
+      supported_hit_bins[hit_bin] =
+          hit_bin_has_neighbor_support(hit_bin, hit_ray_bins) ? 1u : 0u;
+    }
+
     const auto hit_integrate_started_at = std::chrono::steady_clock::now();
-    for (const HitDirectionalBinSample& bin : hit_ray_bins) {
-      if (!bin.has_hit || used_points >= kMaxMapPoints || !ensure_scan_ready()) {
+    for (int hit_bin = 0; hit_bin < kHitRayBins; ++hit_bin) {
+      const HitDirectionalBinSample& bin = hit_ray_bins[hit_bin];
+      if (!bin.has_hit || supported_hit_bins[hit_bin] == 0 ||
+          used_points >= kMaxMapPoints || !ensure_scan_ready()) {
         continue;
       }
       map.integrate_hit_world(
@@ -427,7 +496,7 @@ namespace mapping {
     const auto free_integrate_started_at = std::chrono::steady_clock::now();
     for (int free_bin = 0; free_bin < kFreeRayBins; ++free_bin) {
       const FreeDirectionalBinSample& bin = free_ray_bins[free_bin];
-      if (free_bin_overlaps_hit(free_bin, hit_ray_bins)) {
+      if (free_bin_overlaps_supported_hit(free_bin, hit_ray_bins, supported_hit_bins)) {
         continue;
       }
       if (bin.has_free && free_points < kMaxFreeRays && ensure_scan_ready()) {
