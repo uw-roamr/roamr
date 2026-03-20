@@ -51,6 +51,7 @@ static std::mutex g_plan_publish_mutex;
 static planning::bridge::PlanningOverlay g_latest_plan_overlay;
 static std::mutex g_planner_wake_mutex;
 static std::condition_variable g_planner_wake_cv;
+static bool g_planner_wake_requested = false;
 static constexpr size_t kPlannerDeltaQueueCapacity = 16;
 
 struct MapDeltaEvent {
@@ -612,6 +613,10 @@ static bool pose_log_valid(const sensors::PoseLog& pose) {
 }
 
 static void notify_planner_wake() {
+    {
+        std::lock_guard<std::mutex> lk(g_planner_wake_mutex);
+        g_planner_wake_requested = true;
+    }
     g_planner_wake_cv.notify_one();
 }
 
@@ -621,6 +626,7 @@ static void enqueue_planner_delta_event(
     std::vector<planning::GridCoord> newly_occupied_cells) {
     {
         std::lock_guard<std::mutex> lk(g_planner_wake_mutex);
+        g_planner_wake_requested = true;
         if (g_planner_delta_queue.size() >= kPlannerDeltaQueueCapacity) {
             g_planner_delta_queue.pop_front();
             g_planner_delta_overflowed = true;
@@ -1226,6 +1232,7 @@ int main(){
             scan_4x90(motors, m_pose);
             g_scan_active.store(false, std::memory_order_release);
             g_completed_scan_count.fetch_add(1, std::memory_order_acq_rel);
+            notify_planner_wake();
             g_initial_spin_done.store(true, std::memory_order_release);
             set_autonomy_substate(autonomy::AutonomySubstate::PLANNER_INIT, "initial_spin_complete");
         }
@@ -1246,6 +1253,7 @@ int main(){
                 scan_4x90(motors, m_pose);
                 g_scan_active.store(false, std::memory_order_release);
                 g_completed_scan_count.fetch_add(1, std::memory_order_acq_rel);
+                notify_planner_wake();
                 if (g_planner_initialized.load(std::memory_order_acquire)) {
                     set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "scan_complete");
                 } else {
@@ -1716,16 +1724,21 @@ int main(){
         uint64_t final_frontier_scan_target_count = 0;
         uint64_t frontier_exhaustion_scan_baseline_count =
             g_completed_scan_count.load(std::memory_order_acquire);
+        uint64_t last_observed_completed_scan_count =
+            frontier_exhaustion_scan_baseline_count;
 
         while(true){
             // Wake on planner notifications, but also poll periodically so a missed
             // notify cannot stall replanning.
+            bool planner_wake_requested = false;
             {
                 std::unique_lock<std::mutex> lk(g_planner_wake_mutex);
                 g_planner_wake_cv.wait_for(
                     lk,
                     std::chrono::milliseconds(kPlannerPollMs),
-                    []{ return !g_planner_delta_queue.empty(); });
+                    []{ return g_planner_wake_requested || !g_planner_delta_queue.empty(); });
+                planner_wake_requested = g_planner_wake_requested;
+                g_planner_wake_requested = false;
                 drain_planner_delta_events_locked(&pending_delta_events, &delta_overflowed);
             }
             if (g_no_reachable_frontiers_terminal.load(std::memory_order_acquire)) {
@@ -1780,6 +1793,8 @@ int main(){
             const bool goal_changed = goal_revision != last_goal_revision;
             const uint64_t completed_scan_count =
                 g_completed_scan_count.load(std::memory_order_acquire);
+            const bool scan_count_changed =
+                completed_scan_count != last_observed_completed_scan_count;
             if (final_frontier_scan_pending &&
                 completed_scan_count >= final_frontier_scan_target_count) {
                 final_frontier_scan_pending = false;
@@ -1826,6 +1841,10 @@ int main(){
                             << " last_start_cell=(" << last_start_cell.x << "," << last_start_cell.y << ")"
                             << " map_changed=" << (map_changed ? 1 : 0)
                             << " goal_changed=" << (goal_changed ? 1 : 0)
+                            << " planner_wake_requested=" << (planner_wake_requested ? 1 : 0)
+                            << " scan_count_changed=" << (scan_count_changed ? 1 : 0)
+                            << " completed_scan_count=" << completed_scan_count
+                            << " last_completed_scan_count=" << last_observed_completed_scan_count
                             << " manual_goal_active=" << (manual_goal_active ? 1 : 0)
                             << " start_cell_changed=" << (start_cell_changed ? 1 : 0)
                             << " have_active_overlay_path=" << (have_active_overlay_path ? 1 : 0)
@@ -1842,10 +1861,12 @@ int main(){
             if (!goal_changed &&
                 !last_planned_revision &&
                 !map_changed &&
-                !start_cell_changed) {
+                !start_cell_changed &&
+                !scan_count_changed) {
                 if (kEnablePlannerWakeLogs) {
                     wasm_log_line("case 1: no changes and no valid plan");
                 }
+                last_observed_completed_scan_count = completed_scan_count;
                 continue;
             }
             // Skip case 2: a valid plan already exists and nothing relevant has changed —
@@ -1853,10 +1874,12 @@ int main(){
             if (!goal_changed &&
                 last_planned_revision > 0 &&
                 !map_changed &&
-                !start_cell_changed) {
+                !start_cell_changed &&
+                !scan_count_changed) {
                 if (kEnablePlannerWakeLogs) {
                     wasm_log_line("case 2: valid plan and path is good");
                 }
+                last_observed_completed_scan_count = completed_scan_count;
                 continue;
             }
             if (map_changed &&
@@ -1902,6 +1925,7 @@ int main(){
                 last_start_cell = start_cell;
                 have_last_start_cell = true;
             }
+            last_observed_completed_scan_count = completed_scan_count;
             {
                 std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
                 g_latest_plan_overlay = std::move(overlay);
