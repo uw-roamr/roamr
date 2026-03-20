@@ -13,7 +13,7 @@ namespace mapping {
   constexpr int mapHeight = 256;
 
   constexpr float mapMaxRangeMeters = 1.8f;
-  constexpr float mapMinZ = 0.15f; // drop ground (world Z up)
+  constexpr float mapMinZ = -1.0f; // drop ground (world Z up)
   constexpr float mapMaxZ = 0.22f; // tuned upper cutoff: lower noise without the 0.25 drift tradeoff
   // Sensor height above world origin (meters). Use to convert sensor-relative Z to world Z.
   constexpr float sensorHeightMeters = 0.20f;
