@@ -579,34 +579,16 @@ FrontierPlanResult plan_to_nearest_frontier(
             heading_delta_rad(map, start_cell, planned.path_grid.back(), start_heading_rad);
 
         bool better = false;
-        std::string candidate_reason;
         if (best_cluster_size < 0 || cluster_size > best_cluster_size + kClusterNearEqualCells) {
           better = true;
-          candidate_reason = "larger_cluster";
         } else if (std::abs(cluster_size - best_cluster_size) <= kClusterNearEqualCells) {
           if (candidate_length > best_path_length + 1e-6) {
             better = true;
-            candidate_reason = "near_equal_cluster_longer_path";
           } else if (std::abs(candidate_length - best_path_length) <= 1e-6 &&
                      candidate_heading_delta + 1e-6 < best_heading_delta) {
             better = true;
-            candidate_reason = "near_equal_cluster_heading_tiebreak";
           }
         }
-
-        std::ostringstream candidate_log;
-        candidate_log << "[planning] frontier candidate seed=("
-                      << goal_seed.x << "," << goal_seed.y << ")"
-                      << " attempt=" << (seed_index + 1) << "/" << seed_attempt_count
-                      << " standoff_goal=("
-                      << planned.path_grid.back().x << "," << planned.path_grid.back().y << ")"
-                      << " cluster_size=" << cluster_size
-                      << " path_length_m=" << candidate_length
-                      << " applied_standoff_m=" << applied_standoff_m
-                      << " heading_delta_rad=" << candidate_heading_delta
-                      << " decision=" << (better ? "chosen" : "rejected")
-                      << " reason=" << (better ? candidate_reason : "ranked_lower");
-        wasm_log_line(candidate_log.str());
 
         if (!better) {
           continue;
@@ -628,20 +610,11 @@ FrontierPlanResult plan_to_nearest_frontier(
         result.selected_goal_standoff_m = applied_standoff_m;
       }
 
-      if (!cluster_had_plan) {
-        std::ostringstream cluster_log;
-        cluster_log << "[planning] frontier cluster rejected cluster_size="
-                    << cluster_size
-                    << " attempts=" << seed_attempt_count
-                    << " reason=no_seed_plan";
-        wasm_log_line(cluster_log.str());
-      }
     }
   };
 
   evaluate_clusters(cfg.min_cluster_size);
   if (!result.success && cfg.min_cluster_size > 1) {
-    wasm_log_line("[planning] retrying frontier selection with smaller clusters");
     evaluate_clusters(1);
   }
 

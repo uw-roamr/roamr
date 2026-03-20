@@ -5,9 +5,7 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
 #include <cmath>
-#include <iostream>
 #include <limits>
 
 namespace mapping {
@@ -19,30 +17,9 @@ namespace mapping {
   constexpr float mapMaxZ = 0.18f; // tighten upper cutoff to reject outside-maze returns
   // Sensor height above world origin (meters). Use to convert sensor-relative Z to world Z.
   constexpr float sensorHeightMeters = 0.20f;
-
-  // logging: include camera image in the filtered lidar frame (expensive copy).
-  constexpr bool kLogIncludeImage = false;
-  // Keep rerun point payload bounded to reduce JSON encode + websocket pressure.
-  constexpr int kLogMaxPoints = 4000;
-  // Color map-eligible 3D points in rerun for fast filter debugging.
-  constexpr bool kLogHighlightFiltered = true;
-  constexpr double kMapLogIntervalSec = 0.1;
   constexpr int kOccupancyRayBins = 512;
   constexpr int kMaxRawPointsPerScan = 12000;
   constexpr int kMapPreprocessSlices = 1;
-
-
-  struct MapPerfWindow {
-    std::chrono::steady_clock::time_point window_start = std::chrono::steady_clock::now();
-    int calls = 0;
-    int total_points_sum = 0;
-    int used_points_sum = 0;
-    double point_loop_ms_sum = 0.0;
-    double draw_ms_sum = 0.0;
-    double total_ms_sum = 0.0;
-  };
-
-  static MapPerfWindow g_map_perf_window;
 
   struct DirectionalBinSample {
     bool has_hit = false;
@@ -54,11 +31,6 @@ namespace mapping {
     double free_world_x = 0.0;
     double free_world_y = 0.0;
   };
-
-  inline double elapsed_ms(const std::chrono::steady_clock::time_point& start,
-                           const std::chrono::steady_clock::time_point& end) {
-    return std::chrono::duration<double, std::milli>(end - start).count();
-  }
 
   inline int ray_bin_from_angle(double angle_rad) {
     const double wrapped = core::normalize_angle(angle_rad);
@@ -184,13 +156,9 @@ namespace mapping {
                           const core::PoseSE3d& world_T_base_link,
                           double timestamp,
                           uint64_t map_revision,
-                          MapSnapshot* out_snapshot,
-                          double* out_occupancy_copy_seconds) {
+                          MapSnapshot* out_snapshot) {
     if (!out_snapshot) {
       return false;
-    }
-    if (out_occupancy_copy_seconds) {
-      *out_occupancy_copy_seconds = 0.0;
     }
 
     OccupancyGridMetadata meta{};
@@ -210,16 +178,9 @@ namespace mapping {
     if (out_snapshot->occupancy.size() != occupancy_size) {
       out_snapshot->occupancy.resize(occupancy_size, static_cast<int8_t>(-1));
     }
-    const auto occupancy_copy_started_at = std::chrono::steady_clock::now();
     const int32_t copied = map.get_occupancy_grid(
         out_snapshot->occupancy.data(),
         static_cast<int32_t>(out_snapshot->occupancy.size()));
-    if (out_occupancy_copy_seconds) {
-      *out_occupancy_copy_seconds =
-          std::chrono::duration<double>(
-              std::chrono::steady_clock::now() - occupancy_copy_started_at)
-              .count();
-    }
     if (copied != meta.width * meta.height) {
       return false;
     }
@@ -229,13 +190,8 @@ namespace mapping {
   void update_map_from_lidar(Map& map,
                              const sensors::LidarCameraData& lc_data,
                              const core::PoseSE3d& world_T_base_link,
-                             std::vector<planning::GridCoord>* out_newly_occupied_cells,
-                             MapUpdatePerf* out_perf
-                            ) {
+                             std::vector<planning::GridCoord>* out_newly_occupied_cells) {
     const int total_points = static_cast<int>(lc_data.points_size / 3);
-    if (out_perf) {
-      *out_perf = MapUpdatePerf{};
-    }
     if (total_points <= 0) return;
     if (out_newly_occupied_cells) {
       out_newly_occupied_cells->clear();
@@ -289,7 +245,6 @@ namespace mapping {
         t_lidar_to_world.y,
         yaw};
 
-    constexpr float max_range2 = mapMaxRangeMeters * mapMaxRangeMeters;
     int used_points = 0;
     int free_points = 0;
     std::array<DirectionalBinSample, kOccupancyRayBins> ray_bins{};
@@ -309,7 +264,6 @@ namespace mapping {
     const int point_stride =
         std::max(1, (total_points + kMaxRawPointsPerScan - 1) / kMaxRawPointsPerScan);
 
-    const auto classify_started_at = std::chrono::steady_clock::now();
     if constexpr (kMapPreprocessSlices == 1) {
       classify_lidar_points_into_directional_bins(
           lc_data,
@@ -360,12 +314,7 @@ namespace mapping {
         merge_directional_bins(slice_bins[slice_idx], &ray_bins);
       }
     }
-    const double classify_seconds =
-        std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - classify_started_at)
-            .count();
 
-    const auto hit_integrate_started_at = std::chrono::steady_clock::now();
     for (const DirectionalBinSample& bin : ray_bins) {
       if (!bin.has_hit || used_points >= kMaxMapPoints || !ensure_scan_ready()) {
         continue;
@@ -381,12 +330,7 @@ namespace mapping {
           s_newly_occupied_stamp);
       ++used_points;
     }
-    const double hit_integrate_seconds =
-        std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - hit_integrate_started_at)
-            .count();
 
-    const auto free_integrate_started_at = std::chrono::steady_clock::now();
     for (const DirectionalBinSample& bin : ray_bins) {
       if (bin.has_hit) {
         continue;
@@ -399,17 +343,6 @@ namespace mapping {
             bin.free_world_y);
         ++free_points;
       }
-    }
-    const double free_integrate_seconds =
-        std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - free_integrate_started_at)
-            .count();
-    if (out_perf) {
-      out_perf->classify_seconds = classify_seconds;
-      out_perf->hit_integrate_seconds = hit_integrate_seconds;
-      out_perf->free_integrate_seconds = free_integrate_seconds;
-      out_perf->selected_hit_bins = static_cast<size_t>(used_points);
-      out_perf->selected_free_bins = static_cast<size_t>(free_points);
     }
   }
 }//namespace mapping

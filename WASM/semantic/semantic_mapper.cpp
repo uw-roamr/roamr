@@ -201,21 +201,8 @@ void SemanticMapper::collect_candidate_detections(
 void SemanticMapper::log_detection_skip(
     double frame_timestamp,
     double lidar_timestamp) const {
-  if (frame_timestamp <= 0.0 || lidar_timestamp <= 0.0) {
-    return;
-  }
-  const double anchor_timestamp = std::max(frame_timestamp, lidar_timestamp);
-  if (last_timestamp_mismatch_log_timestamp_ > 0.0 &&
-      (anchor_timestamp - last_timestamp_mismatch_log_timestamp_) < 1.0) {
-    return;
-  }
-  std::ostringstream log;
-  log << "[semantic] skipping frame due to timestamp mismatch frame_t="
-      << frame_timestamp
-      << " lidar_t=" << lidar_timestamp
-      << " dt=" << std::fabs(frame_timestamp - lidar_timestamp);
-  wasm_log_line(log.str());
-  last_timestamp_mismatch_log_timestamp_ = anchor_timestamp;
+  (void)frame_timestamp;
+  (void)lidar_timestamp;
 }
 
 void SemanticMapper::process_lidar_frame(
@@ -235,17 +222,22 @@ void SemanticMapper::process_lidar_frame(
   }
 
   ml::RunLatestCameraFrameRequest request{};
+  static int32_t last_logged_inference_status = ml::kSuccess;
   const int32_t status = ml::run_latest_camera_frame(model_id_, &request);
   if (status == ml::kNoFrameAvailable) {
     return;
   }
   if (status != ml::kSuccess) {
-    std::ostringstream log;
-    log << "[semantic] inference failed status=" << ml::status_name(status)
-        << " code=" << status;
-    wasm_log_line(log.str());
+    if (status != last_logged_inference_status) {
+      std::ostringstream log;
+      log << "[semantic] inference failed status=" << ml::status_name(status)
+          << " code=" << status;
+      wasm_log_line(log.str());
+      last_logged_inference_status = status;
+    }
     return;
   }
+  last_logged_inference_status = ml::kSuccess;
   if (request.frame_timestamp <= 0.0 ||
       request.frame_timestamp == last_processed_frame_timestamp_) {
     return;
@@ -273,13 +265,6 @@ void SemanticMapper::process_lidar_frame(
     }
     LidarBoundingBoxQueryResult lidar_query{};
     if (!query_lidar_bbox_coordinates(lidar_data, box, &lidar_query)) {
-      std::ostringstream log;
-      log << "[semantic] " << label_name(candidate.label)
-          << " bbox had no LiDAR correspondence"
-          << " score=" << candidate.score
-          << " bbox=(" << box.x_min << "," << box.y_min << ")-("
-          << box.x_max << "," << box.y_max << ")";
-      wasm_log_line(log.str());
       continue;
     }
 
@@ -289,16 +274,6 @@ void SemanticMapper::process_lidar_frame(
     footprint_world_points.reserve(lidar_query.inlier_body_points.size());
     for (const core::Vector3d& body_point : lidar_query.inlier_body_points) {
       footprint_world_points.push_back(body_point_to_world_point(body_point, pose));
-    }
-    {
-      std::ostringstream log;
-      log << detection_log_label(candidate.label)
-          << " score=" << candidate.score
-          << " world=(" << world_point.x << "," << world_point.y << ","
-          << world_point.z << ")"
-          << " bbox_points=" << lidar_query.matched_points
-          << " inliers=" << lidar_query.inlier_points;
-      wasm_log_line(log.str());
     }
     upsert_landmark(
         candidate.label,
@@ -352,14 +327,6 @@ void SemanticMapper::upsert_landmark(
     landmarks_.push_back(landmark);
     landmark_revision_.fetch_add(1, std::memory_order_acq_rel);
 
-    std::ostringstream log;
-    log << "[semantic] new landmark id=" << landmark.id
-        << " label=" << label_name(label)
-        << " world=(" << world_point.x << "," << world_point.y << "," << world_point.z << ")"
-        << " score=" << score
-        << " bbox_points=" << matched_points
-        << " inliers=" << inlier_points;
-    wasm_log_line(log.str());
     return;
   }
 

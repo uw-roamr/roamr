@@ -49,49 +49,6 @@ GridCoord g_last_frontier_plan_start{};
 std::chrono::steady_clock::time_point g_last_auto_frontier_plan_time =
     std::chrono::steady_clock::time_point::min();
 
-struct FrontierProfileWindow {
-  std::chrono::steady_clock::time_point window_start =
-      std::chrono::steady_clock::time_point::min();
-  int32_t samples = 0;
-  double total_ms_sum = 0.0;
-  double total_ms_max = 0.0;
-  double inflate_detection_ms_sum = 0.0;
-  double inflate_detection_ms_max = 0.0;
-  double inflate_planner_ms_sum = 0.0;
-  double inflate_planner_ms_max = 0.0;
-  double reachable_ms_sum = 0.0;
-  double reachable_ms_max = 0.0;
-  double detect_frontiers_ms_sum = 0.0;
-  double detect_frontiers_ms_max = 0.0;
-  double cluster_ms_sum = 0.0;
-  double cluster_ms_max = 0.0;
-  double centroid_ms_sum = 0.0;
-  double centroid_ms_max = 0.0;
-  double approach_ms_sum = 0.0;
-  double approach_ms_max = 0.0;
-  double path_ms_sum = 0.0;
-  double path_ms_max = 0.0;
-  double standoff_ms_sum = 0.0;
-  double standoff_ms_max = 0.0;
-  double publish_ms_sum = 0.0;
-  double publish_ms_max = 0.0;
-  double frontier_cell_count_sum = 0.0;
-  double frontier_cell_count_max = 0.0;
-  double centroid_count_sum = 0.0;
-  double centroid_count_max = 0.0;
-  double cluster_count_sum = 0.0;
-  double cluster_count_max = 0.0;
-  double attempted_window_size_m_sum = 0.0;
-  double attempted_window_size_m_max = 0.0;
-  double adaptive_attempts_sum = 0.0;
-  double adaptive_attempts_max = 0.0;
-  double full_map_fallback_sum = 0.0;
-  double full_map_fallback_max = 0.0;
-};
-
-std::mutex g_frontier_profile_mutex;
-FrontierProfileWindow g_frontier_profile_window;
-
 PlannerConfig build_planner_config() {
   return mapping::default_navigation_costmap_config();
 }
@@ -308,116 +265,6 @@ bool same_path_world(
     }
   }
   return true;
-}
-
-void record_frontier_profile(
-    const FrontierPlanResult& planned,
-    double publish_ms) {
-  constexpr double kFrontierProfileWindowSec = 3.0;
-  std::lock_guard<std::mutex> lk(g_frontier_profile_mutex);
-  FrontierProfileWindow& window = g_frontier_profile_window;
-  const auto now = std::chrono::steady_clock::now();
-  if (window.window_start == std::chrono::steady_clock::time_point::min()) {
-    window.window_start = now;
-  }
-
-  auto accumulate = [](double value, double* sum, double* max_value) {
-    *sum += value;
-    if (value > *max_value) {
-      *max_value = value;
-    }
-  };
-
-  ++window.samples;
-  accumulate(planned.perf.total_ms, &window.total_ms_sum, &window.total_ms_max);
-  accumulate(
-      planned.perf.inflate_detection_ms,
-      &window.inflate_detection_ms_sum,
-      &window.inflate_detection_ms_max);
-  accumulate(
-      planned.perf.inflate_planner_ms,
-      &window.inflate_planner_ms_sum,
-      &window.inflate_planner_ms_max);
-  accumulate(planned.perf.reachable_ms, &window.reachable_ms_sum, &window.reachable_ms_max);
-  accumulate(
-      planned.perf.detect_frontiers_ms,
-      &window.detect_frontiers_ms_sum,
-      &window.detect_frontiers_ms_max);
-  accumulate(planned.perf.cluster_ms, &window.cluster_ms_sum, &window.cluster_ms_max);
-  accumulate(planned.perf.centroid_ms, &window.centroid_ms_sum, &window.centroid_ms_max);
-  accumulate(planned.perf.approach_ms, &window.approach_ms_sum, &window.approach_ms_max);
-  accumulate(planned.perf.path_ms, &window.path_ms_sum, &window.path_ms_max);
-  accumulate(planned.perf.standoff_ms, &window.standoff_ms_sum, &window.standoff_ms_max);
-  accumulate(publish_ms, &window.publish_ms_sum, &window.publish_ms_max);
-  accumulate(
-      static_cast<double>(planned.frontier_cell_count),
-      &window.frontier_cell_count_sum,
-      &window.frontier_cell_count_max);
-  accumulate(
-      static_cast<double>(planned.frontier_cells.size()),
-      &window.centroid_count_sum,
-      &window.centroid_count_max);
-  accumulate(
-      static_cast<double>(planned.cluster_count),
-      &window.cluster_count_sum,
-      &window.cluster_count_max);
-  accumulate(
-      planned.perf.attempted_window_size_m,
-      &window.attempted_window_size_m_sum,
-      &window.attempted_window_size_m_max);
-  accumulate(
-      static_cast<double>(planned.perf.adaptive_attempts),
-      &window.adaptive_attempts_sum,
-      &window.adaptive_attempts_max);
-  accumulate(
-      static_cast<double>(planned.perf.used_full_map_fallback),
-      &window.full_map_fallback_sum,
-      &window.full_map_fallback_max);
-
-  const double window_sec = std::chrono::duration<double>(now - window.window_start).count();
-  if (window_sec < kFrontierProfileWindowSec) {
-    return;
-  }
-
-  const double sample_count = std::max(1, window.samples);
-  std::ostringstream log;
-  log << "[planning][frontier_profile]"
-      << " window=" << window_sec << "s"
-      << " samples=" << window.samples
-      << " total_ms=" << (window.total_ms_sum / sample_count) << "/" << window.total_ms_max
-      << " inflate_detect_ms=" << (window.inflate_detection_ms_sum / sample_count) << "/"
-      << window.inflate_detection_ms_max
-      << " inflate_plan_ms=" << (window.inflate_planner_ms_sum / sample_count) << "/"
-      << window.inflate_planner_ms_max
-      << " reachable_ms=" << (window.reachable_ms_sum / sample_count) << "/"
-      << window.reachable_ms_max
-      << " detect_ms=" << (window.detect_frontiers_ms_sum / sample_count) << "/"
-      << window.detect_frontiers_ms_max
-      << " cluster_ms=" << (window.cluster_ms_sum / sample_count) << "/"
-      << window.cluster_ms_max
-      << " centroid_ms=" << (window.centroid_ms_sum / sample_count) << "/"
-      << window.centroid_ms_max
-      << " approach_ms=" << (window.approach_ms_sum / sample_count) << "/"
-      << window.approach_ms_max
-      << " path_ms=" << (window.path_ms_sum / sample_count) << "/" << window.path_ms_max
-      << " standoff_ms=" << (window.standoff_ms_sum / sample_count) << "/"
-      << window.standoff_ms_max
-      << " publish_ms=" << (window.publish_ms_sum / sample_count) << "/" << window.publish_ms_max
-      << " frontier_cells=" << (window.frontier_cell_count_sum / sample_count) << "/"
-      << window.frontier_cell_count_max
-      << " centroids=" << (window.centroid_count_sum / sample_count) << "/"
-      << window.centroid_count_max
-      << " clusters=" << (window.cluster_count_sum / sample_count) << "/"
-      << window.cluster_count_max
-      << " window_m=" << (window.attempted_window_size_m_sum / sample_count) << "/"
-      << window.attempted_window_size_m_max
-      << " attempts=" << (window.adaptive_attempts_sum / sample_count) << "/"
-      << window.adaptive_attempts_max
-      << " full_map=" << (window.full_map_fallback_sum / sample_count) << "/"
-      << window.full_map_fallback_max;
-  wasm_log_line(log.str());
-  window = FrontierProfileWindow{};
-  window.window_start = now;
 }
 
 bool same_overlay_content(
@@ -811,11 +658,6 @@ PlanningOverlay update_plan_overlay(
           snapshot.pose.x,
           snapshot.pose.y,
           &start_cell)) {
-    std::ostringstream start_log;
-    start_log << "[planning] start pose outside grid pose=("
-              << snapshot.pose.x << "," << snapshot.pose.y << "," << snapshot.pose.theta
-              << ")";
-    // wasm_log_line(start_log.str());
     update_cached_path_world({});
     update_cached_overlay(overlay);
     return overlay;
@@ -861,13 +703,6 @@ PlanningOverlay update_plan_overlay(
         true,
         goal_cell,
         planned);
-    std::ostringstream plan_log;
-    plan_log << "[planning] direct goal result success=" << (planned.success ? 1 : 0)
-             << " start=(" << start_cell.x << "," << start_cell.y << ")"
-             << " goal=(" << goal_cell.x << "," << goal_cell.y << ")"
-             << " path_cells=" << planned.path_grid.size()
-             << " message=" << planned.message;
-    // wasm_log_line(plan_log.str());
     return overlay_from_plan_result(snapshot.map_revision, planned);
   }
 
@@ -891,24 +726,7 @@ PlanningOverlay update_plan_overlay(
       frontier_start_move_cells >= kFrontierLargeMoveThresholdCells;
   if (g_last_auto_frontier_plan_time != std::chrono::steady_clock::time_point::min() &&
       elapsed_sec < kAutoFrontierReplanIntervalSec) {
-    if (force_frontier_replan_for_large_move) {
-      std::ostringstream log;
-      log << "[planning][frontier] bypassing throttle due to large start move"
-          << " start=(" << start_cell.x << "," << start_cell.y << ")"
-          << " last_start=(" << last_frontier_start.x << "," << last_frontier_start.y << ")"
-          << " move_cells=" << frontier_start_move_cells
-          << " elapsed_s=" << elapsed_sec;
-      wasm_log_line(log.str());
-    } else {
-      std::ostringstream log;
-      log << "[planning][frontier] reusing cached path within throttle"
-          << " start=(" << start_cell.x << "," << start_cell.y << ")";
-      if (have_last_frontier_start) {
-        log << " last_start=(" << last_frontier_start.x << "," << last_frontier_start.y << ")"
-            << " move_cells=" << frontier_start_move_cells;
-      }
-      log << " elapsed_s=" << elapsed_sec;
-      wasm_log_line(log.str());
+    if (!force_frontier_replan_for_large_move) {
       PlanningOverlay cached = copy_cached_overlay();
       if (cached.source_map_revision != 0) {
         cached.source_map_revision = snapshot.map_revision;
@@ -919,45 +737,17 @@ PlanningOverlay update_plan_overlay(
   g_last_auto_frontier_plan_time = now;
 
   const FrontierExplorerConfig frontier_cfg = build_frontier_config();
-  const auto frontier_plan_start = std::chrono::steady_clock::now();
   const FrontierPlanResult planned = planning::simplified::plan_to_largest_frontier(
       planner_map,
       core::Vector3d{snapshot.pose.x, snapshot.pose.y, snapshot.pose.theta},
       frontier_cfg);
-  const auto frontier_publish_start = std::chrono::steady_clock::now();
   publish_frontier_planner_telemetry(
       snapshot.map_revision,
       g_goal_revision.load(std::memory_order_acquire),
       snapshot.timestamp,
       start_cell,
       planned);
-  const double frontier_publish_ms = std::chrono::duration<double, std::milli>(
-      std::chrono::steady_clock::now() - frontier_publish_start).count();
-  (void)frontier_plan_start;
-  record_frontier_profile(planned, frontier_publish_ms);
-  std::ostringstream frontier_log;
-  frontier_log << "[planning] frontier result success=" << (planned.success ? 1 : 0)
-               << " start=(" << start_cell.x << "," << start_cell.y << ")"
-               << " frontier_cells=" << planned.frontier_cell_count
-               << " clusters=" << planned.cluster_count
-               << " selected_cluster_size=" << planned.selected_cluster_size
-               << " path_length_m=" << planned.selected_path_length_m
-               << " goal_standoff_m=" << planned.selected_goal_standoff_m
-               << " heading_delta_rad=" << planned.selected_heading_delta_rad
-               << " selected_seed=(" << planned.selected_seed.x << ","
-               << planned.selected_seed.y << ")"
-               << " message=" << planned.message;
-  // wasm_log_line(frontier_log.str());
   if (!planned.success || planned.path_grid.empty()) {
-    if (force_frontier_replan_for_large_move) {
-      std::ostringstream log;
-      log << "[planning][frontier] clearing cached path after forced replan failure"
-          << " start=(" << start_cell.x << "," << start_cell.y << ")"
-          << " last_start=(" << last_frontier_start.x << "," << last_frontier_start.y << ")"
-          << " move_cells=" << frontier_start_move_cells
-          << " message=" << planned.message;
-      wasm_log_line(log.str());
-    }
     PlanningOverlay cached = copy_cached_overlay();
     if (!force_frontier_replan_for_large_move &&
         !cached.path_grid.empty() &&
