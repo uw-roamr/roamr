@@ -107,7 +107,6 @@ static std::atomic<bool> g_scan_active{false};
 static std::atomic<bool> g_scan_requested{false};
 static std::atomic<uint64_t> g_completed_scan_count{0};
 static std::atomic<bool> g_no_reachable_frontiers_terminal{false};
-static std::atomic<double> g_scan_map_skip_until_timestamp{-1.0};
 static std::atomic<bool> g_path_emergency_stop_requested{false};
 
 static bool suppress_runtime_logs_in_terminal_state() {
@@ -259,21 +258,11 @@ static void record_snapshot_consumer_summary_locked(
             ? (static_cast<double>(stats->window_total_lag_revision) /
                static_cast<double>(lag_samples))
             : 0.0;
-    std::ostringstream log;
-    log << "[" << tag << "][snapshot]"
-        << " window=" << elapsed_since_summary << "s"
-        << " req_rev=" << stats->latest_requested_revision
-        << " got_rev=" << stats->latest_received_revision
-        << " lag_rev=" << avg_lag_revision << "/" << stats->window_max_lag_revision
-        << " ready=" << stats->window_ready
-        << " rendered=" << stats->window_rendered
-        << " skipped=" << stats->window_skipped;
     stats->window_ready = 0;
     stats->window_rendered = 0;
     stats->window_skipped = 0;
     stats->window_total_lag_revision = 0;
     stats->window_max_lag_revision = 0;
-    wasm_log_line(log.str());
 }
 
 static void record_snapshot_consumer_event(
@@ -546,26 +535,6 @@ static void record_mapping_frame(
             ? (g_mapping_stats.window_total_lidar_backlog_seconds /
                static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
             : 0.0;
-    std::ostringstream log;
-    log << "[mapping][profile]"
-        << " window=" << elapsed_since_summary << "s"
-        << " frames=" << g_mapping_stats.window_lidar_frames
-        << " hz=" << hz
-        << " integrate_ms=" << avg_integrate_ms << "/" << max_integrate_ms
-        << " classify_ms=" << avg_classify_ms << "/" << max_classify_ms
-        << " hit_integrate_ms=" << avg_hit_integrate_ms << "/" << max_hit_integrate_ms
-        << " free_integrate_ms=" << avg_free_integrate_ms << "/" << max_free_integrate_ms
-        << " snapshot_ms=" << avg_snapshot_ms << "/" << max_snapshot_ms
-        << " snapshot_copy_ms=" << avg_snapshot_copy_ms << "/" << max_snapshot_copy_ms
-        << " map_lock_ms=" << avg_map_lock_ms << "/" << max_map_lock_ms
-        << " publish_ms=" << avg_publish_ms << "/" << max_publish_ms
-        << " total_ms=" << avg_total_ms << "/" << max_total_ms
-        << " pts=" << avg_points << "/" << g_mapping_stats.window_max_points
-        << " hit_bins=" << avg_selected_hit_bins << "/" << g_mapping_stats.window_max_selected_hit_bins
-        << " free_bins=" << avg_selected_free_bins << "/" << g_mapping_stats.window_max_selected_free_bins
-        << " queue_depth=" << avg_queue_depth << "/" << g_mapping_stats.window_max_queue_depth
-        << " backlog_ms=" << avg_lidar_backlog_ms << "/"
-        << (g_mapping_stats.window_max_lidar_backlog_seconds * 1000.0);
     g_mapping_stats.last_summary_time = now;
     g_mapping_stats.window_lidar_frames = 0;
     g_mapping_stats.window_total_integrate_seconds = 0.0;
@@ -596,7 +565,6 @@ static void record_mapping_frame(
     g_mapping_stats.window_max_queue_depth = 0;
     g_mapping_stats.window_total_lidar_backlog_seconds = 0.0;
     g_mapping_stats.window_max_lidar_backlog_seconds = 0.0;
-    wasm_log_line(log.str());
 }
 
 static void log_mapping_rate_summary(const char* reason) {
@@ -1087,7 +1055,6 @@ static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
 static constexpr double kStartupWaitLogIntervalSec = 1.0;
 static constexpr int32_t kPathFollowHoldMs = 60;
-static constexpr double kControlStatusLogIntervalSec = 0.5;
 static constexpr double kGoalCheckLogIntervalSec = 0.5;
 static constexpr double kHostPoseLogIntervalSec = 1.0 / 30.0;
 static constexpr bool kEnableVerboseAutonomyLogs = false;
@@ -2374,7 +2341,6 @@ int main(){
         uint64_t planned_path_revision = 0;
         core::PoseSE2d wheel_pose{};
         double last_goal_check_log_timestamp = -1.0;
-        double last_control_status_log_timestamp = -1.0;
         double last_host_pose_log_timestamp = -1.0;
         bool goal_reached_logged = false;
         bool wheel_odom_origin_initialized = false;
@@ -2387,44 +2353,13 @@ int main(){
                 bool has_path,
                 bool scan_active,
                 bool goal_reached) {
-                if (!reason || odom.timestamp <= 0.0) {
-                    return;
-                }
-                if (suppress_runtime_logs_in_terminal_state()) {
-                    return;
-                }
-                if (last_control_status_log_timestamp >= 0.0 &&
-                    (odom.timestamp - last_control_status_log_timestamp) <
-                        kControlStatusLogIntervalSec) {
-                    return;
-                }
-                std::ostringstream log;
-                log << "[control]"
-                    << " reason=" << reason
-                    << " state=" << static_cast<int>(g_state.load(std::memory_order_acquire))
-                    << " substate=" << autonomy::autonomy_substate_name(
-                           g_autonomy_substate.load(std::memory_order_acquire))
-                    << " scan_active=" << (scan_active ? 1 : 0)
-                    << " has_path=" << (has_path ? 1 : 0)
-                    << " path_revision=" << planned_path_revision
-                    << " waypoints=" << planned_path_world.size()
-                    << " goal_reached=" << (goal_reached ? 1 : 0);
-                if (fused_pose) {
-                    log << " pose=("
-                        << fused_pose->x << "," << fused_pose->y << "," << fused_pose->yaw
-                        << ")";
-                }
-                if (status) {
-                    log << " target_index=" << status->target_index
-                        << " dist_error=" << status->distance_error_m
-                        << " heading_error=" << status->heading_error_rad;
-                }
-                if (command) {
-                    log << " v_cmd=" << command->v_mps
-                        << " omega_cmd=" << command->omega_rad_s;
-                }
-                wasm_log_line(log.str());
-                last_control_status_log_timestamp = odom.timestamp;
+                (void)reason;
+                (void)fused_pose;
+                (void)status;
+                (void)command;
+                (void)has_path;
+                (void)scan_active;
+                (void)goal_reached;
             };
 
         while(true){
