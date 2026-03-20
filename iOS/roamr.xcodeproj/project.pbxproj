@@ -34,6 +34,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				WASM/mapping/map_update.cpp,
 			);
 			target = 56206B162EBAB1C600C8E9E8 /* roamr */;
 		};

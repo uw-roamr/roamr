@@ -1,11 +1,15 @@
 #pragma once
 #include "core/pose/coordinate_frames.h"
 #include "core/math_utils.h"
+#include "core/pose/se3.h"
 #include "core/ring_buffer.h"
 #include "sensors/imu.h"
 
 
 namespace sensors::calibration{
+
+    const core::PoseSE3d base_link_T_lidar(core::Vector3d(-0.025, 0.0, 0.0), core::quat_identity()); // phone is slightly behind ICR
+
     constexpr double expected_gravity = 9.80665;
     constexpr double acc_still = 0.6; // m/s^2
     constexpr double acc_epsilon = 1e-6;

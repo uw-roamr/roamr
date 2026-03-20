@@ -20,19 +20,32 @@ struct MLBundlesTab: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            HStack {
-                Text("Import a folder that contains a top-level .wasm file and its ML sidecar assets.")
-                    .font(.caption)
+            HStack(spacing: 14) {
+                Image(systemName: "shippingbox.fill")
+                    .font(.title2)
                     .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("ML Bundles")
+                        .font(.subheadline.weight(.semibold))
+                    Text("A folder with a .wasm entry point and its model sidecar assets.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 Spacer()
 
-                Button("Import Bundle") {
+                Button {
                     isShowingImporter = true
+                } label: {
+                    Label("Import", systemImage: "square.and.arrow.down")
+                        .font(.caption.weight(.semibold))
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(isRunning)
             }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 14).fill(Color(.secondarySystemBackground)))
             .padding(.horizontal)
             .padding(.top, 8)
 

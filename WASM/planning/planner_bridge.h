@@ -20,6 +20,42 @@ struct PlanningOverlay {
   GridCoord selected_frontier_seed{};
 };
 
+enum class PlannerTelemetryMode : int32_t {
+  None = 0,
+  DirectGoalDStar = 1,
+  Frontier = 2,
+};
+
+struct PlannerTelemetryFrame {
+  uint64_t sequence = 0;
+  uint64_t source_map_revision = 0;
+  uint64_t goal_revision = 0;
+  double timestamp = 0.0;
+  int32_t planner_mode = static_cast<int32_t>(PlannerTelemetryMode::None);
+  int32_t success = 0;
+  int32_t goal_enabled = 0;
+  int32_t start_cell_valid = 0;
+  int32_t start_x = 0;
+  int32_t start_y = 0;
+  int32_t goal_x = 0;
+  int32_t goal_y = 0;
+  int32_t selected_frontier_seed_enabled = 0;
+  int32_t selected_frontier_seed_x = 0;
+  int32_t selected_frontier_seed_y = 0;
+  uint32_t path_grid_ptr = 0;
+  int32_t path_grid_count = 0;
+  uint32_t frontier_candidates_ptr = 0;
+  int32_t frontier_candidates_count = 0;
+  uint32_t selected_frontier_cluster_ptr = 0;
+  int32_t selected_frontier_cluster_count = 0;
+  uint32_t changed_cells_ptr = 0;
+  int32_t changed_cells_count = 0;
+  uint32_t expanded_cells_ptr = 0;
+  int32_t expanded_cells_count = 0;
+  uint32_t message_length = 0;
+  char message[128]{};
+} __attribute__((packed));
+
 using GoalChangeCallback = void (*)();
 
 void set_goal_map_pixel(int32_t x, int32_t y);

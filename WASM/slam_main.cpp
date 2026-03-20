@@ -51,6 +51,7 @@ static std::mutex g_plan_publish_mutex;
 static planning::bridge::PlanningOverlay g_latest_plan_overlay;
 static std::mutex g_planner_wake_mutex;
 static std::condition_variable g_planner_wake_cv;
+static bool g_planner_wake_requested = false;
 static constexpr size_t kPlannerDeltaQueueCapacity = 16;
 
 struct MapDeltaEvent {
@@ -61,15 +62,6 @@ struct MapDeltaEvent {
 
 static std::deque<MapDeltaEvent> g_planner_delta_queue;
 static bool g_planner_delta_overflowed = false;
-
-struct LatestMapState {
-    core::PoseSE3d body_to_world;
-    double timestamp = 0.0;
-    uint64_t revision = 0;
-    bool valid = false;
-};
-
-static LatestMapState g_latest_map_state;
 
 // IMU globals
 static sensors::calibration::IMUHistoryBuffer g_imu_history;
@@ -92,6 +84,7 @@ static std::array<LidarSlotState, kLidarQueueCapacity> g_lc_slot_states{};
 static std::array<int, kLidarQueueCapacity> g_lc_ready_queue{};
 static size_t g_lc_ready_head = 0;
 static size_t g_lc_ready_size = 0;
+static double g_latest_queued_lidar_timestamp = -1.0;
 static std::atomic<bool> g_lc_ready{false};
 static std::mutex g_lc_cv_mutex;
 static std::condition_variable g_lc_cv;
@@ -108,30 +101,122 @@ static sensors::WheelOdometryData g_latest_wheel_odom = {0.0, -1, 0, 0, 0};
 static sensors::PoseLog g_pose{-1.0, core::Vector3d{}, core::Vector4d{0.0, 0.0, 0.0, 1.0}};
 static constexpr size_t kPoseHistoryCapacity = 256;
 static core::RingBuffer<sensors::PoseLog, kPoseHistoryCapacity> g_pose_history;
+static constexpr size_t kImuPoseHistoryCapacity = 512;
+static core::RingBuffer<sensors::PoseLog, kImuPoseHistoryCapacity> g_imu_pose_history;
 static std::atomic<bool> g_scan_active{false};
 static std::atomic<bool> g_scan_requested{false};
 static std::atomic<uint64_t> g_completed_scan_count{0};
 static std::atomic<bool> g_no_reachable_frontiers_terminal{false};
-static std::atomic<double> g_scan_map_skip_until_timestamp{-1.0};
+static std::atomic<bool> g_path_emergency_stop_requested{false};
+static std::mutex g_last_completed_scan_pose_mutex;
+static controls::Pose2D g_last_completed_scan_pose{};
+static bool g_have_last_completed_scan_pose = false;
+
+static bool suppress_runtime_logs_in_terminal_state() {
+    return g_no_reachable_frontiers_terminal.load(std::memory_order_acquire);
+}
 
 struct MappingStats {
     uint64_t integrated_lidar_frames = 0;
     uint64_t window_lidar_frames = 0;
-    double total_update_seconds = 0.0;
-    double max_update_seconds = 0.0;
+    double total_integrate_seconds = 0.0;
+    double max_integrate_seconds = 0.0;
+    double total_classify_seconds = 0.0;
+    double max_classify_seconds = 0.0;
+    double total_hit_integrate_seconds = 0.0;
+    double max_hit_integrate_seconds = 0.0;
+    double total_free_integrate_seconds = 0.0;
+    double max_free_integrate_seconds = 0.0;
+    double total_snapshot_seconds = 0.0;
+    double max_snapshot_seconds = 0.0;
+    double total_snapshot_copy_seconds = 0.0;
+    double max_snapshot_copy_seconds = 0.0;
+    double total_map_lock_seconds = 0.0;
+    double max_map_lock_seconds = 0.0;
+    double total_publish_seconds = 0.0;
+    double max_publish_seconds = 0.0;
+    double total_frame_seconds = 0.0;
+    double max_frame_seconds = 0.0;
     size_t total_points = 0;
     size_t max_points = 0;
-    double window_total_update_seconds = 0.0;
-    double window_max_update_seconds = 0.0;
+    size_t total_selected_hit_bins = 0;
+    size_t max_selected_hit_bins = 0;
+    size_t total_selected_free_bins = 0;
+    size_t max_selected_free_bins = 0;
+    size_t total_queue_depth = 0;
+    size_t max_queue_depth = 0;
+    double total_lidar_backlog_seconds = 0.0;
+    double max_lidar_backlog_seconds = 0.0;
+    double window_total_integrate_seconds = 0.0;
+    double window_max_integrate_seconds = 0.0;
+    double window_total_classify_seconds = 0.0;
+    double window_max_classify_seconds = 0.0;
+    double window_total_hit_integrate_seconds = 0.0;
+    double window_max_hit_integrate_seconds = 0.0;
+    double window_total_free_integrate_seconds = 0.0;
+    double window_max_free_integrate_seconds = 0.0;
+    double window_total_snapshot_seconds = 0.0;
+    double window_max_snapshot_seconds = 0.0;
+    double window_total_snapshot_copy_seconds = 0.0;
+    double window_max_snapshot_copy_seconds = 0.0;
+    double window_total_map_lock_seconds = 0.0;
+    double window_max_map_lock_seconds = 0.0;
+    double window_total_publish_seconds = 0.0;
+    double window_max_publish_seconds = 0.0;
+    double window_total_frame_seconds = 0.0;
+    double window_max_frame_seconds = 0.0;
     size_t window_total_points = 0;
     size_t window_max_points = 0;
+    size_t window_total_selected_hit_bins = 0;
+    size_t window_max_selected_hit_bins = 0;
+    size_t window_total_selected_free_bins = 0;
+    size_t window_max_selected_free_bins = 0;
+    size_t window_total_queue_depth = 0;
+    size_t window_max_queue_depth = 0;
+    double window_total_lidar_backlog_seconds = 0.0;
+    double window_max_lidar_backlog_seconds = 0.0;
     std::chrono::steady_clock::time_point start_time{};
     std::chrono::steady_clock::time_point last_summary_time{};
     bool started = false;
 };
 
 static std::mutex g_mapping_stats_mutex;
+
+constexpr double kFrontierRescanMinTranslationM = 0.30;
+
+void record_completed_scan_pose(const controls::Pose2D& pose) {
+    std::lock_guard<std::mutex> lk(g_last_completed_scan_pose_mutex);
+    g_last_completed_scan_pose = pose;
+    g_have_last_completed_scan_pose = true;
+}
+
+bool should_request_frontier_confirmation_scan(const controls::Pose2D& pose) {
+    std::lock_guard<std::mutex> lk(g_last_completed_scan_pose_mutex);
+    if (!g_have_last_completed_scan_pose) {
+        return true;
+    }
+    const double dx = pose.x - g_last_completed_scan_pose.x;
+    const double dy = pose.y - g_last_completed_scan_pose.y;
+    const double translation_m = std::hypot(dx, dy);
+    return translation_m >= kFrontierRescanMinTranslationM;
+}
 static MappingStats g_mapping_stats;
+struct SnapshotConsumerStats {
+    uint64_t window_ready = 0;
+    uint64_t window_rendered = 0;
+    uint64_t window_skipped = 0;
+    uint64_t latest_requested_revision = 0;
+    uint64_t latest_received_revision = 0;
+    uint64_t window_total_lag_revision = 0;
+    uint64_t window_max_lag_revision = 0;
+    std::chrono::steady_clock::time_point last_summary_time{};
+    bool started = false;
+};
+
+static std::mutex g_planner_snapshot_stats_mutex;
+static SnapshotConsumerStats g_planner_snapshot_stats;
+static std::mutex g_telemetry_snapshot_stats_mutex;
+static SnapshotConsumerStats g_telemetry_snapshot_stats;
 static semantic::SemanticMapper g_semantic_mapper;
 static sensors::LidarCameraDataV2 g_semantic_lidar_buffer{};
 
@@ -164,7 +249,127 @@ static void reset_mapping_stats() {
     g_mapping_stats = MappingStats{};
 }
 
-static void record_mapping_frame(double update_seconds, size_t point_count) {
+static void reset_snapshot_consumer_stats(
+    std::mutex& stats_mutex,
+    SnapshotConsumerStats* stats) {
+    if (!stats) {
+        return;
+    }
+    std::lock_guard<std::mutex> lk(stats_mutex);
+    *stats = SnapshotConsumerStats{};
+}
+
+static void record_snapshot_consumer_summary_locked(
+    SnapshotConsumerStats* stats,
+    const char* tag,
+    double elapsed_since_summary) {
+    if (!stats || !tag) {
+        return;
+    }
+    if (suppress_runtime_logs_in_terminal_state()) {
+        stats->window_ready = 0;
+        stats->window_rendered = 0;
+        stats->window_skipped = 0;
+        stats->window_total_lag_revision = 0;
+        stats->window_max_lag_revision = 0;
+        return;
+    }
+    const uint64_t lag_samples = stats->window_ready + stats->window_skipped;
+    const double avg_lag_revision =
+        (lag_samples > 0)
+            ? (static_cast<double>(stats->window_total_lag_revision) /
+               static_cast<double>(lag_samples))
+            : 0.0;
+    stats->window_ready = 0;
+    stats->window_rendered = 0;
+    stats->window_skipped = 0;
+    stats->window_total_lag_revision = 0;
+    stats->window_max_lag_revision = 0;
+}
+
+static void record_snapshot_consumer_event(
+    std::mutex& stats_mutex,
+    SnapshotConsumerStats* stats,
+    const char* tag,
+    uint64_t requested_revision,
+    uint64_t received_revision,
+    bool skipped,
+    bool rendered) {
+    if (!stats || !tag) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lk(stats_mutex);
+    if (!stats->started) {
+        stats->last_summary_time = now;
+        stats->started = true;
+    }
+    stats->latest_requested_revision = requested_revision;
+    stats->latest_received_revision = received_revision;
+    const uint64_t lag_revision =
+        (requested_revision > received_revision) ? (requested_revision - received_revision) : 0;
+    stats->window_total_lag_revision += lag_revision;
+    stats->window_max_lag_revision = std::max(stats->window_max_lag_revision, lag_revision);
+    if (skipped) {
+        stats->window_skipped += 1;
+    } else {
+        stats->window_ready += 1;
+    }
+    if (rendered) {
+        stats->window_rendered += 1;
+    }
+    const double elapsed_since_summary =
+        std::chrono::duration<double>(now - stats->last_summary_time).count();
+    if (elapsed_since_summary < 3.0) {
+        return;
+    }
+    stats->last_summary_time = now;
+    record_snapshot_consumer_summary_locked(stats, tag, elapsed_since_summary);
+}
+
+static void record_snapshot_consumer_render(
+    std::mutex& stats_mutex,
+    SnapshotConsumerStats* stats,
+    const char* tag,
+    uint64_t rendered_revision) {
+    if (!stats || !tag) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lk(stats_mutex);
+    if (!stats->started) {
+        stats->last_summary_time = now;
+        stats->started = true;
+    }
+    stats->latest_received_revision = rendered_revision;
+    stats->window_rendered += 1;
+    const double elapsed_since_summary =
+        std::chrono::duration<double>(now - stats->last_summary_time).count();
+    if (elapsed_since_summary < 3.0) {
+        return;
+    }
+    stats->last_summary_time = now;
+    record_snapshot_consumer_summary_locked(stats, tag, elapsed_since_summary);
+}
+
+static void record_mapping_frame(
+    double integrate_seconds,
+    double classify_seconds,
+    double hit_integrate_seconds,
+    double free_integrate_seconds,
+    double snapshot_seconds,
+    double snapshot_copy_seconds,
+    double map_lock_seconds,
+    double publish_seconds,
+    double total_seconds,
+    size_t point_count,
+    size_t selected_hit_bins,
+    size_t selected_free_bins,
+    size_t queue_depth,
+    double lidar_backlog_seconds) {
+    if (suppress_runtime_logs_in_terminal_state()) {
+        return;
+    }
     const auto now = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lk(g_mapping_stats_mutex);
     if (!g_mapping_stats.started) {
@@ -174,15 +379,90 @@ static void record_mapping_frame(double update_seconds, size_t point_count) {
     }
     g_mapping_stats.integrated_lidar_frames += 1;
     g_mapping_stats.window_lidar_frames += 1;
-    g_mapping_stats.total_update_seconds += update_seconds;
-    g_mapping_stats.max_update_seconds = std::max(g_mapping_stats.max_update_seconds, update_seconds);
+    g_mapping_stats.total_integrate_seconds += integrate_seconds;
+    g_mapping_stats.max_integrate_seconds =
+        std::max(g_mapping_stats.max_integrate_seconds, integrate_seconds);
+    g_mapping_stats.total_classify_seconds += classify_seconds;
+    g_mapping_stats.max_classify_seconds =
+        std::max(g_mapping_stats.max_classify_seconds, classify_seconds);
+    g_mapping_stats.total_hit_integrate_seconds += hit_integrate_seconds;
+    g_mapping_stats.max_hit_integrate_seconds =
+        std::max(g_mapping_stats.max_hit_integrate_seconds, hit_integrate_seconds);
+    g_mapping_stats.total_free_integrate_seconds += free_integrate_seconds;
+    g_mapping_stats.max_free_integrate_seconds =
+        std::max(g_mapping_stats.max_free_integrate_seconds, free_integrate_seconds);
+    g_mapping_stats.total_snapshot_seconds += snapshot_seconds;
+    g_mapping_stats.max_snapshot_seconds =
+        std::max(g_mapping_stats.max_snapshot_seconds, snapshot_seconds);
+    g_mapping_stats.total_snapshot_copy_seconds += snapshot_copy_seconds;
+    g_mapping_stats.max_snapshot_copy_seconds =
+        std::max(g_mapping_stats.max_snapshot_copy_seconds, snapshot_copy_seconds);
+    g_mapping_stats.total_map_lock_seconds += map_lock_seconds;
+    g_mapping_stats.max_map_lock_seconds =
+        std::max(g_mapping_stats.max_map_lock_seconds, map_lock_seconds);
+    g_mapping_stats.total_publish_seconds += publish_seconds;
+    g_mapping_stats.max_publish_seconds =
+        std::max(g_mapping_stats.max_publish_seconds, publish_seconds);
+    g_mapping_stats.total_frame_seconds += total_seconds;
+    g_mapping_stats.max_frame_seconds =
+        std::max(g_mapping_stats.max_frame_seconds, total_seconds);
     g_mapping_stats.total_points += point_count;
     g_mapping_stats.max_points = std::max(g_mapping_stats.max_points, point_count);
-    g_mapping_stats.window_total_update_seconds += update_seconds;
-    g_mapping_stats.window_max_update_seconds =
-        std::max(g_mapping_stats.window_max_update_seconds, update_seconds);
+    g_mapping_stats.total_selected_hit_bins += selected_hit_bins;
+    g_mapping_stats.max_selected_hit_bins =
+        std::max(g_mapping_stats.max_selected_hit_bins, selected_hit_bins);
+    g_mapping_stats.total_selected_free_bins += selected_free_bins;
+    g_mapping_stats.max_selected_free_bins =
+        std::max(g_mapping_stats.max_selected_free_bins, selected_free_bins);
+    g_mapping_stats.total_queue_depth += queue_depth;
+    g_mapping_stats.max_queue_depth =
+        std::max(g_mapping_stats.max_queue_depth, queue_depth);
+    g_mapping_stats.total_lidar_backlog_seconds += lidar_backlog_seconds;
+    g_mapping_stats.max_lidar_backlog_seconds =
+        std::max(g_mapping_stats.max_lidar_backlog_seconds, lidar_backlog_seconds);
+    g_mapping_stats.window_total_integrate_seconds += integrate_seconds;
+    g_mapping_stats.window_max_integrate_seconds =
+        std::max(g_mapping_stats.window_max_integrate_seconds, integrate_seconds);
+    g_mapping_stats.window_total_classify_seconds += classify_seconds;
+    g_mapping_stats.window_max_classify_seconds =
+        std::max(g_mapping_stats.window_max_classify_seconds, classify_seconds);
+    g_mapping_stats.window_total_hit_integrate_seconds += hit_integrate_seconds;
+    g_mapping_stats.window_max_hit_integrate_seconds =
+        std::max(g_mapping_stats.window_max_hit_integrate_seconds, hit_integrate_seconds);
+    g_mapping_stats.window_total_free_integrate_seconds += free_integrate_seconds;
+    g_mapping_stats.window_max_free_integrate_seconds =
+        std::max(g_mapping_stats.window_max_free_integrate_seconds, free_integrate_seconds);
+    g_mapping_stats.window_total_snapshot_seconds += snapshot_seconds;
+    g_mapping_stats.window_max_snapshot_seconds =
+        std::max(g_mapping_stats.window_max_snapshot_seconds, snapshot_seconds);
+    g_mapping_stats.window_total_snapshot_copy_seconds += snapshot_copy_seconds;
+    g_mapping_stats.window_max_snapshot_copy_seconds =
+        std::max(g_mapping_stats.window_max_snapshot_copy_seconds, snapshot_copy_seconds);
+    g_mapping_stats.window_total_map_lock_seconds += map_lock_seconds;
+    g_mapping_stats.window_max_map_lock_seconds =
+        std::max(g_mapping_stats.window_max_map_lock_seconds, map_lock_seconds);
+    g_mapping_stats.window_total_publish_seconds += publish_seconds;
+    g_mapping_stats.window_max_publish_seconds =
+        std::max(g_mapping_stats.window_max_publish_seconds, publish_seconds);
+    g_mapping_stats.window_total_frame_seconds += total_seconds;
+    g_mapping_stats.window_max_frame_seconds =
+        std::max(g_mapping_stats.window_max_frame_seconds, total_seconds);
     g_mapping_stats.window_total_points += point_count;
     g_mapping_stats.window_max_points = std::max(g_mapping_stats.window_max_points, point_count);
+    g_mapping_stats.window_total_selected_hit_bins += selected_hit_bins;
+    g_mapping_stats.window_max_selected_hit_bins =
+        std::max(g_mapping_stats.window_max_selected_hit_bins, selected_hit_bins);
+    g_mapping_stats.window_total_selected_free_bins += selected_free_bins;
+    g_mapping_stats.window_max_selected_free_bins =
+        std::max(g_mapping_stats.window_max_selected_free_bins, selected_free_bins);
+    g_mapping_stats.window_total_queue_depth += queue_depth;
+    g_mapping_stats.window_max_queue_depth =
+        std::max(g_mapping_stats.window_max_queue_depth, queue_depth);
+    g_mapping_stats.window_total_lidar_backlog_seconds += lidar_backlog_seconds;
+    g_mapping_stats.window_max_lidar_backlog_seconds =
+        std::max(
+            g_mapping_stats.window_max_lidar_backlog_seconds,
+            lidar_backlog_seconds);
     const double summary_interval_seconds = 3.0;
     const double elapsed_since_summary =
         std::chrono::duration<double>(now - g_mapping_stats.last_summary_time).count();
@@ -195,31 +475,118 @@ static void record_mapping_frame(double update_seconds, size_t point_count) {
         (total_mapping_seconds > 1e-6)
             ? (static_cast<double>(g_mapping_stats.integrated_lidar_frames) / total_mapping_seconds)
             : 0.0;
-    const double avg_update_ms =
+    const double avg_integrate_ms =
         (g_mapping_stats.window_lidar_frames > 0)
-            ? (g_mapping_stats.window_total_update_seconds /
+            ? (g_mapping_stats.window_total_integrate_seconds /
                static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
             : 0.0;
-    const double max_update_ms = g_mapping_stats.window_max_update_seconds * 1000.0;
+    const double max_integrate_ms = g_mapping_stats.window_max_integrate_seconds * 1000.0;
+    const double avg_classify_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_classify_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_classify_ms = g_mapping_stats.window_max_classify_seconds * 1000.0;
+    const double avg_hit_integrate_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_hit_integrate_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_hit_integrate_ms =
+        g_mapping_stats.window_max_hit_integrate_seconds * 1000.0;
+    const double avg_free_integrate_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_free_integrate_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_free_integrate_ms =
+        g_mapping_stats.window_max_free_integrate_seconds * 1000.0;
+    const double avg_snapshot_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_snapshot_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_snapshot_ms = g_mapping_stats.window_max_snapshot_seconds * 1000.0;
+    const double avg_snapshot_copy_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_snapshot_copy_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_snapshot_copy_ms =
+        g_mapping_stats.window_max_snapshot_copy_seconds * 1000.0;
+    const double avg_map_lock_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_map_lock_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_map_lock_ms = g_mapping_stats.window_max_map_lock_seconds * 1000.0;
+    const double avg_publish_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_publish_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_publish_ms = g_mapping_stats.window_max_publish_seconds * 1000.0;
+    const double avg_total_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_frame_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
+    const double max_total_ms = g_mapping_stats.window_max_frame_seconds * 1000.0;
     const double avg_points =
         (g_mapping_stats.window_lidar_frames > 0)
             ? (static_cast<double>(g_mapping_stats.window_total_points) /
                static_cast<double>(g_mapping_stats.window_lidar_frames))
             : 0.0;
-    std::ostringstream log;
-    log << "[mapping][profile]"
-        << " window=" << elapsed_since_summary << "s"
-        << " frames=" << g_mapping_stats.window_lidar_frames
-        << " hz=" << hz
-        << " update_ms=" << avg_update_ms << "/" << max_update_ms
-        << " pts=" << avg_points << "/" << g_mapping_stats.window_max_points;
+    const double avg_selected_hit_bins =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (static_cast<double>(g_mapping_stats.window_total_selected_hit_bins) /
+               static_cast<double>(g_mapping_stats.window_lidar_frames))
+            : 0.0;
+    const double avg_selected_free_bins =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (static_cast<double>(g_mapping_stats.window_total_selected_free_bins) /
+               static_cast<double>(g_mapping_stats.window_lidar_frames))
+            : 0.0;
+    const double avg_queue_depth =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (static_cast<double>(g_mapping_stats.window_total_queue_depth) /
+               static_cast<double>(g_mapping_stats.window_lidar_frames))
+            : 0.0;
+    const double avg_lidar_backlog_ms =
+        (g_mapping_stats.window_lidar_frames > 0)
+            ? (g_mapping_stats.window_total_lidar_backlog_seconds /
+               static_cast<double>(g_mapping_stats.window_lidar_frames) * 1000.0)
+            : 0.0;
     g_mapping_stats.last_summary_time = now;
     g_mapping_stats.window_lidar_frames = 0;
-    g_mapping_stats.window_total_update_seconds = 0.0;
-    g_mapping_stats.window_max_update_seconds = 0.0;
+    g_mapping_stats.window_total_integrate_seconds = 0.0;
+    g_mapping_stats.window_max_integrate_seconds = 0.0;
+    g_mapping_stats.window_total_classify_seconds = 0.0;
+    g_mapping_stats.window_max_classify_seconds = 0.0;
+    g_mapping_stats.window_total_hit_integrate_seconds = 0.0;
+    g_mapping_stats.window_max_hit_integrate_seconds = 0.0;
+    g_mapping_stats.window_total_free_integrate_seconds = 0.0;
+    g_mapping_stats.window_max_free_integrate_seconds = 0.0;
+    g_mapping_stats.window_total_snapshot_seconds = 0.0;
+    g_mapping_stats.window_max_snapshot_seconds = 0.0;
+    g_mapping_stats.window_total_snapshot_copy_seconds = 0.0;
+    g_mapping_stats.window_max_snapshot_copy_seconds = 0.0;
+    g_mapping_stats.window_total_map_lock_seconds = 0.0;
+    g_mapping_stats.window_max_map_lock_seconds = 0.0;
+    g_mapping_stats.window_total_publish_seconds = 0.0;
+    g_mapping_stats.window_max_publish_seconds = 0.0;
+    g_mapping_stats.window_total_frame_seconds = 0.0;
+    g_mapping_stats.window_max_frame_seconds = 0.0;
     g_mapping_stats.window_total_points = 0;
     g_mapping_stats.window_max_points = 0;
-    wasm_log_line(log.str());
+    g_mapping_stats.window_total_selected_hit_bins = 0;
+    g_mapping_stats.window_max_selected_hit_bins = 0;
+    g_mapping_stats.window_total_selected_free_bins = 0;
+    g_mapping_stats.window_max_selected_free_bins = 0;
+    g_mapping_stats.window_total_queue_depth = 0;
+    g_mapping_stats.window_max_queue_depth = 0;
+    g_mapping_stats.window_total_lidar_backlog_seconds = 0.0;
+    g_mapping_stats.window_max_lidar_backlog_seconds = 0.0;
 }
 
 static void log_mapping_rate_summary(const char* reason) {
@@ -296,6 +663,10 @@ static bool pose_log_valid(const sensors::PoseLog& pose) {
 }
 
 static void notify_planner_wake() {
+    {
+        std::lock_guard<std::mutex> lk(g_planner_wake_mutex);
+        g_planner_wake_requested = true;
+    }
     g_planner_wake_cv.notify_one();
 }
 
@@ -305,6 +676,7 @@ static void enqueue_planner_delta_event(
     std::vector<planning::GridCoord> newly_occupied_cells) {
     {
         std::lock_guard<std::mutex> lk(g_planner_wake_mutex);
+        g_planner_wake_requested = true;
         if (g_planner_delta_queue.size() >= kPlannerDeltaQueueCapacity) {
             g_planner_delta_queue.pop_front();
             g_planner_delta_overflowed = true;
@@ -333,41 +705,18 @@ static void drain_planner_delta_events_locked(
     g_planner_delta_overflowed = false;
 }
 
-static bool publish_latest_map_snapshot_if_needed(
+static bool copy_published_map_snapshot(
     uint64_t min_revision,
-    mapping::MapSnapshot* out_snapshot = nullptr) {
-    {
-        std::lock_guard<std::mutex> lk(g_map_publish_mutex);
-        if (g_latest_map_snapshot.valid() &&
-            g_latest_map_snapshot.map_revision >= min_revision) {
-            if (out_snapshot) {
-                *out_snapshot = g_latest_map_snapshot;
-            }
-            return true;
-        }
-    }
-
-    mapping::MapSnapshot built_snapshot;
-    {
-        std::lock_guard<std::mutex> lk(g_map_mutex);
-        if (!g_latest_map_state.valid ||
-            g_latest_map_state.revision < min_revision) {
-            return false;
-        }
-        if (!mapping::build_map_snapshot(
-                g_map,
-                g_latest_map_state.body_to_world,
-                g_latest_map_state.timestamp,
-                g_latest_map_state.revision,
-                &built_snapshot)) {
-            return false;
-        }
-    }
-
+    mapping::MapSnapshot* out_snapshot = nullptr,
+    uint64_t* out_published_revision = nullptr) {
     std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+    const uint64_t published_revision = g_latest_map_snapshot.map_revision;
+    if (out_published_revision) {
+        *out_published_revision = published_revision;
+    }
     if (!g_latest_map_snapshot.valid() ||
-        g_latest_map_snapshot.map_revision < built_snapshot.map_revision) {
-        g_latest_map_snapshot = built_snapshot;
+        published_revision < min_revision) {
+        return false;
     }
     if (out_snapshot) {
         *out_snapshot = g_latest_map_snapshot;
@@ -413,6 +762,23 @@ static void record_pose_history_locked(const sensors::PoseLog& pose) {
     g_pose_history.push(pose);
 }
 
+static void record_imu_pose_history_locked(const sensors::PoseLog& pose) {
+    if (pose.timestamp <= 0.0) {
+        return;
+    }
+    if (!g_imu_pose_history.empty()) {
+        sensors::PoseLog& back = g_imu_pose_history.back();
+        if (pose.timestamp < back.timestamp) {
+            return;
+        }
+        if (pose.timestamp == back.timestamp) {
+            back = pose;
+            return;
+        }
+    }
+    g_imu_pose_history.push(pose);
+}
+
 static bool sample_pose_at_timestamp_locked(double timestamp, sensors::PoseLog* out) {
     if (!out || timestamp <= 0.0 || g_pose_history.empty()) {
         return false;
@@ -446,6 +812,44 @@ static bool sample_pose_at_timestamp_locked(double timestamp, sensors::PoseLog* 
             prev.translation.x + (next.translation.x - prev.translation.x) * alpha,
             prev.translation.y + (next.translation.y - prev.translation.y) * alpha,
             prev.translation.z + (next.translation.z - prev.translation.z) * alpha};
+        out->quaternion = quat_nlerp(prev.quaternion, next.quaternion, alpha);
+        return true;
+    }
+
+    *out = back;
+    return true;
+}
+
+static bool sample_imu_pose_at_timestamp_locked(double timestamp, sensors::PoseLog* out) {
+    if (!out || timestamp <= 0.0 || g_imu_pose_history.empty()) {
+        return false;
+    }
+    const size_t history_size = g_imu_pose_history.size();
+    const sensors::PoseLog& front = g_imu_pose_history.front();
+    if (timestamp <= front.timestamp || history_size == 1) {
+        *out = front;
+        return true;
+    }
+    const sensors::PoseLog& back = g_imu_pose_history.back();
+    if (timestamp >= back.timestamp) {
+        *out = back;
+        return true;
+    }
+
+    for (size_t i = 1; i < history_size; ++i) {
+        const sensors::PoseLog& prev = g_imu_pose_history.at(i - 1);
+        const sensors::PoseLog& next = g_imu_pose_history.at(i);
+        if (timestamp > next.timestamp) {
+            continue;
+        }
+        const double span = next.timestamp - prev.timestamp;
+        if (span <= 1e-6) {
+            *out = next;
+            return true;
+        }
+        const double alpha = std::clamp((timestamp - prev.timestamp) / span, 0.0, 1.0);
+        out->timestamp = timestamp;
+        out->translation = core::Vector3d{};
         out->quaternion = quat_nlerp(prev.quaternion, next.quaternion, alpha);
         return true;
     }
@@ -516,10 +920,25 @@ static int claim_lidar_free_slot_locked() {
     return -1;
 }
 
+static void refresh_latest_queued_lidar_timestamp_locked() {
+    if (g_lc_ready_size == 0) {
+        g_latest_queued_lidar_timestamp = -1.0;
+        return;
+    }
+    const size_t newest_idx =
+        (g_lc_ready_head + g_lc_ready_size - 1) % g_lc_ready_queue.size();
+    g_latest_queued_lidar_timestamp =
+        g_lc_buffers[g_lc_ready_queue[newest_idx]].timestamp;
+}
+
 static void push_lidar_ready_slot_locked(int slot_idx) {
     const size_t tail = (g_lc_ready_head + g_lc_ready_size) % g_lc_ready_queue.size();
     g_lc_ready_queue[tail] = slot_idx;
     ++g_lc_ready_size;
+    const double timestamp = g_lc_buffers[slot_idx].timestamp;
+    if (timestamp > g_latest_queued_lidar_timestamp) {
+        g_latest_queued_lidar_timestamp = timestamp;
+    }
 }
 
 static int pop_lidar_ready_slot_locked() {
@@ -529,7 +948,36 @@ static int pop_lidar_ready_slot_locked() {
     const int slot_idx = g_lc_ready_queue[g_lc_ready_head];
     g_lc_ready_head = (g_lc_ready_head + 1) % g_lc_ready_queue.size();
     --g_lc_ready_size;
+    refresh_latest_queued_lidar_timestamp_locked();
     return slot_idx;
+}
+
+static double queued_lidar_backlog_seconds_locked() {
+    if (g_lc_ready_size <= 1 || g_latest_queued_lidar_timestamp <= 0.0) {
+        return 0.0;
+    }
+    const int oldest_slot_idx = g_lc_ready_queue[g_lc_ready_head];
+    const double oldest_timestamp = g_lc_buffers[oldest_slot_idx].timestamp;
+    if (oldest_timestamp <= 0.0 || oldest_timestamp >= g_latest_queued_lidar_timestamp) {
+        return 0.0;
+    }
+    return g_latest_queued_lidar_timestamp - oldest_timestamp;
+}
+
+static size_t drop_oldest_queued_lidar_frames_locked(size_t frames_to_keep) {
+    if (frames_to_keep == 0) {
+        frames_to_keep = 1;
+    }
+    size_t dropped = 0;
+    while (g_lc_ready_size > frames_to_keep) {
+        const int slot_idx = pop_lidar_ready_slot_locked();
+        if (slot_idx < 0) {
+            break;
+        }
+        g_lc_slot_states[slot_idx] = LidarSlotState::FREE;
+        ++dropped;
+    }
+    return dropped;
 }
 
 static core::PoseSE2d pose_log_to_se2(const sensors::PoseLog& pose) {
@@ -627,20 +1075,25 @@ static void log_sensor_config(const RuntimeSensorConfig& config) {
 static constexpr PoseSource pose_source = PoseSource::fused_IMU_wheel_odom;
 static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
-static constexpr int32_t kPathFollowHoldMs = 120;
+static constexpr double kStartupWaitLogIntervalSec = 1.0;
+static constexpr int32_t kPathFollowHoldMs = 60;
 static constexpr double kGoalCheckLogIntervalSec = 0.5;
-static constexpr double kRerunPoseLogIntervalSec = 0.2;
-static constexpr bool kEnableRerunPoseTelemetry = false;
+static constexpr double kHostPoseLogIntervalSec = 1.0 / 30.0;
 static constexpr bool kEnableVerboseAutonomyLogs = false;
 static constexpr bool kEnablePlannerWakeLogs = false;
 static constexpr int32_t kPlannerPollMs = 50;
 static constexpr double kPlannerMinIntervalSec = 0.35;
-static constexpr int32_t kTelemetryRenderIntervalMs = 33;
-static constexpr double kTelemetryPoseRenderMinIntervalSec = 0.15;
-static constexpr double kPoseTrailMinDistanceM = 0.05;
-static constexpr double kPoseTrailMinYawDeltaRad = 10.0 * core::pi / 180.0;
-static constexpr double kPoseTrailMinIntervalSec = 0.05;
+static constexpr int32_t kPlannerStaleStartRetryThresholdCells = 2;
+static constexpr double kPlannerStalePoseRetryMinAgeSec = 0.10;
+static constexpr int32_t kTelemetryRenderIntervalMs = 16;
+static constexpr double kTelemetryPoseRenderMinIntervalSec = 0.03;
+static constexpr double kPoseTrailMinDistanceM = 0.015;
+static constexpr double kPoseTrailMinYawDeltaRad = 3.0 * core::pi / 180.0;
+static constexpr double kPoseTrailMinIntervalSec = 0.03;
+static constexpr double kTelemetryStaticRenderMinIntervalSec = 0.03;
 static constexpr int32_t kSemanticMappingLoopSleepMs = 125;
+static constexpr double kLidarQueueCoalesceBacklogSec = 0.08;
+static constexpr size_t kLidarQueueCoalesceKeepFrames = 1;
 
 struct OuterLoopTurnPidConfig {
     double kp_omega_per_rad;
@@ -662,12 +1115,103 @@ static constexpr OuterLoopTurnPidConfig kScan4x90TurnPidCfg{
     1.5 * core::pi / 180.0};
 
 static constexpr double kScan4x90FinalMinOmegaRadS = 0.05;
+static constexpr double kScan4x90SlowdownWindowRad = 12.0 * core::pi / 180.0;
+static constexpr double kScan4x90IntegralResetWindowRad = 6.0 * core::pi / 180.0;
 static constexpr double kScan4x90YawDeadzoneRad = 2.0 * core::pi / 180.0;
-static constexpr double kScan4x90SettleYawRateRadS = 6.0 * core::pi / 180.0;
-static constexpr int kScan4x90SettleSamplesRequired = 3;
+static constexpr double kScan4x90SettleYawRateRadS = 4.0 * core::pi / 180.0;
+static constexpr int kScan4x90SettleSamplesRequired = 4;
 
 static bool read_scan_odom_sample(sensors::WheelOdometryData* out) {
     return read_latest_wheel_odom_snapshot(out);
+}
+
+struct StartupReadiness {
+    bool imu_required = false;
+    bool wheel_required = false;
+    bool lidar_required = false;
+    bool map_required = true;
+    bool imu_ready = false;
+    bool wheel_ready = false;
+    bool lidar_ready = false;
+    bool map_ready = false;
+};
+
+static bool imu_required() {
+    if (!g_sensor_config.imu_enabled) {
+        return false;
+    }
+    return pose_source == PoseSource::IMU ||
+           pose_source == PoseSource::fused_IMU_wheel_odom;
+}
+
+static bool wheel_required() {
+    if (!g_sensor_config.wheel_odometry_enabled) {
+        return false;
+    }
+    return pose_source == PoseSource::wheel_odom ||
+           pose_source == PoseSource::fused_IMU_wheel_odom;
+}
+
+static bool lidar_required() {
+    return g_sensor_config.lidar_points_enabled;
+}
+
+static bool map_snapshot_ready() {
+    return g_first_map_update_done.load(std::memory_order_acquire);
+}
+
+static StartupReadiness read_startup_readiness() {
+    StartupReadiness readiness;
+    readiness.imu_required = imu_required();
+    readiness.wheel_required = wheel_required();
+    readiness.lidar_required = lidar_required();
+    readiness.imu_ready = g_imu_ready.load(std::memory_order_acquire);
+    readiness.wheel_ready = g_wheel_odom_ready.load(std::memory_order_acquire);
+    readiness.lidar_ready = g_lc_ready.load(std::memory_order_acquire);
+    readiness.map_ready = map_snapshot_ready();
+    return readiness;
+}
+
+static bool autonomy_init_ready() {
+    const StartupReadiness readiness = read_startup_readiness();
+    return (!readiness.imu_required || readiness.imu_ready) &&
+           (!readiness.wheel_required || readiness.wheel_ready) &&
+           (!readiness.lidar_required || readiness.lidar_ready) &&
+           (!readiness.map_required || readiness.map_ready);
+}
+
+static bool autonomy_engaged_ready() {
+    return autonomy_init_ready();
+}
+
+static void maybe_log_startup_waiting(
+    std::chrono::steady_clock::time_point* last_log_at,
+    const StartupReadiness& readiness) {
+    if (!last_log_at) {
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (*last_log_at != std::chrono::steady_clock::time_point::min()) {
+        const double elapsed =
+            std::chrono::duration<double>(now - *last_log_at).count();
+        if (elapsed < kStartupWaitLogIntervalSec) {
+            return;
+        }
+    }
+    if ((!readiness.imu_required || readiness.imu_ready) &&
+        (!readiness.wheel_required || readiness.wheel_ready) &&
+        (!readiness.lidar_required || readiness.lidar_ready) &&
+        readiness.map_ready) {
+        return;
+    }
+    std::ostringstream log;
+    log << "[startup] waiting"
+        << " imu=" << ((!readiness.imu_required || readiness.imu_ready) ? 1 : 0)
+        << " wheel=" << ((!readiness.wheel_required || readiness.wheel_ready) ? 1 : 0)
+        << " lidar=" << ((!readiness.lidar_required || readiness.lidar_ready) ? 1 : 0)
+        << " map=" << (readiness.map_ready ? 1 : 0);
+    wasm_log_line(log.str());
+    *last_log_at = now;
 }
 
 void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
@@ -749,6 +1293,9 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
             }
             settle_samples = 0;
 
+            if (std::abs(yaw_error) <= kScan4x90IntegralResetWindowRad) {
+                integral_term = 0.0;
+            }
             integral_term += yaw_error * dt_seconds;
             const double max_integral_term = kScan4x90TurnPidCfg.integral_limit_rad_s /
                 std::max(1e-6, kScan4x90TurnPidCfg.ki_omega_per_rad_s);
@@ -761,12 +1308,23 @@ void scan_4x90(controls::MotorController& motors, std::mutex& m_pose) {
                 (kScan4x90TurnPidCfg.kp_omega_per_rad * yaw_error) +
                 (kScan4x90TurnPidCfg.ki_omega_per_rad_s * integral_term) +
                 (kScan4x90TurnPidCfg.kd_omega_per_rad * derivative);
+            double max_omega = kScan4x90TurnPidCfg.max_omega_rad_s;
+            double min_omega = kScan4x90TurnPidCfg.min_omega_rad_s;
+            if (std::abs(yaw_error) < kScan4x90SlowdownWindowRad) {
+                const double alpha =
+                    std::clamp(std::abs(yaw_error) / kScan4x90SlowdownWindowRad, 0.0, 1.0);
+                max_omega =
+                    kScan4x90FinalMinOmegaRadS +
+                    alpha * (kScan4x90TurnPidCfg.max_omega_rad_s - kScan4x90FinalMinOmegaRadS);
+                min_omega =
+                    kScan4x90FinalMinOmegaRadS +
+                    alpha * (kScan4x90TurnPidCfg.min_omega_rad_s - kScan4x90FinalMinOmegaRadS);
+            }
             omega_cmd = std::clamp(
                 omega_cmd,
-                -kScan4x90TurnPidCfg.max_omega_rad_s,
-                kScan4x90TurnPidCfg.max_omega_rad_s);
+                -max_omega,
+                max_omega);
 
-            double min_omega = kScan4x90TurnPidCfg.min_omega_rad_s;
             if (std::abs(omega_cmd) < min_omega) {
                 omega_cmd = std::copysign(min_omega, yaw_error);
             }
@@ -818,21 +1376,21 @@ int main(){
 
     std::thread autonomy_thread([&motors, &m_pose](){
         constexpr int kAutonomyFSMSleepMs = 100;
+        auto last_startup_wait_log_at = std::chrono::steady_clock::time_point::min();
 
         // the main high level thread
-        while(!g_imu_ready.load(std::memory_order_acquire) ||
-              !g_lc_ready.load(std::memory_order_acquire)
-        ){
+        while (!autonomy_init_ready()) {
+            maybe_log_startup_waiting(
+                &last_startup_wait_log_at,
+                read_startup_readiness());
             std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
-        }
-        if (pose_source == PoseSource::wheel_odom || pose_source == PoseSource::fused_IMU_wheel_odom){
-            while(!g_wheel_odom_ready.load(std::memory_order_acquire)){
-                std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
-            }
         }
         wasm_log_line("SENSOR_INIT -> AUTONOMY_INIT");
         g_state.store(RobotState::AUTONOMY_INIT, std::memory_order_release);
-        while(!g_first_map_update_done.load(std::memory_order_acquire)){
+        while (!autonomy_engaged_ready()) {
+            maybe_log_startup_waiting(
+                &last_startup_wait_log_at,
+                read_startup_readiness());
             std::this_thread::sleep_for(std::chrono::milliseconds(kAutonomyFSMSleepMs));
         }
 
@@ -841,7 +1399,15 @@ int main(){
             g_scan_active.store(true, std::memory_order_release);
             scan_4x90(motors, m_pose);
             g_scan_active.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> lk(m_pose);
+                record_completed_scan_pose(controls::Pose2D{
+                    g_pose.translation.x,
+                    g_pose.translation.y,
+                    core::quat_to_euler_yaw(g_pose.quaternion)});
+            }
             g_completed_scan_count.fetch_add(1, std::memory_order_acq_rel);
+            notify_planner_wake();
             g_initial_spin_done.store(true, std::memory_order_release);
             set_autonomy_substate(autonomy::AutonomySubstate::PLANNER_INIT, "initial_spin_complete");
         }
@@ -861,7 +1427,15 @@ int main(){
                 g_scan_active.store(true, std::memory_order_release);
                 scan_4x90(motors, m_pose);
                 g_scan_active.store(false, std::memory_order_release);
+                {
+                    std::lock_guard<std::mutex> lk(m_pose);
+                    record_completed_scan_pose(controls::Pose2D{
+                        g_pose.translation.x,
+                        g_pose.translation.y,
+                        core::quat_to_euler_yaw(g_pose.quaternion)});
+                }
                 g_completed_scan_count.fetch_add(1, std::memory_order_acq_rel);
+                notify_planner_wake();
                 if (g_planner_initialized.load(std::memory_order_acquire)) {
                     set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "scan_complete");
                 } else {
@@ -876,8 +1450,6 @@ int main(){
         using Clock = std::chrono::steady_clock;
         const auto target_interval = std::chrono::microseconds(sensors::IMUIntervalMicrosecond);
         double g_last_calib_timestamp = -1.0;
-        double last_rerun_pose_log_timestamp = -1.0;
-
         // initial calibration for gyro and accelerometer biases
         g_imu_calib.init_biases();
         g_imu_preintegrator.reset();
@@ -907,6 +1479,7 @@ int main(){
                     {
                         std::lock_guard<std::mutex> lk(m_pose);
                         g_pose.quaternion = pose_copy.quaternion;
+                        record_imu_pose_history_locked(pose_copy);
                         if (pose_source == PoseSource::IMU) {
                             g_pose.timestamp = pose_copy.timestamp;
                         }
@@ -916,14 +1489,6 @@ int main(){
                         core::recorder::enqueue_pose(
                             pose_copy,
                             core::recorder::PoseDataSource::kIMU);
-                    }
-                    if (kEnableRerunPoseTelemetry &&
-                        pose_copy.timestamp > 0.0 &&
-                        (last_rerun_pose_log_timestamp < 0.0 ||
-                         (pose_copy.timestamp - last_rerun_pose_log_timestamp) >=
-                             kRerunPoseLogIntervalSec)) {
-                        rerun_log_pose(&pose_copy);
-                        last_rerun_pose_log_timestamp = pose_copy.timestamp;
                     }
                 }
                 // wasm_log_line("imu: " + std::to_string(imu_copy.timestamp) + ", " + std::to_string(imu_copy.gyro_z));
@@ -1043,7 +1608,7 @@ int main(){
             });
             lk.unlock();
 
-            rerun_log_lidar_frame(&g_lidar_preview_buffer);
+            host_log_lidar_frame(&g_lidar_preview_buffer);
 
             lk.lock();
             g_lidar_preview_ready = false;
@@ -1113,14 +1678,12 @@ int main(){
       double last_map_timestamp = -1.0;
       double last_empty_queue_log_timestamp = -1.0;
       bool logged_first_mapping_frame = false;
+      mapping::MapSnapshot staged_snapshot;
+      staged_snapshot.occupancy.resize(
+          static_cast<size_t>(mapping::Map::kMapSizeX * mapping::Map::kMapSizeY),
+          static_cast<int8_t>(-1));
       std::vector<planning::GridCoord> newly_occupied_cells;
       newly_occupied_cells.reserve(2048);
-
-      RobotState state;
-      do{
-        state = g_state.load(std::memory_order_acquire);
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      } while (state != RobotState::AUTONOMY_ENGAGED && state != RobotState::AUTONOMY_INIT);
 
       if (pose_source == PoseSource::fused_IMU_wheel_odom || pose_source == PoseSource::wheel_odom){
         while(!g_wheel_odom_ready.load(std::memory_order_acquire)){
@@ -1131,15 +1694,28 @@ int main(){
       {
         std::lock_guard<std::mutex> lk(g_map_mutex);
         mapping::initialize_map(g_map);
-        g_latest_map_state = LatestMapState{};
       }
+      {
+        std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+        g_latest_map_snapshot = mapping::MapSnapshot{};
+      }
+      g_map_update_revision.store(0, std::memory_order_release);
       reset_mapping_stats();
+      reset_snapshot_consumer_stats(
+          g_planner_snapshot_stats_mutex,
+          &g_planner_snapshot_stats);
+      reset_snapshot_consumer_stats(
+          g_telemetry_snapshot_stats_mutex,
+          &g_telemetry_snapshot_stats);
       wasm_log_line("Map initialized");
 
       while(true){
 
         // get a valid lidar-camera frame, then get the most recent pose
         int ready_idx = -1;
+        size_t queue_depth_before_pop = 0;
+        double newest_queued_lidar_timestamp = -1.0;
+        size_t dropped_stale_queue_frames = 0;
         {
             std::unique_lock<std::mutex> lk(g_lc_cv_mutex);
             if (!g_lc_cv.wait_for(
@@ -1160,10 +1736,25 @@ int main(){
                 }
                 continue;
             }
+            const bool should_coalesce_queue =
+                g_lc_ready_size > 1 &&
+                (g_scan_active.load(std::memory_order_acquire) ||
+                 g_lc_ready_size >= 3 ||
+                 queued_lidar_backlog_seconds_locked() >=
+                     kLidarQueueCoalesceBacklogSec);
+            if (should_coalesce_queue) {
+                dropped_stale_queue_frames = drop_oldest_queued_lidar_frames_locked(
+                    kLidarQueueCoalesceKeepFrames);
+            }
+            queue_depth_before_pop = g_lc_ready_size;
+            newest_queued_lidar_timestamp = g_latest_queued_lidar_timestamp;
             ready_idx = pop_lidar_ready_slot_locked();
             if (ready_idx >= 0) {
                 g_lc_slot_states[ready_idx] = LidarSlotState::READING;
             }
+        }
+        if (dropped_stale_queue_frames > 0) {
+            g_lc_cv.notify_all();
         }
         if (ready_idx < 0) {
             std::this_thread::yield();
@@ -1206,6 +1797,11 @@ int main(){
         body_to_world.translation = pose_snapshot.translation;
         const double pose_timestamp = pose_snapshot.timestamp;
         const double candidate_timestamp = std::max(lc_data.timestamp, pose_timestamp);
+        const double lidar_backlog_seconds =
+            (newest_queued_lidar_timestamp > 0.0 &&
+             newest_queued_lidar_timestamp > lc_data.timestamp)
+                ? (newest_queued_lidar_timestamp - lc_data.timestamp)
+                : 0.0;
         if (candidate_timestamp <= 0.0 ||
             (last_map_timestamp > 0.0 && candidate_timestamp <= last_map_timestamp)) {
             {
@@ -1215,37 +1811,114 @@ int main(){
             g_lc_cv.notify_one();
             continue;
         }
+        const auto frame_started_at = std::chrono::steady_clock::now();
         uint64_t map_revision = 0;
+        double integrate_seconds = 0.0;
+        mapping::MapUpdatePerf map_update_perf{};
+        double snapshot_seconds = 0.0;
+        double snapshot_copy_seconds = 0.0;
+        double map_lock_seconds = 0.0;
+        double publish_seconds = 0.0;
+        bool snapshot_ready = false;
+        bool path_invalidated_by_new_occupancy = false;
         newly_occupied_cells.clear();
-        const auto map_update_started_at = std::chrono::steady_clock::now();
         {
+            const auto map_lock_started_at = std::chrono::steady_clock::now();
             std::lock_guard<std::mutex> lk(g_map_mutex);
+            const auto integrate_started_at = std::chrono::steady_clock::now();
             // project the filtered lidar scan into the occupancy grid.
             mapping::update_map_from_lidar(
                 g_map,
                 lc_data,
                 body_to_world,
-                &newly_occupied_cells
+                &newly_occupied_cells,
+                &map_update_perf
             );
+            integrate_seconds =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - integrate_started_at).count();
             map_revision =
-                g_map_update_revision.fetch_add(1, std::memory_order_acq_rel) + 1;
-            g_latest_map_state.body_to_world = body_to_world;
-                g_latest_map_state.timestamp = candidate_timestamp;
-                g_latest_map_state.revision = map_revision;
-                g_latest_map_state.valid = true;
+                g_map_update_revision.load(std::memory_order_acquire) + 1;
+            const auto snapshot_started_at = std::chrono::steady_clock::now();
+            snapshot_ready = mapping::build_map_snapshot(
+                g_map,
+                body_to_world,
+                candidate_timestamp,
+                map_revision,
+                &staged_snapshot,
+                &snapshot_copy_seconds);
+            snapshot_seconds =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - snapshot_started_at).count();
+            map_lock_seconds =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - map_lock_started_at).count();
         }
-        const double map_update_seconds =
-            std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - map_update_started_at).count();
+        if (!snapshot_ready) {
+            {
+                std::lock_guard<std::mutex> lk(g_lc_cv_mutex);
+                g_lc_slot_states[ready_idx] = LidarSlotState::FREE;
+            }
+            g_lc_cv.notify_one();
+            continue;
+        }
+        if (!newly_occupied_cells.empty()) {
+            planning::bridge::PlanningOverlay active_overlay;
+            {
+                std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
+                active_overlay = g_latest_plan_overlay;
+            }
+            if (active_overlay.source_map_revision > 0 &&
+                !active_overlay.path_grid.empty() &&
+                planning::bridge::does_new_occupancy_intersect_overlay_path(
+                    staged_snapshot,
+                    active_overlay,
+                    newly_occupied_cells)) {
+                planning::bridge::invalidate_current_plan();
+                g_path_emergency_stop_requested.store(true, std::memory_order_release);
+                path_invalidated_by_new_occupancy = true;
+            }
+        }
+        {
+            const auto publish_started_at = std::chrono::steady_clock::now();
+            std::lock_guard<std::mutex> lk(g_map_publish_mutex);
+            std::swap(g_latest_map_snapshot, staged_snapshot);
+            g_map_update_revision.store(map_revision, std::memory_order_release);
+            publish_seconds =
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - publish_started_at).count();
+        }
         if (!g_first_map_update_done.load(std::memory_order_relaxed)) {
             g_first_map_update_done.store(true, std::memory_order_release);
         }
-        record_mapping_frame(map_update_seconds, lc_data.points_size / sensors::float_per_point);
         last_map_timestamp = candidate_timestamp;
         enqueue_planner_delta_event(
             map_revision,
             candidate_timestamp,
             std::move(newly_occupied_cells));
+        if (path_invalidated_by_new_occupancy) {
+            set_autonomy_substate(
+                autonomy::AutonomySubstate::WAITING_FOR_PATH,
+                "path_obstructed_by_new_occupancy");
+        }
+        const double total_seconds =
+            std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - frame_started_at).count();
+        record_mapping_frame(
+            integrate_seconds,
+            map_update_perf.classify_seconds,
+            map_update_perf.hit_integrate_seconds,
+            map_update_perf.free_integrate_seconds,
+            snapshot_seconds,
+            snapshot_copy_seconds,
+            map_lock_seconds,
+            publish_seconds,
+            total_seconds,
+            lc_data.points_size / sensors::float_per_point,
+            map_update_perf.selected_hit_bins,
+            map_update_perf.selected_free_bins,
+            queue_depth_before_pop,
+            lidar_backlog_seconds);
 
         // wasm_log_line("map_time: " + std::to_string(last_map_timestamp));
 
@@ -1282,16 +1955,21 @@ int main(){
         uint64_t final_frontier_scan_target_count = 0;
         uint64_t frontier_exhaustion_scan_baseline_count =
             g_completed_scan_count.load(std::memory_order_acquire);
+        uint64_t last_observed_completed_scan_count =
+            frontier_exhaustion_scan_baseline_count;
 
         while(true){
             // Wake on planner notifications, but also poll periodically so a missed
             // notify cannot stall replanning.
+            bool planner_wake_requested = false;
             {
                 std::unique_lock<std::mutex> lk(g_planner_wake_mutex);
                 g_planner_wake_cv.wait_for(
                     lk,
                     std::chrono::milliseconds(kPlannerPollMs),
-                    []{ return !g_planner_delta_queue.empty(); });
+                    []{ return g_planner_wake_requested || !g_planner_delta_queue.empty(); });
+                planner_wake_requested = g_planner_wake_requested;
+                g_planner_wake_requested = false;
                 drain_planner_delta_events_locked(&pending_delta_events, &delta_overflowed);
             }
             if (g_no_reachable_frontiers_terminal.load(std::memory_order_acquire)) {
@@ -1307,27 +1985,31 @@ int main(){
                 required_snapshot_revision =
                     g_map_update_revision.load(std::memory_order_acquire);
             }
-            publish_latest_map_snapshot_if_needed(
+            uint64_t published_snapshot_revision = 0;
+            const bool have_snapshot = copy_published_map_snapshot(
                 required_snapshot_revision,
-                &snapshot);
+                &snapshot,
+                &published_snapshot_revision);
+            record_snapshot_consumer_event(
+                g_planner_snapshot_stats_mutex,
+                &g_planner_snapshot_stats,
+                "planner",
+                required_snapshot_revision,
+                published_snapshot_revision,
+                !have_snapshot,
+                false);
             planning::bridge::PlanningOverlay current_overlay;
-            if (!snapshot.valid()) {
-                std::lock_guard<std::mutex> lk(g_map_publish_mutex);
-                snapshot = g_latest_map_snapshot;
-            }
             {
                 std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
                 current_overlay = g_latest_plan_overlay;
             }
-            if (!snapshot.valid()) {
-                wasm_log_line("snapshot invalid");
+            if (!have_snapshot || !snapshot.valid()) {
                 continue;
             }
 
 
             sensors::PoseLog pose_snapshot{};
             if (read_latest_pose_snapshot(m_pose, &pose_snapshot)) {
-                wasm_log_line("reading pose snapshot");
                 snapshot.pose = pose_log_to_se2(pose_snapshot);
                 snapshot.timestamp = std::max(snapshot.timestamp, pose_snapshot.timestamp);
             }
@@ -1342,6 +2024,8 @@ int main(){
             const bool goal_changed = goal_revision != last_goal_revision;
             const uint64_t completed_scan_count =
                 g_completed_scan_count.load(std::memory_order_acquire);
+            const bool scan_count_changed =
+                completed_scan_count != last_observed_completed_scan_count;
             if (final_frontier_scan_pending &&
                 completed_scan_count >= final_frontier_scan_target_count) {
                 final_frontier_scan_pending = false;
@@ -1365,6 +2049,7 @@ int main(){
             const bool have_active_overlay_path =
                 current_overlay.source_map_revision > 0 &&
                 !current_overlay.path_grid.empty();
+            const bool manual_goal_active = planning::bridge::has_active_goal();
             const bool new_occupancy_hits_path =
                 !goal_changed &&
                 !start_cell_changed &&
@@ -1387,6 +2072,11 @@ int main(){
                             << " last_start_cell=(" << last_start_cell.x << "," << last_start_cell.y << ")"
                             << " map_changed=" << (map_changed ? 1 : 0)
                             << " goal_changed=" << (goal_changed ? 1 : 0)
+                            << " planner_wake_requested=" << (planner_wake_requested ? 1 : 0)
+                            << " scan_count_changed=" << (scan_count_changed ? 1 : 0)
+                            << " completed_scan_count=" << completed_scan_count
+                            << " last_completed_scan_count=" << last_observed_completed_scan_count
+                            << " manual_goal_active=" << (manual_goal_active ? 1 : 0)
                             << " start_cell_changed=" << (start_cell_changed ? 1 : 0)
                             << " have_active_overlay_path=" << (have_active_overlay_path ? 1 : 0)
                             << " delta_events=" << pending_delta_events.size()
@@ -1402,10 +2092,12 @@ int main(){
             if (!goal_changed &&
                 !last_planned_revision &&
                 !map_changed &&
-                !start_cell_changed) {
+                !start_cell_changed &&
+                !scan_count_changed) {
                 if (kEnablePlannerWakeLogs) {
                     wasm_log_line("case 1: no changes and no valid plan");
                 }
+                last_observed_completed_scan_count = completed_scan_count;
                 continue;
             }
             // Skip case 2: a valid plan already exists and nothing relevant has changed —
@@ -1413,14 +2105,17 @@ int main(){
             if (!goal_changed &&
                 last_planned_revision > 0 &&
                 !map_changed &&
-                !start_cell_changed) {
+                !start_cell_changed &&
+                !scan_count_changed) {
                 if (kEnablePlannerWakeLogs) {
                     wasm_log_line("case 2: valid plan and path is good");
                 }
+                last_observed_completed_scan_count = completed_scan_count;
                 continue;
             }
             if (map_changed &&
                 !goal_changed &&
+                manual_goal_active &&
                 !start_cell_changed &&
                 have_active_overlay_path &&
                 !delta_overflowed &&
@@ -1444,14 +2139,13 @@ int main(){
                 set_autonomy_substate(autonomy::AutonomySubstate::GOAL_SELECTION, "auto_frontier_goal");
             }
             set_autonomy_substate(autonomy::AutonomySubstate::PLANNING_GOAL, "update_plan_overlay");
-            planning::bridge::PlanningOverlay overlay =
-                planning::bridge::update_plan_overlay(
-                    snapshot,
-                    kRenderWidth,
-                    kRenderHeight);
+            planning::bridge::PlanningOverlay overlay;
+            overlay = planning::bridge::update_plan_overlay(
+                snapshot,
+                kRenderWidth,
+                kRenderHeight);
             const bool published_path = !overlay.path_grid.empty();
             const bool have_frontier_candidates = !overlay.frontier_candidates.empty();
-            const bool manual_goal_active = planning::bridge::has_active_goal();
             const bool no_reachable_frontiers =
                 !manual_goal_active && !have_frontier_candidates;
             const bool frontier_confirmation_scan_complete =
@@ -1462,6 +2156,7 @@ int main(){
                 last_start_cell = start_cell;
                 have_last_start_cell = true;
             }
+            last_observed_completed_scan_count = completed_scan_count;
             {
                 std::lock_guard<std::mutex> lk(g_plan_publish_mutex);
                 g_latest_plan_overlay = std::move(overlay);
@@ -1514,33 +2209,35 @@ int main(){
     std::thread telemetry_thread([&m_pose](){
         mapping::PoseTrailState pose_trail;
         mapping::MapSnapshot cached_snapshot;
-        planning::bridge::PlanningOverlay cached_overlay;
         std::vector<semantic::SemanticLandmark> semantic_landmarks;
         uint64_t last_rendered_map_revision = 0;
-        uint64_t last_rendered_overlay_revision = 0;
         uint64_t last_rendered_semantic_revision = 0;
-        uint64_t cached_overlay_revision = 0;
         uint64_t cached_semantic_revision = 0;
         double cached_snapshot_timestamp = -1.0;
-        double last_rendered_pose_timestamp = -1.0;
-        double last_rendered_pose_visual_timestamp = -1.0;
         double last_pose_trail_timestamp = -1.0;
         core::PoseSE2d last_trail_pose{};
         bool have_last_trail_pose = false;
+        auto last_static_render_at = std::chrono::steady_clock::time_point::min();
         while (true) {
             const uint64_t latest_map_revision =
                 g_map_update_revision.load(std::memory_order_acquire);
             if (!cached_snapshot.valid() ||
                 cached_snapshot.map_revision != latest_map_revision) {
                 mapping::MapSnapshot next_snapshot;
-                publish_latest_map_snapshot_if_needed(
+                uint64_t published_snapshot_revision = 0;
+                const bool have_snapshot = copy_published_map_snapshot(
                     latest_map_revision,
-                    &next_snapshot);
-                if (!next_snapshot.valid()) {
-                    std::lock_guard<std::mutex> lk(g_map_publish_mutex);
-                    next_snapshot = g_latest_map_snapshot;
-                }
-                if (!next_snapshot.valid()) {
+                    &next_snapshot,
+                    &published_snapshot_revision);
+                record_snapshot_consumer_event(
+                    g_telemetry_snapshot_stats_mutex,
+                    &g_telemetry_snapshot_stats,
+                    "telemetry",
+                    latest_map_revision,
+                    published_snapshot_revision,
+                    !have_snapshot,
+                    false);
+                if (!have_snapshot || !next_snapshot.valid()) {
                     std::this_thread::sleep_for(
                         std::chrono::milliseconds(kTelemetryRenderIntervalMs));
                     continue;
@@ -1549,12 +2246,6 @@ int main(){
                 cached_snapshot_timestamp = cached_snapshot.timestamp;
             }
 
-            const uint64_t overlay_revision = planning::bridge::latest_overlay_revision();
-            if (overlay_revision != cached_overlay_revision) {
-                std::lock_guard<std::mutex> plan_lk(g_plan_publish_mutex);
-                cached_overlay = g_latest_plan_overlay;
-                cached_overlay_revision = overlay_revision;
-            }
             const uint64_t semantic_revision = g_semantic_mapper.landmark_revision();
             if (semantic_revision != cached_semantic_revision) {
                 g_semantic_mapper.copy_landmarks(&semantic_landmarks);
@@ -1562,7 +2253,6 @@ int main(){
             }
 
             mapping::MapSnapshot& snapshot = cached_snapshot;
-            planning::bridge::PlanningOverlay& overlay = cached_overlay;
             if (!snapshot.valid()) {
                 std::this_thread::sleep_for(
                     std::chrono::milliseconds(kTelemetryRenderIntervalMs));
@@ -1579,16 +2269,24 @@ int main(){
             snapshot.timestamp = std::max(cached_snapshot_timestamp, pose_snapshot.timestamp);
 
             const bool map_changed = snapshot.map_revision != last_rendered_map_revision;
-            const bool overlay_changed = overlay_revision != last_rendered_overlay_revision;
             const bool semantic_changed = semantic_revision != last_rendered_semantic_revision;
-            const bool pose_changed = pose_snapshot.timestamp > last_rendered_pose_timestamp;
-            const bool pose_visual_changed =
-                pose_changed &&
-                ((last_rendered_pose_visual_timestamp < 0.0) ||
-                 ((pose_snapshot.timestamp - last_rendered_pose_visual_timestamp) >=
-                  kTelemetryPoseRenderMinIntervalSec));
+            if (!map_changed && !semantic_changed) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(kTelemetryRenderIntervalMs));
+                continue;
+            }
 
-            bool pose_trail_changed = false;
+            const auto now = std::chrono::steady_clock::now();
+            if (last_static_render_at != std::chrono::steady_clock::time_point::min()) {
+                const double elapsed_since_static_render =
+                    std::chrono::duration<double>(now - last_static_render_at).count();
+                if (elapsed_since_static_render < kTelemetryStaticRenderMinIntervalSec) {
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(kTelemetryRenderIntervalMs));
+                    continue;
+                }
+            }
+
             const bool time_gate =
                 (last_pose_trail_timestamp < 0.0) ||
                 ((pose_snapshot.timestamp - last_pose_trail_timestamp) >=
@@ -1611,32 +2309,23 @@ int main(){
                 last_trail_pose = snapshot.pose;
                 last_pose_trail_timestamp = pose_snapshot.timestamp;
                 have_last_trail_pose = true;
-                pose_trail_changed = true;
-            }
-            if (!map_changed &&
-                !overlay_changed &&
-                !semantic_changed &&
-                !pose_visual_changed &&
-                !pose_trail_changed) {
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(kTelemetryRenderIntervalMs));
-                continue;
             }
             mapping::visualization::render_map_frame(
                 snapshot,
                 pose_trail,
-                overlay,
                 semantic_landmarks,
                 semantic_revision,
-                overlay_revision,
                 kRenderWidth,
                 kRenderHeight,
                 g_map_image);
             last_rendered_map_revision = snapshot.map_revision;
-            last_rendered_overlay_revision = overlay_revision;
             last_rendered_semantic_revision = semantic_revision;
-            last_rendered_pose_timestamp = pose_snapshot.timestamp;
-            last_rendered_pose_visual_timestamp = pose_snapshot.timestamp;
+            last_static_render_at = now;
+            record_snapshot_consumer_render(
+                g_telemetry_snapshot_stats_mutex,
+                &g_telemetry_snapshot_stats,
+                "telemetry",
+                snapshot.map_revision);
             std::this_thread::sleep_for(
                 std::chrono::milliseconds(kTelemetryRenderIntervalMs));
         }
@@ -1650,8 +2339,26 @@ int main(){
         uint64_t planned_path_revision = 0;
         core::PoseSE2d wheel_pose{};
         double last_goal_check_log_timestamp = -1.0;
+        double last_host_pose_log_timestamp = -1.0;
         bool goal_reached_logged = false;
         bool wheel_odom_origin_initialized = false;
+
+        auto maybe_log_control_status =
+            [&](const char* reason,
+                const controls::Pose2D* fused_pose,
+                const controls::PathFollowerStatus* status,
+                const controls::TwistCommand* command,
+                bool has_path,
+                bool scan_active,
+                bool goal_reached) {
+                (void)reason;
+                (void)fused_pose;
+                (void)status;
+                (void)command;
+                (void)has_path;
+                (void)scan_active;
+                (void)goal_reached;
+            };
 
         while(true){
             read_wheel_odometry(&odom);
@@ -1675,14 +2382,21 @@ int main(){
                 continue;
             }
 
+            core::Vector4d fused_imu_quaternion{};
+            bool have_fused_imu_quaternion = false;
             if (pose_source == PoseSource::fused_IMU_wheel_odom) {
-                core::Vector4d imu_quat_copy;
+                sensors::PoseLog imu_pose_sample{};
                 {
                     std::lock_guard<std::mutex> lk(m_pose);
-                    imu_quat_copy = g_pose.quaternion;
+                    if (!sample_imu_pose_at_timestamp_locked(odom.timestamp, &imu_pose_sample)) {
+                        imu_pose_sample.quaternion = g_pose.quaternion;
+                        imu_pose_sample.timestamp = odom.timestamp;
+                    }
                 }
+                fused_imu_quaternion = imu_pose_sample.quaternion;
+                have_fused_imu_quaternion = true;
                 const double imu_yaw = core::quat_to_euler_yaw(
-                        core::quat_normalize(imu_quat_copy));
+                        core::quat_normalize(imu_pose_sample.quaternion));
                 // In fused mode, wheel odometry contributes distance while IMU yaw
                 // is used continuously as the robot heading.
                 sensors::integrate_wheel_odometry(odom, imu_yaw, wheel_pose);
@@ -1700,6 +2414,9 @@ int main(){
                     const core::Vector4d wheel_quaternion{
                         0.0, 0.0, std::sin(wheel_pose.theta * 0.5), std::cos(wheel_pose.theta * 0.5)};
                     g_pose.quaternion = wheel_quaternion;
+                } else if (pose_source == PoseSource::fused_IMU_wheel_odom &&
+                           have_fused_imu_quaternion) {
+                    g_pose.quaternion = fused_imu_quaternion;
                 }
                 pose_copy = g_pose;
                 record_pose_history_locked(pose_copy);
@@ -1717,18 +2434,64 @@ int main(){
                 pose_copy = g_pose;
             }
 
+            if (pose_copy.timestamp > 0.0 &&
+                (last_host_pose_log_timestamp < 0.0 ||
+                 (pose_copy.timestamp - last_host_pose_log_timestamp) >=
+                     kHostPoseLogIntervalSec)) {
+                host_log_pose(&pose_copy);
+                last_host_pose_log_timestamp = pose_copy.timestamp;
+            }
+
             const RobotState state = g_state.load(std::memory_order_acquire);
             if (state != RobotState::AUTONOMY_ENGAGED) {
                 continue;
+            }
+            if (g_path_emergency_stop_requested.load(std::memory_order_acquire)) {
+                path_follower.clear_path();
+                planned_path_world.clear();
+                planned_path_revision = planning::bridge::copy_latest_plan_world(&planned_path_world);
+                motors.stop();
+                motors.reset_twist_controller();
+                g_path_emergency_stop_requested.store(false, std::memory_order_release);
+                maybe_log_control_status(
+                    "path_emergency_stop",
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    false,
+                    g_scan_active.load(std::memory_order_acquire),
+                    false);
+                if (planned_path_revision == 0 || planned_path_world.empty()) {
+                    set_autonomy_substate(
+                        autonomy::AutonomySubstate::WAITING_FOR_PATH,
+                        "path_emergency_stop");
+                    continue;
+                }
             }
             if (g_no_reachable_frontiers_terminal.load(std::memory_order_acquire)) {
                 path_follower.clear_path();
                 planned_path_world.clear();
                 motors.stop();
+                maybe_log_control_status(
+                    "no_reachable_frontiers",
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    false,
+                    g_scan_active.load(std::memory_order_acquire),
+                    false);
                 std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 continue;
             }
             if (g_scan_active.load(std::memory_order_acquire)) {
+                maybe_log_control_status(
+                    "scan_active",
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    path_follower.has_path(),
+                    true,
+                    false);
                 continue;
             }
 
@@ -1743,6 +2506,7 @@ int main(){
                 goal_reached_logged = false;
                 if (!planned_path_world.empty()) {
                     path_follower.set_path(planned_path_world, &fused_pose);
+                    g_path_emergency_stop_requested.store(false, std::memory_order_release);
                     set_autonomy_substate(autonomy::AutonomySubstate::FOLLOWING_PATH, "control_loaded_path");
                     if (kEnableVerboseAutonomyLogs) {
                         std::ostringstream path_log;
@@ -1754,12 +2518,28 @@ int main(){
                 } else {
                     path_follower.clear_path();
                     motors.stop();
+                    maybe_log_control_status(
+                        "path_revision_cleared",
+                        &fused_pose,
+                        nullptr,
+                        nullptr,
+                        false,
+                        false,
+                        false);
                     set_autonomy_substate(autonomy::AutonomySubstate::WAITING_FOR_PATH, "path_revision_cleared");
                 }
             }
 
             if (!path_follower.has_path()) {
                 motors.stop();
+                maybe_log_control_status(
+                    "no_path",
+                    &fused_pose,
+                    nullptr,
+                    nullptr,
+                    false,
+                    false,
+                    false);
                 continue;
             }
 
@@ -1796,6 +2576,7 @@ int main(){
                 last_goal_check_log_timestamp = odom.timestamp;
             }
             if (status.goal_reached) {
+                const bool manual_goal_active = planning::bridge::has_active_goal();
                 if (!goal_reached_logged) {
                     goal_reached_logged = true;
                     wasm_log_line("[autonomy][path] goal reached");
@@ -1807,27 +2588,51 @@ int main(){
                     g_latest_plan_overlay = planning::bridge::PlanningOverlay{};
                 }
                 motors.stop();
+                maybe_log_control_status(
+                    "goal_reached",
+                    &fused_pose,
+                    &status,
+                    &status.command,
+                    false,
+                    false,
+                    true);
+                if (!manual_goal_active &&
+                    !should_request_frontier_confirmation_scan(fused_pose)) {
+                    set_autonomy_substate(
+                        autonomy::AutonomySubstate::WAITING_FOR_PATH,
+                        "goal_reached_skip_nearby_rescan");
+                    notify_planner_wake();
+                    continue;
+                }
                 set_autonomy_substate(autonomy::AutonomySubstate::SCAN_REQUESTED, "goal_reached");
                 g_scan_requested.store(true, std::memory_order_release);
                 continue;
             }
             goal_reached_logged = false;
+            maybe_log_control_status(
+                (std::abs(status.command.v_mps) < 1e-4 &&
+                 std::abs(status.command.omega_rad_s) < 1e-4)
+                    ? "zero_command"
+                    : "tracking",
+                &fused_pose,
+                &status,
+                &status.command,
+                true,
+                false,
+                false);
             motors.drive_twist(status.command, odom);
         }
     });
 
-
-
-    // TODO: remove once autonomy control loop is closed
-    // controls::drive_forward_demo();
-    // controls::drive_twist_demo(motors);
-
     imu_thread.join();
     lidar_camera_thread.join();
     lidar_preview_thread.join();
-    semantic_mapping_thread.join();
+
     mapping_thread.join();
-    // planner_thread.join();
+    semantic_mapping_thread.join();
+
+    planner_thread.join();
+    control_thread.join();
+
     telemetry_thread.join();
-    // control_thread.join();
 }

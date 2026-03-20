@@ -4,6 +4,7 @@
 #include "mapping/map.h"
 
 #include <cmath>
+#include <cstring>
 
 namespace mapping {
 
@@ -19,7 +20,14 @@ int16_t clamp_cell_score(int value) {
   return static_cast<int16_t>(value);
 }
 
-void maybe_record_cell_change(
+int8_t occupancy_value_for_cell(bool visited, bool confirmed) {
+  if (!visited) {
+    return -1;
+  }
+  return confirmed ? 100 : 0;
+}
+
+void maybe_append_newly_occupied_cell(
     int32_t x,
     int32_t y,
     int32_t width,
@@ -30,13 +38,9 @@ void maybe_record_cell_change(
     std::vector<planning::GridCoord>* newly_occupied_cells,
     std::vector<uint32_t>* newly_occupied_mask,
     uint32_t newly_occupied_stamp) {
+  const size_t idx = static_cast<size_t>(x + y * width);
   const bool old_occupied = old_visited && old_confirmed;
   const bool new_occupied = new_visited && new_confirmed;
-  if (old_visited == new_visited && old_confirmed == new_confirmed) {
-    return;
-  }
-
-  const size_t idx = static_cast<size_t>(x + y * width);
   if (!old_occupied && new_occupied && newly_occupied_cells) {
     bool should_append = true;
     if (newly_occupied_mask && idx < newly_occupied_mask->size()) {
@@ -67,6 +71,7 @@ void Map::reset_map() {
   scan_count_.fill(0);
   confirmed_.fill(0);
   visited_.fill(0);
+  occupancy_.fill(-1);
   hit_cell_scan_stamp_.fill(0);
   current_scan_stamp_ = 0;
   map_origin_initialized_ = 0;
@@ -79,16 +84,7 @@ int32_t Map::get_occupancy_grid(int8_t* out_data, int32_t max_cells) const {
   if (!out_data || max_cells < total) {
     return 0;
   }
-  for (int32_t gy = 0; gy < kMapSizeY; ++gy) {
-    for (int32_t gx = 0; gx < kMapSizeX; ++gx) {
-      const int32_t idx = gx + gy * kMapSizeX;
-      int8_t value = -1;
-      if (visited_[idx]) {
-        value = confirmed_[idx] ? 100 : 0;
-      }
-      out_data[idx] = value;
-    }
-  }
+  std::memcpy(out_data, occupancy_.data(), static_cast<size_t>(total));
   return total;
 }
 
@@ -181,6 +177,44 @@ bool Map::begin_scan_integration(
   return world_to_grid(pose.x, pose.y, start_x, start_y) != 0;
 }
 
+bool Map::ray_reaches_endpoint_without_occlusion(
+    int32_t x0,
+    int32_t y0,
+    int32_t x1,
+    int32_t y1) const {
+  int dx = (x1 > x0) ? (x1 - x0) : (x0 - x1);
+  int sx = (x0 < x1) ? 1 : -1;
+  int dy = (y1 > y0) ? (y0 - y1) : (y1 - y0);
+  int sy = (y0 < y1) ? 1 : -1;
+  int err = dx + dy;
+
+  int x = x0;
+  int y = y0;
+  while (true) {
+    if (x == x1 && y == y1) {
+      return true;
+    }
+
+    const int e2 = 2 * err;
+    if (e2 >= dy) {
+      err += dy;
+      x += sx;
+    }
+    if (e2 <= dx) {
+      err += dx;
+      y += sy;
+    }
+
+    if (x == x1 && y == y1) {
+      return true;
+    }
+
+    if (confirmed_[grid_index(x, y)] != 0) {
+      return false;
+    }
+  }
+}
+
 void Map::integrate_ray(
     int32_t x0,
     int32_t y0,
@@ -199,17 +233,19 @@ void Map::integrate_ray(
   int y = y0;
   while (true) {
     const int32_t idx = grid_index(x, y);
-    const bool old_visited = visited_[idx] != 0;
-    const bool old_confirmed = confirmed_[idx] != 0;
-    visited_[idx] = 1;
-
     if (x == x1 && y == y1) {
+      const bool old_visited = visited_[idx] != 0;
+      const bool old_confirmed = confirmed_[idx] != 0;
+      visited_[idx] = 1;
       const int16_t count = clamp_cell_score(scan_count_[idx] + kHitIncrement);
       scan_count_[idx] = count;
       if (count >= kOccupiedThreshold) {
         confirmed_[idx] = 1;
       }
-      maybe_record_cell_change(
+      occupancy_[idx] = occupancy_value_for_cell(
+          visited_[idx] != 0,
+          confirmed_[idx] != 0);
+      maybe_append_newly_occupied_cell(
           x,
           y,
           kMapSizeX,
@@ -223,22 +259,15 @@ void Map::integrate_ray(
       break;
     }
 
+    visited_[idx] = 1;
     const int16_t count = clamp_cell_score(scan_count_[idx] - kFreeDecrement);
     scan_count_[idx] = count;
     if (confirmed_[idx] && count <= kClearThreshold) {
       confirmed_[idx] = 0;
     }
-    maybe_record_cell_change(
-        x,
-        y,
-        kMapSizeX,
-        old_visited,
-        old_confirmed,
+    occupancy_[idx] = occupancy_value_for_cell(
         visited_[idx] != 0,
-        confirmed_[idx] != 0,
-        newly_occupied_cells,
-        newly_occupied_mask,
-        newly_occupied_stamp);
+        confirmed_[idx] != 0);
 
     const int e2 = 2 * err;
     if (e2 >= dy) {
@@ -267,25 +296,15 @@ void Map::integrate_free_ray(
   int y = y0;
   while (true) {
     const int32_t idx = grid_index(x, y);
-    const bool old_visited = visited_[idx] != 0;
-    const bool old_confirmed = confirmed_[idx] != 0;
     visited_[idx] = 1;
     const int16_t count = clamp_cell_score(scan_count_[idx] - kFreeDecrement);
     scan_count_[idx] = count;
     if (confirmed_[idx] && count <= kClearThreshold) {
       confirmed_[idx] = 0;
     }
-    maybe_record_cell_change(
-        x,
-        y,
-        kMapSizeX,
-        old_visited,
-        old_confirmed,
+    occupancy_[idx] = occupancy_value_for_cell(
         visited_[idx] != 0,
-        confirmed_[idx] != 0,
-        nullptr,
-        nullptr,
-        0);
+        confirmed_[idx] != 0);
     if (x == x1 && y == y1) {
       break;
     }
@@ -350,7 +369,6 @@ void Map::integrate_free_world(
   if (!world_to_grid(wx, wy, &end_x, &end_y)) {
     return;
   }
-
   integrate_free_ray(start_x, start_y, end_x, end_y);
 }
 

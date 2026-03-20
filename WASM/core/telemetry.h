@@ -11,6 +11,9 @@
 #include "sensors/imu.h"
 #include "sensors/imu_preintegration.h"
 #include "sensors/lidar_camera.h"
+namespace planning::bridge {
+struct PlannerTelemetryFrame;
+}
 
 constexpr int log_interval_ms = 33;
 constexpr double kLidarLogIntervalSec = 1.0 / 3.0;
@@ -21,10 +24,12 @@ struct WasmTextLog {
   char text[kWasmTextLogMaxBytes + 1];
 };
 
-WASM_IMPORT("host", "rerun_log_lidar_frame") void rerun_log_lidar_frame(const sensors::LidarCameraData *data);
-WASM_IMPORT("host", "rerun_log_imu") void rerun_log_imu(const sensors::IMUData* data);
-WASM_IMPORT("host", "rerun_log_pose") void rerun_log_pose(const sensors::PoseLog* data);
-WASM_IMPORT("host", "rerun_log_pose_wheel") void rerun_log_pose_wheel(const sensors::PoseLog* data);
+WASM_IMPORT("host", "host_log_lidar_frame") void host_log_lidar_frame(const sensors::LidarCameraData *data);
+WASM_IMPORT("host", "host_log_imu") void host_log_imu(const sensors::IMUData* data);
+WASM_IMPORT("host", "host_log_pose") void host_log_pose(const sensors::PoseLog* data);
+WASM_IMPORT("host", "host_log_pose_wheel") void host_log_pose_wheel(const sensors::PoseLog* data);
+WASM_IMPORT("host", "host_log_planner_telemetry")
+void host_log_planner_telemetry(const planning::bridge::PlannerTelemetryFrame* data);
 WASM_IMPORT("host", "wasm_log_text") void wasm_log_text(const WasmTextLog* data);
 
 void log_config(const sensors::CameraConfig& cam_config);

@@ -8,6 +8,8 @@
 import SwiftUI
 
 struct DownloadedTab: View {
+	@Environment(\.safeAreaInsets) private var safeAreaInsets
+
     @Binding var selectedFile: LocalWasmFile?
     let isRunning: Bool
 
@@ -39,7 +41,7 @@ struct DownloadedTab: View {
                         }
                     }
                     .padding(.horizontal)
-                    .padding(.bottom, 20)
+					.padding(.bottom, safeAreaInsets.bottom + AppConstants.shared.tabBarHeight)
                 }
             }
         }

@@ -10,6 +10,7 @@ import SwiftUI
 struct JoystickView: View {
     let size: CGFloat
     let onUpdate: (Int, Int, Int) -> Void // (leftMotor, rightMotor, duration)
+    var onSettingsTapped: (() -> Void)?
 
     @State private var leftValue: Double = 0
     @State private var rightValue: Double = 0
@@ -19,10 +20,12 @@ struct JoystickView: View {
 
     private let sendInterval: TimeInterval = 0.05 // 50ms
     private let holdDuration: Int = 100 // 100ms duration for ESP32
-    private let maxCommand: Double = 50
+    let maxCommand: Double
 
-    init(size: CGFloat = 250, onUpdate: @escaping (Int, Int, Int) -> Void) {
+    init(size: CGFloat = 250, maxCommand: Double = 50, onSettingsTapped: (() -> Void)? = nil, onUpdate: @escaping (Int, Int, Int) -> Void) {
         self.size = size
+        self.maxCommand = maxCommand
+        self.onSettingsTapped = onSettingsTapped
         self.onUpdate = onUpdate
     }
 
@@ -34,7 +37,7 @@ struct JoystickView: View {
                     value: $leftValue,
                     tint: .blue,
                     height: size,
-                    maxCommand: maxCommand,
+                    maxCommand: 100,
                     onInteractionChanged: { isActive in
                         updateInteraction(for: .left, isActive: isActive)
                     }
@@ -45,7 +48,7 @@ struct JoystickView: View {
                     value: $rightValue,
                     tint: .green,
                     height: size,
-                    maxCommand: maxCommand,
+                    maxCommand: 100,
                     onInteractionChanged: { isActive in
                         updateInteraction(for: .right, isActive: isActive)
                     }
@@ -53,12 +56,21 @@ struct JoystickView: View {
             }
             .frame(width: max(size, 220))
 
-            Text("L: \(currentLeftValue)% R: \(currentRightValue)%")
-                .font(.caption)
-                .padding(8)
-                .background(Color.black.opacity(0.7))
-                .foregroundColor(.white)
-                .cornerRadius(8)
+            HStack(spacing: 8) {
+                if let onSettingsTapped {
+                    Button(action: onSettingsTapped) {
+                        Image(systemName: "slider.horizontal.3")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                }
+                Text("L: \(currentLeftValue)% R: \(currentRightValue)%")
+                    .font(.caption)
+            }
+            .padding(8)
+            .background(Color.black.opacity(0.7))
+            .foregroundColor(.white)
+            .cornerRadius(8)
         }
         .onDisappear {
             stopSendingUpdates()
@@ -69,11 +81,11 @@ struct JoystickView: View {
     }
 
     private var currentLeftValue: Int {
-        Int(leftValue.rounded())
+        Int((leftValue * maxCommand / 100).rounded())
     }
 
     private var currentRightValue: Int {
-        Int(rightValue.rounded())
+        Int((rightValue * maxCommand / 100).rounded())
     }
 
     private func updateInteraction(for side: WheelSide, isActive: Bool) {
