@@ -15,6 +15,8 @@
 namespace planning::simplified {
 namespace {
 
+constexpr double kGoalEndpointExtraClearanceM = 0.03;
+
 PlannerConfig build_simple_planner_config(const FrontierExplorerConfig& cfg) {
   PlannerConfig planner_cfg;
   planner_cfg.occupied_threshold = cfg.occupied_threshold;
@@ -473,8 +475,9 @@ double path_length_m(const GridMap2D& map, const std::vector<GridCoord>& path_gr
 }
 
 bool apply_goal_standoff(
+    const GridMap2D& map,
+    const PlannerConfig& cfg,
     const PlanResult& seed_plan,
-    double goal_standoff_m,
     double min_progress_m,
     PlanResult* standoff_plan,
     double* applied_standoff_m) {
@@ -490,9 +493,14 @@ bool apply_goal_standoff(
       seed_plan.path_world.empty()) {
     return false;
   }
-  if (goal_standoff_m <= 0.0 || seed_plan.path_world.size() < 2) {
+  if (!map.valid() || seed_plan.path_world.size() < 2) {
     return true;
   }
+
+  PlannerConfig endpoint_cfg = cfg;
+  endpoint_cfg.inflation_radius_m += kGoalEndpointExtraClearanceM;
+  const std::vector<int8_t> endpoint_safety_occupancy =
+      inflate_obstacles(map, endpoint_cfg);
 
   double total_length_m = 0.0;
   for (size_t i = 1; i < seed_plan.path_world.size(); ++i) {
@@ -500,38 +508,59 @@ bool apply_goal_standoff(
     const double dy = seed_plan.path_world[i].y - seed_plan.path_world[i - 1].y;
     total_length_m += std::sqrt(dx * dx + dy * dy);
   }
-  if (total_length_m <= goal_standoff_m + min_progress_m) {
+  if (total_length_m <= min_progress_m) {
     return true;
   }
 
   double backtracked_m = 0.0;
-  size_t cut_index = seed_plan.path_world.size() - 1;
-  while (cut_index > 0 && backtracked_m < goal_standoff_m) {
-    const core::Vector3d& a = seed_plan.path_world[cut_index - 1];
-    const core::Vector3d& b = seed_plan.path_world[cut_index];
-    const double dx = b.x - a.x;
-    const double dy = b.y - a.y;
-    backtracked_m += std::sqrt(dx * dx + dy * dy);
-    --cut_index;
-  }
+  for (size_t cut_index = seed_plan.path_grid.size(); cut_index-- > 1;) {
+    const GridCoord& candidate_goal = seed_plan.path_grid[cut_index];
+    if (is_cell_blocked(
+            map,
+            endpoint_cfg,
+            candidate_goal.x,
+            candidate_goal.y,
+            &endpoint_safety_occupancy)) {
+      continue;
+    }
+    const GridCoord& predecessor = seed_plan.path_grid[cut_index - 1];
+    if (!line_of_sight_free(
+            map,
+            endpoint_cfg,
+            endpoint_safety_occupancy,
+            predecessor,
+            candidate_goal)) {
+      continue;
+    }
 
-  if (cut_index == 0) {
+    double retained_length_m = 0.0;
+    for (size_t i = 1; i <= cut_index; ++i) {
+      const core::Vector3d& a = seed_plan.path_world[i - 1];
+      const core::Vector3d& b = seed_plan.path_world[i];
+      const double dx = b.x - a.x;
+      const double dy = b.y - a.y;
+      retained_length_m += std::sqrt(dx * dx + dy * dy);
+    }
+    if (retained_length_m < min_progress_m) {
+      continue;
+    }
+
+    standoff_plan->path_grid.assign(
+        seed_plan.path_grid.begin(),
+        seed_plan.path_grid.begin() + static_cast<std::ptrdiff_t>(cut_index + 1));
+    standoff_plan->path_world.assign(
+        seed_plan.path_world.begin(),
+        seed_plan.path_world.begin() + static_cast<std::ptrdiff_t>(cut_index + 1));
+    if (standoff_plan->path_grid.empty() || standoff_plan->path_world.empty()) {
+      return false;
+    }
+    backtracked_m = std::max(0.0, total_length_m - retained_length_m);
+    if (applied_standoff_m) {
+      *applied_standoff_m = backtracked_m;
+    }
     return true;
   }
-
-  standoff_plan->path_grid.assign(
-      seed_plan.path_grid.begin(),
-      seed_plan.path_grid.begin() + static_cast<std::ptrdiff_t>(cut_index + 1));
-  standoff_plan->path_world.assign(
-      seed_plan.path_world.begin(),
-      seed_plan.path_world.begin() + static_cast<std::ptrdiff_t>(cut_index + 1));
-  if (standoff_plan->path_grid.empty() || standoff_plan->path_world.empty()) {
-    return false;
-  }
-  if (applied_standoff_m) {
-    *applied_standoff_m = std::min(backtracked_m, goal_standoff_m);
-  }
-  return true;
+  return false;
 }
 
 PlanResult plan_to_grid_with_clearance_cost(
@@ -862,8 +891,9 @@ FrontierPlanResult plan_to_largest_frontier_in_window(
   double applied_standoff_m = 0.0;
   const auto standoff_start = std::chrono::steady_clock::now();
   if (!apply_goal_standoff(
+          map,
+          planner_cfg,
           seed_plan,
-          cfg.goal_standoff_m,
           cfg.min_standoff_path_progress_m,
           &planned,
           &applied_standoff_m)) {
