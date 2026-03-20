@@ -21,8 +21,6 @@ constexpr int32_t kRenderWidthDefault = 256;   // keep in sync with mapping/map_
 constexpr int32_t kRenderHeightDefault = 256;  // keep in sync with mapping/map_update.cpp
 constexpr int32_t kMaxPlannedPathCells = 4096; // keep in sync with mapping/map.cpp
 constexpr bool kEnableAutoFrontierExploration = true;
-constexpr double kAutoFrontierReplanIntervalSec = 0.75;
-constexpr int32_t kFrontierLargeMoveThresholdCells = 2;
 
 struct PlannerGoalPixel {
   bool active = false;
@@ -43,12 +41,6 @@ std::atomic<uint64_t> g_planner_telemetry_sequence{0};
 std::mutex g_planned_path_mutex;
 std::vector<core::Vector3d> g_planned_path_world;
 uint64_t g_planned_path_revision = 0;
-std::mutex g_frontier_plan_start_mutex;
-bool g_have_last_frontier_plan_start = false;
-GridCoord g_last_frontier_plan_start{};
-std::chrono::steady_clock::time_point g_last_auto_frontier_plan_time =
-    std::chrono::steady_clock::time_point::min();
-
 struct FrontierProfileWindow {
   std::chrono::steady_clock::time_point window_start =
       std::chrono::steady_clock::time_point::min();
@@ -415,7 +407,7 @@ void record_frontier_profile(
       << window.adaptive_attempts_max
       << " full_map=" << (window.full_map_fallback_sum / sample_count) << "/"
       << window.full_map_fallback_max;
-  wasm_log_line(log.str());
+  // wasm_log_line(log.str());
   window = FrontierProfileWindow{};
   window.window_start = now;
 }
@@ -454,29 +446,6 @@ void update_cached_overlay(const PlanningOverlay& overlay) {
 PlanningOverlay copy_cached_overlay() {
   std::lock_guard<std::mutex> lk(g_overlay_cache_mutex);
   return g_cached_overlay;
-}
-
-void record_last_frontier_plan_start(const GridCoord& start_cell) {
-  std::lock_guard<std::mutex> lk(g_frontier_plan_start_mutex);
-  g_last_frontier_plan_start = start_cell;
-  g_have_last_frontier_plan_start = true;
-}
-
-void clear_last_frontier_plan_start() {
-  std::lock_guard<std::mutex> lk(g_frontier_plan_start_mutex);
-  g_have_last_frontier_plan_start = false;
-  g_last_frontier_plan_start = GridCoord{};
-}
-
-bool read_last_frontier_plan_start(GridCoord* out_start_cell) {
-  std::lock_guard<std::mutex> lk(g_frontier_plan_start_mutex);
-  if (!g_have_last_frontier_plan_start) {
-    return false;
-  }
-  if (out_start_cell) {
-    *out_start_cell = g_last_frontier_plan_start;
-  }
-  return true;
 }
 
 uint32_t vector_app_ptr(const std::vector<GridCoord>& cells) {
@@ -574,7 +543,6 @@ PlanningOverlay overlay_from_plan_result(
     const PlanResult& planned) {
   PlanningOverlay overlay;
   overlay.source_map_revision = map_revision;
-  clear_last_frontier_plan_start();
   if (!planned.success || planned.path_grid.empty()) {
     update_cached_path_world({});
     update_cached_overlay(overlay);
@@ -607,7 +575,6 @@ PlanningOverlay overlay_from_frontier_result(
     overlay.selected_frontier_seed = planned.selected_seed;
   }
   if (!planned.success || planned.path_grid.empty()) {
-    clear_last_frontier_plan_start();
     update_cached_path_world({});
     update_cached_overlay(overlay);
     return overlay;
@@ -621,7 +588,6 @@ PlanningOverlay overlay_from_frontier_result(
   overlay.path_grid.assign(
       planned.path_grid.begin(),
       planned.path_grid.begin() + limit);
-  record_last_frontier_plan_start(start_cell);
   update_cached_path_world(planned.path_world);
   update_cached_overlay(overlay);
   return overlay;
@@ -745,7 +711,6 @@ void invalidate_current_plan() {
       ++g_planned_path_revision;
     }
   }
-  clear_last_frontier_plan_start();
   update_cached_overlay(PlanningOverlay{});
   g_planner.invalidate();
 }
@@ -892,63 +857,17 @@ PlanningOverlay update_plan_overlay(
     return cached;
   }
 
-  const auto now = std::chrono::steady_clock::now();
-  const double elapsed_sec = std::chrono::duration<double>(
-      now - g_last_auto_frontier_plan_time).count();
-  GridCoord last_frontier_start{};
-  const bool have_last_frontier_start = read_last_frontier_plan_start(&last_frontier_start);
-  const int32_t frontier_start_move_cells =
-      have_last_frontier_start
-          ? chebyshev_cell_distance(start_cell, last_frontier_start)
-          : 0;
-  const bool force_frontier_replan_for_large_move =
-      have_last_frontier_start &&
-      frontier_start_move_cells >= kFrontierLargeMoveThresholdCells;
-  if (g_last_auto_frontier_plan_time != std::chrono::steady_clock::time_point::min() &&
-      elapsed_sec < kAutoFrontierReplanIntervalSec) {
-    if (force_frontier_replan_for_large_move) {
-      std::ostringstream log;
-      log << "[planning][frontier] bypassing throttle due to large start move"
-          << " start=(" << start_cell.x << "," << start_cell.y << ")"
-          << " last_start=(" << last_frontier_start.x << "," << last_frontier_start.y << ")"
-          << " move_cells=" << frontier_start_move_cells
-          << " elapsed_s=" << elapsed_sec;
-      wasm_log_line(log.str());
-    } else {
-      std::ostringstream log;
-      log << "[planning][frontier] reusing cached path within throttle"
-          << " start=(" << start_cell.x << "," << start_cell.y << ")";
-      if (have_last_frontier_start) {
-        log << " last_start=(" << last_frontier_start.x << "," << last_frontier_start.y << ")"
-            << " move_cells=" << frontier_start_move_cells;
-      }
-      log << " elapsed_s=" << elapsed_sec;
-      wasm_log_line(log.str());
-      if (cached.source_map_revision != 0) {
-        cached.source_map_revision = snapshot.map_revision;
-      }
-      return cached;
-    }
-  }
-  g_last_auto_frontier_plan_time = now;
-
   const FrontierExplorerConfig frontier_cfg = build_frontier_config();
-  const auto frontier_plan_start = std::chrono::steady_clock::now();
   const FrontierPlanResult planned = planning::simplified::plan_to_largest_frontier(
       planner_map,
       core::Vector3d{snapshot.pose.x, snapshot.pose.y, snapshot.pose.theta},
       frontier_cfg);
-  const auto frontier_publish_start = std::chrono::steady_clock::now();
   publish_frontier_planner_telemetry(
       snapshot.map_revision,
       g_goal_revision.load(std::memory_order_acquire),
       snapshot.timestamp,
       start_cell,
       planned);
-  const double frontier_publish_ms = std::chrono::duration<double, std::milli>(
-      std::chrono::steady_clock::now() - frontier_publish_start).count();
-  (void)frontier_plan_start;
-  record_frontier_profile(planned, frontier_publish_ms);
   std::ostringstream frontier_log;
   frontier_log << "[planning] frontier result success=" << (planned.success ? 1 : 0)
                << " start=(" << start_cell.x << "," << start_cell.y << ")"
@@ -963,17 +882,7 @@ PlanningOverlay update_plan_overlay(
                << " message=" << planned.message;
   // wasm_log_line(frontier_log.str());
   if (!planned.success || planned.path_grid.empty()) {
-    if (force_frontier_replan_for_large_move) {
-      std::ostringstream log;
-      log << "[planning][frontier] clearing cached path after forced replan failure"
-          << " start=(" << start_cell.x << "," << start_cell.y << ")"
-          << " last_start=(" << last_frontier_start.x << "," << last_frontier_start.y << ")"
-          << " move_cells=" << frontier_start_move_cells
-          << " message=" << planned.message;
-      wasm_log_line(log.str());
-    }
-    if (!force_frontier_replan_for_large_move &&
-        !cached.path_grid.empty() &&
+    if (!cached.path_grid.empty() &&
         is_overlay_path_valid(snapshot, cached)) {
       overlay = cached;
       overlay.source_map_revision = snapshot.map_revision;

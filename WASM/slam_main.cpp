@@ -108,6 +108,9 @@ static std::atomic<bool> g_scan_requested{false};
 static std::atomic<uint64_t> g_completed_scan_count{0};
 static std::atomic<bool> g_no_reachable_frontiers_terminal{false};
 static std::atomic<bool> g_path_emergency_stop_requested{false};
+static std::mutex g_last_completed_scan_pose_mutex;
+static controls::Pose2D g_last_completed_scan_pose{};
+static bool g_have_last_completed_scan_pose = false;
 
 static bool suppress_runtime_logs_in_terminal_state() {
     return g_no_reachable_frontiers_terminal.load(std::memory_order_acquire);
@@ -178,6 +181,25 @@ struct MappingStats {
 };
 
 static std::mutex g_mapping_stats_mutex;
+
+constexpr double kFrontierRescanMinTranslationM = 0.30;
+
+void record_completed_scan_pose(const controls::Pose2D& pose) {
+    std::lock_guard<std::mutex> lk(g_last_completed_scan_pose_mutex);
+    g_last_completed_scan_pose = pose;
+    g_have_last_completed_scan_pose = true;
+}
+
+bool should_request_frontier_confirmation_scan(const controls::Pose2D& pose) {
+    std::lock_guard<std::mutex> lk(g_last_completed_scan_pose_mutex);
+    if (!g_have_last_completed_scan_pose) {
+        return true;
+    }
+    const double dx = pose.x - g_last_completed_scan_pose.x;
+    const double dy = pose.y - g_last_completed_scan_pose.y;
+    const double translation_m = std::hypot(dx, dy);
+    return translation_m >= kFrontierRescanMinTranslationM;
+}
 static MappingStats g_mapping_stats;
 struct SnapshotConsumerStats {
     uint64_t window_ready = 0;
@@ -1361,6 +1383,13 @@ int main(){
             g_scan_active.store(true, std::memory_order_release);
             scan_4x90(motors, m_pose);
             g_scan_active.store(false, std::memory_order_release);
+            {
+                std::lock_guard<std::mutex> lk(m_pose);
+                record_completed_scan_pose(controls::Pose2D{
+                    g_pose.translation.x,
+                    g_pose.translation.y,
+                    core::quat_to_euler_yaw(g_pose.quaternion)});
+            }
             g_completed_scan_count.fetch_add(1, std::memory_order_acq_rel);
             notify_planner_wake();
             g_initial_spin_done.store(true, std::memory_order_release);
@@ -1382,6 +1411,13 @@ int main(){
                 g_scan_active.store(true, std::memory_order_release);
                 scan_4x90(motors, m_pose);
                 g_scan_active.store(false, std::memory_order_release);
+                {
+                    std::lock_guard<std::mutex> lk(m_pose);
+                    record_completed_scan_pose(controls::Pose2D{
+                        g_pose.translation.x,
+                        g_pose.translation.y,
+                        core::quat_to_euler_yaw(g_pose.quaternion)});
+                }
                 g_completed_scan_count.fetch_add(1, std::memory_order_acq_rel);
                 notify_planner_wake();
                 if (g_planner_initialized.load(std::memory_order_acquire)) {
@@ -2088,64 +2124,10 @@ int main(){
             }
             set_autonomy_substate(autonomy::AutonomySubstate::PLANNING_GOAL, "update_plan_overlay");
             planning::bridge::PlanningOverlay overlay;
-            mapping::MapSnapshot planning_snapshot = snapshot;
-            sensors::PoseLog planning_pose_snapshot = pose_snapshot;
-            planning::GridCoord planning_start_cell = start_cell;
-            bool have_planning_start_cell = have_start_cell;
-            constexpr int32_t kPlannerMaxFreshnessAttempts = 2;
-            for (int32_t plan_attempt = 0; plan_attempt < kPlannerMaxFreshnessAttempts; ++plan_attempt) {
-                overlay = planning::bridge::update_plan_overlay(
-                    planning_snapshot,
-                    kRenderWidth,
-                    kRenderHeight);
-                if (manual_goal_active || plan_attempt + 1 >= kPlannerMaxFreshnessAttempts) {
-                    break;
-                }
-
-                sensors::PoseLog latest_pose_after_plan{};
-                if (!read_latest_pose_snapshot(m_pose, &latest_pose_after_plan)) {
-                    break;
-                }
-
-                mapping::MapSnapshot refreshed_snapshot = planning_snapshot;
-                refreshed_snapshot.pose = pose_log_to_se2(latest_pose_after_plan);
-                refreshed_snapshot.timestamp =
-                    std::max(refreshed_snapshot.timestamp, latest_pose_after_plan.timestamp);
-                planning::GridCoord latest_start_cell{};
-                const bool have_latest_start_cell =
-                    pose_to_map_cell(refreshed_snapshot, refreshed_snapshot.pose, &latest_start_cell);
-                const int32_t moved_cells =
-                    (have_planning_start_cell && have_latest_start_cell)
-                        ? std::max(
-                              std::abs(latest_start_cell.x - planning_start_cell.x),
-                              std::abs(latest_start_cell.y - planning_start_cell.y))
-                        : 0;
-                const double pose_age_sec =
-                    (latest_pose_after_plan.timestamp > planning_pose_snapshot.timestamp)
-                        ? (latest_pose_after_plan.timestamp - planning_pose_snapshot.timestamp)
-                        : 0.0;
-                const bool stale_planning_start =
-                    have_planning_start_cell &&
-                    have_latest_start_cell &&
-                    moved_cells >= kPlannerStaleStartRetryThresholdCells &&
-                    pose_age_sec >= kPlannerStalePoseRetryMinAgeSec;
-                if (!stale_planning_start) {
-                    break;
-                }
-
-                std::ostringstream stale_log;
-                stale_log << "[planning] retrying stale frontier start"
-                          << " start=(" << planning_start_cell.x << "," << planning_start_cell.y << ")"
-                          << " current=(" << latest_start_cell.x << "," << latest_start_cell.y << ")"
-                          << " move_cells=" << moved_cells
-                          << " pose_age_s=" << pose_age_sec;
-                wasm_log_line(stale_log.str());
-
-                planning_snapshot = std::move(refreshed_snapshot);
-                planning_pose_snapshot = latest_pose_after_plan;
-                planning_start_cell = latest_start_cell;
-                have_planning_start_cell = have_latest_start_cell;
-            }
+            overlay = planning::bridge::update_plan_overlay(
+                snapshot,
+                kRenderWidth,
+                kRenderHeight);
             const bool published_path = !overlay.path_grid.empty();
             const bool have_frontier_candidates = !overlay.frontier_candidates.empty();
             const bool no_reachable_frontiers =
@@ -2578,6 +2560,7 @@ int main(){
                 last_goal_check_log_timestamp = odom.timestamp;
             }
             if (status.goal_reached) {
+                const bool manual_goal_active = planning::bridge::has_active_goal();
                 if (!goal_reached_logged) {
                     goal_reached_logged = true;
                     wasm_log_line("[autonomy][path] goal reached");
@@ -2597,6 +2580,14 @@ int main(){
                     false,
                     false,
                     true);
+                if (!manual_goal_active &&
+                    !should_request_frontier_confirmation_scan(fused_pose)) {
+                    set_autonomy_substate(
+                        autonomy::AutonomySubstate::WAITING_FOR_PATH,
+                        "goal_reached_skip_nearby_rescan");
+                    notify_planner_wake();
+                    continue;
+                }
                 set_autonomy_substate(autonomy::AutonomySubstate::SCAN_REQUESTED, "goal_reached");
                 g_scan_requested.store(true, std::memory_order_release);
                 continue;

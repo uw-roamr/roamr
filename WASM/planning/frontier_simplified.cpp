@@ -991,12 +991,59 @@ FrontierPlanResult plan_to_largest_frontier(
     aggregated_result.message = "robot pose outside map bounds";
     return aggregated_result;
   }
-  FrontierPlanResult result = plan_to_largest_frontier_in_window(map, start_world, cfg);
-  result.perf.adaptive_attempts = 1;
-  result.perf.attempted_window_size_m =
-      std::max(map.width, map.height) * map.resolution_m;
-  result.perf.used_full_map_fallback = 1;
-  return result;
+
+  constexpr double kLocalWindowSizeM = 3.0;
+  const int32_t local_window_cells = std::max<int32_t>(
+      1,
+      static_cast<int32_t>(std::ceil(kLocalWindowSizeM / map.resolution_m)));
+  const GridWindowBounds local_window = build_window_bounds(
+      map, start_cell, local_window_cells, local_window_cells);
+  const bool local_is_full_map = is_full_window(map, local_window);
+
+  auto finish_attempt = [&](FrontierPlanResult attempt_result,
+                            const GridWindowBounds& window,
+                            bool full_map_attempt,
+                            int32_t adaptive_attempts) {
+    attempt_result.perf.adaptive_attempts = adaptive_attempts;
+    attempt_result.perf.attempted_window_size_m =
+        std::max(window.width, window.height) * map.resolution_m;
+    attempt_result.perf.used_full_map_fallback = full_map_attempt ? 1 : 0;
+    return attempt_result;
+  };
+
+  {
+    const GridMap2D cropped_map = crop_grid_map(map, local_window);
+    FrontierPlanResult local_result =
+        plan_to_largest_frontier_in_window(cropped_map, start_world, cfg);
+    local_result.frontier_cells =
+        translate_cells_to_global(local_result.frontier_cells, local_window);
+    local_result.path_grid =
+        translate_cells_to_global(local_result.path_grid, local_window);
+    local_result.selected_cluster_cells =
+        translate_cells_to_global(local_result.selected_cluster_cells, local_window);
+    if (local_result.success) {
+      local_result.goal_cell =
+          translate_to_global_cell(local_result.goal_cell, local_window);
+    }
+    if (local_result.success || !local_result.selected_cluster_cells.empty()) {
+      local_result.selected_seed =
+          translate_to_global_cell(local_result.selected_seed, local_window);
+    }
+    if (local_result.success || local_is_full_map) {
+      return finish_attempt(std::move(local_result), local_window, local_is_full_map, 1);
+    }
+    aggregated_result = finish_attempt(std::move(local_result), local_window, false, 1);
+  }
+
+  GridWindowBounds full_window;
+  full_window.width = map.width;
+  full_window.height = map.height;
+  FrontierPlanResult full_result = plan_to_largest_frontier_in_window(map, start_world, cfg);
+  if (full_result.success) {
+    return finish_attempt(std::move(full_result), full_window, true, 2);
+  }
+  aggregated_result = finish_attempt(std::move(full_result), full_window, true, 2);
+  return aggregated_result;
 }
 
 }  // namespace planning::simplified
