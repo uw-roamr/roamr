@@ -108,6 +108,7 @@ static std::atomic<bool> g_scan_requested{false};
 static std::atomic<uint64_t> g_completed_scan_count{0};
 static std::atomic<bool> g_no_reachable_frontiers_terminal{false};
 static std::atomic<double> g_scan_map_skip_until_timestamp{-1.0};
+static std::atomic<bool> g_path_emergency_stop_requested{false};
 
 static bool suppress_runtime_logs_in_terminal_state() {
     return g_no_reachable_frontiers_terminal.load(std::memory_order_acquire);
@@ -1085,7 +1086,7 @@ static constexpr PoseSource pose_source = PoseSource::fused_IMU_wheel_odom;
 static constexpr bool kEnableInitialSpin = true;
 static std::atomic<bool> g_initial_spin_done{!kEnableInitialSpin};
 static constexpr double kStartupWaitLogIntervalSec = 1.0;
-static constexpr int32_t kPathFollowHoldMs = 120;
+static constexpr int32_t kPathFollowHoldMs = 60;
 static constexpr double kControlStatusLogIntervalSec = 0.5;
 static constexpr double kGoalCheckLogIntervalSec = 0.5;
 static constexpr double kHostPoseLogIntervalSec = 1.0 / 30.0;
@@ -1116,11 +1117,11 @@ struct OuterLoopTurnPidConfig {
 };
 
 static constexpr OuterLoopTurnPidConfig kScan4x90TurnPidCfg{
-    4.0,
+    3.0,
     0.25,
     0.5,
-    0.5 * core::pi,
-    0.2,
+    0.3 * core::pi,
+    0.12,
     0.6,
     1.5 * core::pi / 180.0};
 
@@ -1855,6 +1856,7 @@ int main(){
                     active_overlay,
                     newly_occupied_cells)) {
                 planning::bridge::invalidate_current_plan();
+                g_path_emergency_stop_requested.store(true, std::memory_order_release);
                 path_invalidated_by_new_occupancy = true;
             }
         }
@@ -2511,6 +2513,28 @@ int main(){
             if (state != RobotState::AUTONOMY_ENGAGED) {
                 continue;
             }
+            if (g_path_emergency_stop_requested.load(std::memory_order_acquire)) {
+                path_follower.clear_path();
+                planned_path_world.clear();
+                planned_path_revision = planning::bridge::copy_latest_plan_world(&planned_path_world);
+                motors.stop();
+                motors.reset_twist_controller();
+                g_path_emergency_stop_requested.store(false, std::memory_order_release);
+                maybe_log_control_status(
+                    "path_emergency_stop",
+                    nullptr,
+                    nullptr,
+                    nullptr,
+                    false,
+                    g_scan_active.load(std::memory_order_acquire),
+                    false);
+                if (planned_path_revision == 0 || planned_path_world.empty()) {
+                    set_autonomy_substate(
+                        autonomy::AutonomySubstate::WAITING_FOR_PATH,
+                        "path_emergency_stop");
+                    continue;
+                }
+            }
             if (g_no_reachable_frontiers_terminal.load(std::memory_order_acquire)) {
                 path_follower.clear_path();
                 planned_path_world.clear();
@@ -2549,6 +2573,7 @@ int main(){
                 goal_reached_logged = false;
                 if (!planned_path_world.empty()) {
                     path_follower.set_path(planned_path_world, &fused_pose);
+                    g_path_emergency_stop_requested.store(false, std::memory_order_release);
                     set_autonomy_substate(autonomy::AutonomySubstate::FOLLOWING_PATH, "control_loaded_path");
                     if (kEnableVerboseAutonomyLogs) {
                         std::ostringstream path_log;
