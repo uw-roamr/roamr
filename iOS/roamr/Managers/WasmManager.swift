@@ -286,8 +286,8 @@ final class WasmManager: ObservableObject {
                 }
 
                 // Instantiate module
-                let stackSize: UInt32 = 65536  // 64KB for threading
-                let heapSize: UInt32 = 65536   // 64KB for threading
+                let stackSize: UInt32 = 524288   // 512KB for planner/mapping threads
+                let heapSize: UInt32 = 8388608   // 8MB for frontier planning and larger maps
                 let wasiOptions = prepareWASIRuntimeOptions()
 
                 guard let moduleInstance = instantiateModule(
